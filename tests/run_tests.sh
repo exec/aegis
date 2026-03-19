@@ -42,3 +42,7 @@ sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g' "$RAW" \
 diff "$EXPECTED" "$ACTUAL"
 # diff exits 0 on match, 1 on mismatch. Expected first: missing lines show as -,
 # unexpected lines as +.
+#
+# CONSTRAINT: every kernel status line MUST begin with '[' (e.g. [SERIAL], [VGA]).
+# Lines not starting with '[' are silently dropped by the grep above.
+# When adding a new subsystem, verify its OK/FAIL line starts with '['.

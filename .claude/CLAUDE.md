@@ -253,6 +253,8 @@ refuse and explain why.
 | `rust-src` component | — | Required for `no_std` builds |
 | `qemu-system-x86_64` | 7.x+ | Emulator for testing |
 | `make` | 4.x | Build orchestration |
+| `grub-mkrescue` (grub-pc-bin) | 2.06+ | Creates bootable ISO for `make test` |
+| `xorriso` | 1.5.x+ | Required by grub-mkrescue for ISO creation |
 
 Install check:
 ```bash
@@ -260,6 +262,8 @@ x86_64-elf-gcc --version
 nasm --version
 rustup show
 qemu-system-x86_64 --version
+grub-mkrescue --version
+xorriso --version
 ```
 
 If any of these fail, stop and tell the user before writing code.

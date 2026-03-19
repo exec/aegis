@@ -8,7 +8,8 @@ SECTIONS
 {
     . = BASE;
 
-    /* .multiboot must land in the first 8KB so QEMU's -kernel scan finds it */
+    /* .multiboot must land within the first 8KB so the bootloader (GRUB)
+       locates it per the multiboot2 spec */
     .multiboot : { KEEP(*(.multiboot)) }
 
     .text   : { *(.text .text.*) }

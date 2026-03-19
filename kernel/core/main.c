@@ -1,4 +1,3 @@
-#include <stdint.h>
 #include "arch.h"
 #include "printk.h"
 #include "cap.h"
