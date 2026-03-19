@@ -18,7 +18,8 @@ CFLAGS = \
     -Wall -Wextra -Werror \
     -Ikernel/arch/x86_64 \
     -Ikernel/core \
-    -Ikernel/cap
+    -Ikernel/cap \
+    -Ikernel/mm
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -29,6 +30,7 @@ ISO_DIR = $(BUILD)/isodir
 ARCH_SRCS = \
     kernel/arch/x86_64/arch.c \
     kernel/arch/x86_64/arch_exit.c \
+    kernel/arch/x86_64/arch_mm.c \
     kernel/arch/x86_64/serial.c \
     kernel/arch/x86_64/vga.c
 
@@ -36,14 +38,18 @@ CORE_SRCS = \
     kernel/core/main.c \
     kernel/core/printk.c
 
+MM_SRCS = \
+    kernel/mm/pmm.c
+
 BOOT_SRC = kernel/arch/x86_64/boot.asm
 CAP_LIB  = kernel/cap/target/x86_64-unknown-none/release/libcap.a
 
 ARCH_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
 CORE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(CORE_SRCS))
+MM_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(MM_SRCS))
 BOOT_OBJ  = $(BUILD)/arch/x86_64/boot.o
 
-ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(CORE_OBJS)
+ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(CORE_OBJS) $(MM_OBJS)
 
 .PHONY: all iso run test clean
 
