@@ -40,6 +40,7 @@ replacement with no API change.
 | `kernel/arch/x86_64/arch.h` | Modify | Add `aegis_mem_region_t`, `arch_mm_init`, query API |
 | `kernel/core/main.c` | Modify | Add `arch_mm_init()` + `pmm_init()` to boot sequence |
 | `tools/linker.ld` | Modify | Export `_kernel_end` after `.bss` |
+| `Makefile` | Modify | Add `arch_mm.c` to `ARCH_SRCS`; add new `MM_SRCS` for `pmm.c`; add `-Ikernel/mm` to CFLAGS |
 | `tests/expected/boot.txt` | Modify | Add `[PMM] OK` line (RED before implementation) |
 | `.claude/CLAUDE.md` | Modify | Update build status; note multi-page deferral |
 
@@ -246,11 +247,14 @@ extern char _kernel_end[];
        pmm_free_region(region.base, region.len)
        — mark usable RAM as free
 
-3. pmm_reserve(0x0,       0x100000)
+3. pmm_reserve(0x0UL, 0x100000UL)
        — first 1MB: BIOS data areas, VGA framebuffer, ISA ROMs
+       NOTE: this is x86-specific knowledge in pmm.c (see design debt below)
 
-4. pmm_reserve(0x100000,  _kernel_end - 0x100000)
+4. pmm_reserve(0x100000UL, (uint64_t)_kernel_end - 0x100000UL)
        — kernel image + bitmap (bitmap is in .bss, inside this range)
+       NOTE: _kernel_end is extern char[]; cast to uint64_t before arithmetic
+       to avoid signed-pointer-subtraction warnings under -Werror
 
 5. count total usable bytes (sum of usable region lengths before step 3/4)
    count number of usable regions
@@ -389,3 +393,4 @@ under `-ffreestanding` with the current CFLAGS. No libc dependency.
 | Arch boundary | arch_mm.c parses multiboot2; pmm.c pulls regions via arch.h | Keeps kernel/mm/ arch-agnostic |
 | MB count in OK line | Raw usable bytes from multiboot2 (before our reservations) | Stable as kernel grows |
 | OOM sentinel | Return 0 (address 0 always reserved) | Unambiguous without a separate error type |
+| BIOS hole in pmm.c | `pmm_reserve(0x0, 0x100000)` lives in pmm.c for now | Design debt: this is x86-specific knowledge. Future arch layer should provide a reserved-ranges table (alongside the usable-ranges table) so pmm.c never hard-codes platform addresses. |
