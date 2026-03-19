@@ -1,4 +1,5 @@
 [SERIAL] OK: COM1 initialized at 115200 baud
 [VGA] OK: text mode 80x25
+[PMM] OK: 127MB usable across 2 regions
 [CAP] OK: capability subsystem reserved
 [AEGIS] System halted.
