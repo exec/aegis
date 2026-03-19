@@ -33,4 +33,32 @@ extern int vga_available;              /* set to 1 by vga_init() */
 void serial_write_string(const char *s);
 void vga_write_string(const char *s);
 
+/* -------------------------------------------------------------------------
+ * Physical memory interface (Phase 2+)
+ * ------------------------------------------------------------------------- */
+
+/* A contiguous physical memory region. Used for both usable RAM and
+ * arch-reserved ranges (BIOS holes, MMIO, ROM regions, etc.). */
+typedef struct {
+    uint64_t base;
+    uint64_t len;
+} aegis_mem_region_t;
+
+/* Parse the arch-specific firmware memory map (multiboot2 on x86).
+ * Must be called before any pmm_* function. */
+void arch_mm_init(void *mb_info);
+
+/* Usable RAM regions reported by firmware (multiboot2 type=1 entries).
+ * Valid after arch_mm_init(). */
+uint32_t                   arch_mm_region_count(void);
+const aegis_mem_region_t  *arch_mm_get_regions(void);
+
+/* Arch-reserved physical ranges that pmm_init() must never hand out
+ * (BIOS data areas, VGA framebuffer hole, ISA ROMs, MMIO windows, etc.).
+ * pmm_init() calls this instead of hard-coding platform addresses, so
+ * kernel/mm/pmm.c contains no x86-specific knowledge.
+ * Valid after arch_mm_init(). */
+uint32_t                   arch_mm_reserved_region_count(void);
+const aegis_mem_region_t  *arch_mm_get_reserved_regions(void);
+
 #endif

@@ -73,26 +73,47 @@ source level while allowing it to query arch state through the established
 ### arch.h additions
 
 ```c
-/* Physical memory region (usable RAM, from multiboot2 type=1 entries). */
+/* A contiguous physical memory region. Used for both usable RAM and
+ * arch-reserved ranges (BIOS holes, MMIO, ROM regions, etc.). */
 typedef struct {
     uint64_t base;
     uint64_t len;
 } aegis_mem_region_t;
 
-/* Parse multiboot2 memory map tags. Must be called before pmm_init().
+/* Parse arch-specific firmware memory map (multiboot2 on x86).
+ * Must be called before pmm_init().
  * Safe to call with the raw mb_info physical pointer in Phase 2 because
  * virtual == physical under identity mapping. The VMM phase must remap
  * this pointer before the higher-half switch. */
 void arch_mm_init(void *mb_info);
 
-/* Number of usable (type=1) regions found by arch_mm_init(). */
-uint32_t arch_mm_region_count(void);
-
-/* Pointer to the internal usable-region table. Valid after arch_mm_init(). */
+/* Usable RAM regions from firmware. Valid after arch_mm_init(). */
+uint32_t                  arch_mm_region_count(void);
 const aegis_mem_region_t *arch_mm_get_regions(void);
+
+/* Arch-reserved physical ranges that pmm_init() must never hand out.
+ * pmm_init() calls this instead of hard-coding platform addresses —
+ * kernel/mm/pmm.c contains no x86-specific knowledge.
+ * Valid after arch_mm_init(). */
+uint32_t                  arch_mm_reserved_region_count(void);
+const aegis_mem_region_t *arch_mm_get_reserved_regions(void);
 ```
 
 ### arch_mm.c implementation
+
+In addition to the usable-region table, `arch_mm.c` maintains a static
+table of reserved regions. On x86, this is a hardcoded table (the first
+1MB covers all BIOS data areas, VGA framebuffer, and ISA ROM regions):
+
+```c
+static aegis_mem_region_t reserved_regions[] = {
+    { 0x0UL, 0x100000UL },  /* first 1MB: BIOS, VGA hole, ISA ROMs */
+};
+```
+
+This is the only place in the codebase where x86 platform addresses live.
+When ARM64 support is added, its `arch_mm.c` returns a different table
+(or an empty one if firmware handles all reservations). `pmm.c` is unchanged.
 
 ```c
 #include "arch.h"
@@ -179,6 +200,23 @@ const aegis_mem_region_t *arch_mm_get_regions(void)
 {
     return regions;
 }
+
+/* x86 reserved regions: all platform-specific addresses live here.
+ * pmm.c calls this — it never hard-codes 0x100000 or any other
+ * platform address. */
+static const aegis_mem_region_t x86_reserved[] = {
+    { 0x0UL, 0x100000UL },  /* first 1MB: BIOS, VGA hole, ISA ROMs */
+};
+
+uint32_t arch_mm_reserved_region_count(void)
+{
+    return sizeof(x86_reserved) / sizeof(x86_reserved[0]);
+}
+
+const aegis_mem_region_t *arch_mm_get_reserved_regions(void)
+{
+    return x86_reserved;
+}
 ```
 
 ---
@@ -247,16 +285,18 @@ extern char _kernel_end[];
        pmm_free_region(region.base, region.len)
        — mark usable RAM as free
 
-3. pmm_reserve(0x0UL, 0x100000UL)
-       — first 1MB: BIOS data areas, VGA framebuffer, ISA ROMs
-       NOTE: this is x86-specific knowledge in pmm.c (see design debt below)
+3. for each region in arch_mm_get_reserved_regions():
+       pmm_reserve_region(region.base, region.len)
+       — re-reserve arch platform ranges (first 1MB on x86)
+       — pmm.c owns no platform addresses; all live in arch_mm.c
 
-4. pmm_reserve(0x100000UL, (uint64_t)_kernel_end - 0x100000UL)
+4. pmm_reserve_region(0x100000UL,
+                      (uint64_t)(uintptr_t)_kernel_end - 0x100000UL)
        — kernel image + bitmap (bitmap is in .bss, inside this range)
-       NOTE: _kernel_end is extern char[]; cast to uint64_t before arithmetic
-       to avoid signed-pointer-subtraction warnings under -Werror
+       NOTE: cast through uintptr_t first; direct pointer-to-uint64_t cast
+       may warn under some -Werror configurations (C99 §7.18.1.4)
 
-5. count total usable bytes (sum of usable region lengths before step 3/4)
+5. count total usable bytes (sum of usable region lengths from step 2)
    count number of usable regions
    printk("[PMM] OK: NMB usable across N regions\n")
 ```
@@ -393,4 +433,4 @@ under `-ffreestanding` with the current CFLAGS. No libc dependency.
 | Arch boundary | arch_mm.c parses multiboot2; pmm.c pulls regions via arch.h | Keeps kernel/mm/ arch-agnostic |
 | MB count in OK line | Raw usable bytes from multiboot2 (before our reservations) | Stable as kernel grows |
 | OOM sentinel | Return 0 (address 0 always reserved) | Unambiguous without a separate error type |
-| BIOS hole in pmm.c | `pmm_reserve(0x0, 0x100000)` lives in pmm.c for now | Design debt: this is x86-specific knowledge. Future arch layer should provide a reserved-ranges table (alongside the usable-ranges table) so pmm.c never hard-codes platform addresses. |
+| Platform reservation ownership | `arch_mm_get_reserved_regions()` in arch_mm.c; pmm.c calls it | pmm.c contains no platform addresses. On ARM64, arch_mm.c returns a different (or empty) table. Fixed at design time — cheap now, expensive later. |
