@@ -1,14 +1,3 @@
-Before doing anything else, install and activate Superpowers if not 
-already present:
-
-  /plugin marketplace add obra/superpowers-marketplace
-  /plugin install superpowers@superpowers-marketplace
-
-Then restart and confirm Superpowers is active. You should see 
-/superpowers:brainstorm and /superpowers:write-plan available.
-
----
-
 Read MISSION.md and .claude/CLAUDE.md in full before proceeding.
 
 We are building Aegis — a clean-slate, capability-based POSIX kernel 
@@ -17,52 +6,33 @@ The defining principle: no process ever holds ambient authority.
 
 ---
 
-PHASE 1 GOAL: Toolchain + testing harness proven end-to-end.
+## PHASE 1 — COMPLETE (2026-03-19)
+
+Goal was: toolchain + testing harness proven end-to-end.
 A multiboot2 kernel boots in QEMU, emits structured serial output,
 and a test script diffs that output against expected and exits 
 non-zero on mismatch.
 
----
+What was originally planned vs what was built:
 
-INVOKE /superpowers:brainstorm NOW on the following question before 
-writing a single line of code:
+  ORIGINAL PLAN                       ACTUAL
+  QEMU -kernel aegis.elf              GRUB + -cdrom aegis.iso
+    (QEMU 10 dropped ELF64              (GRUB reliably loads multiboot2;
+     multiboot2 detection)               QEMU 10 requires PVH note for
+                                         direct ELF64 boot)
 
-  "What is the minimal correct architecture for Phase 1 of the Aegis 
-   kernel — covering boot entry, serial driver, VGA text mode driver, 
-   printk, and the test harness — such that every subsequent phase 
-   can be added without restructuring what we build today?"
+  direct diff of serial output        strip ANSI + grep '^[' + diff
+    (clean COM1)                        (SeaBIOS + GRUB write ANSI
+                                         escape codes to COM1 before
+                                         the kernel starts)
 
-During brainstorming, you must surface and get answers on:
+  x86_64-elf-gcc (cross-compiler)     symlink -> x86_64-linux-gnu-gcc 14.2
+    (not in Debian repos)               (functionally equivalent with
+                                         -ffreestanding -nostdlib)
 
-1. Multiboot2 vs direct QEMU -kernel: which for Phase 1 and why?
-2. Exact COM1 serial init sequence and baud rate
-3. VGA text mode memory layout — confirm ROM font in mode 3, 
-   no font file needed
-4. printk routing: simultaneous serial + VGA, what happens if 
-   VGA init fails (serial must always work)
-5. Test harness: exact QEMU flags, how output is captured, 
-   what tests/expected/boot.txt must contain
-6. C/Rust boundary: where does it sit, what does Phase 1 
-   Rust stub look like, what does it NOT do yet
-7. Linker script: higher-half layout, multiboot2 constraints,
-   section order
+  COM1 at 38400 baud (original ask)   COM1 at 115200 baud (user chose A)
 
-Do not proceed past brainstorming until these are resolved.
-
----
-
-After brainstorming, invoke /superpowers:write-plan for Phase 1.
-
-The plan must decompose into tasks of 5 minutes or less each.
-Every task that produces a compilable unit must include:
-  - A failing test written FIRST (RED)
-  - The implementation (GREEN)  
-  - A note on what refactor if any is needed
-
-The test harness task is not optional and not last. It is TASK 1.
-Reason: every subsequent task must be verifiable by the harness.
-Write tests/run_tests.sh and tests/expected/boot.txt as stubs 
-that fail immediately, before any kernel code exists.
+make test exits 0. See .claude/CLAUDE.md Build Status for full details.
 
 ---
 
@@ -89,24 +59,26 @@ STRICT CONSTRAINTS — enforce these throughout, non-negotiable:
 
 ---
 
-QEMU invocation for make run:
+QEMU invocation for make run (as built):
   qemu-system-x86_64 \
-    -kernel aegis.elf \
-    -serial stdio \
-    -vga std \
-    -no-reboot \
-    -m 128M
+    -machine pc \
+    -cdrom build/aegis.iso -boot order=d \
+    -serial stdio -vga std \
+    -no-reboot -m 128M \
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
-QEMU invocation for make test (headless):
+QEMU invocation for make test (headless, as built):
   qemu-system-x86_64 \
-    -kernel aegis.elf \
-    -nographic \
-    -serial stdio \
-    -no-reboot \
-    -m 128M \
+    -machine pc \
+    -cdrom build/aegis.iso -boot order=d \
+    -nographic -nodefaults -serial stdio \
+    -no-reboot -m 128M \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-    | tee /tmp/aegis_serial.txt
-  diff /tmp/aegis_serial.txt tests/expected/boot.txt
+    > /tmp/aegis_serial_raw.txt 2>/dev/null
+  # strip ANSI, keep only lines starting with '['
+  sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g' raw.txt \
+    | grep '^\[' > /tmp/aegis_serial.txt
+  diff tests/expected/boot.txt /tmp/aegis_serial.txt
   # exit non-zero on mismatch
 
 make test must return exit code 0 on success, 1 on failure.
@@ -114,8 +86,8 @@ This is the definition of "working" for every phase.
 
 ---
 
-After /superpowers:write-plan is complete and you have shown me 
-the plan, STOP and wait for my explicit go-ahead before invoking 
-/superpowers:execute-plan.
+For each new phase: after /superpowers:write-plan is complete and
+you have shown the plan, STOP and wait for explicit go-ahead before
+invoking /superpowers:execute-plan.
 
-I want to review the plan before any code is written.
+The user reviews every plan before any code is written.

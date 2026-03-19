@@ -110,20 +110,30 @@ make test
 ```
 
 This must:
-1. Build the kernel cleanly (exit on compiler warning if -Werror is set)
-2. Boot it in QEMU headless with these exact flags:
+1. Build the kernel and GRUB-bootable ISO cleanly (exit on compiler warning if -Werror is set)
+2. Boot the ISO headless with these exact flags:
    ```
    qemu-system-x86_64 \
-     -kernel aegis.elf \
+     -machine pc \
+     -cdrom aegis.iso \
+     -boot order=d \
      -nographic \
+     -nodefaults \
      -serial stdio \
      -no-reboot \
      -m 128M \
      -device isa-debug-exit,iobase=0xf4,iosize=0x04
    ```
-3. Capture COM1 serial output
-4. Diff it against `tests/expected/boot.txt`
+3. Capture COM1 serial output; strip ANSI escape sequences (SeaBIOS and GRUB
+   write ANSI codes before the kernel starts); keep only lines starting with `[`
+4. Diff against `tests/expected/boot.txt`
 5. Exit 0 on exact match, exit 1 on any mismatch
+
+**Why GRUB + ISO instead of `-kernel aegis.elf`:**
+QEMU 10 dropped direct ELF64 multiboot2 detection via `-kernel`. It now requires
+a PVH ELF Note for 64-bit direct boot. GRUB is the standard multiboot2 loader
+and detects our header correctly. The constraint (kernel lines must start with
+`[SUBSYSTEM]`) ensures they survive the ANSI-strip filter.
 
 ### Serial output format
 
@@ -139,7 +149,7 @@ or
 
 Examples:
 ```
-[SERIAL] OK: COM1 initialized at 38400 baud
+[SERIAL] OK: COM1 initialized at 115200 baud
 [VGA] OK: text mode 80x25
 [PMM] OK: 126MB usable across 3 regions
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
