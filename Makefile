@@ -23,7 +23,8 @@ CFLAGS = \
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
 
-BUILD = build
+BUILD   = build
+ISO_DIR = $(BUILD)/isodir
 
 ARCH_SRCS = \
     kernel/arch/x86_64/arch.c \
@@ -44,7 +45,7 @@ BOOT_OBJ  = $(BUILD)/arch/x86_64/boot.o
 
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(CORE_OBJS)
 
-.PHONY: all run test clean
+.PHONY: all iso run test clean
 
 all: $(BUILD)/aegis.elf
 
@@ -64,12 +65,21 @@ $(CAP_LIB): kernel/cap/src/lib.rs kernel/cap/Cargo.toml
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
-run: all
-	qemu-system-x86_64 -kernel $(BUILD)/aegis.elf \
+$(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
+	@mkdir -p $(ISO_DIR)/boot/grub
+	cp $(BUILD)/aegis.elf $(ISO_DIR)/boot/aegis.elf
+	cp tools/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
+	grub-mkrescue -o $@ $(ISO_DIR)
+
+iso: $(BUILD)/aegis.iso
+
+run: iso
+	qemu-system-x86_64 \
+	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial stdio -vga std -no-reboot -m 128M \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
-test: all
+test: iso
 	@bash tests/run_tests.sh
 
 clean:

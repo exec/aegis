@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 set -e
 
-KERNEL=build/aegis.elf
+ISO=build/aegis.iso
 EXPECTED=tests/expected/boot.txt
+RAW=/tmp/aegis_serial_raw.txt
 ACTUAL=/tmp/aegis_serial.txt
 
-# Boot headless. QEMU exits with code 3 when kernel writes 0x01 to
-# port 0xf4 (isa-debug-exit: exit_code = (value << 1) | 1 = 3).
-# timeout prevents make test from hanging if kernel never signals exit.
+# Boot headless via GRUB-bootable ISO.
+# QEMU 10 no longer supports direct ELF64 multiboot2 via -kernel (requires
+# PVH ELF Note); GRUB reliably loads the kernel via the multiboot2 protocol.
+#
+# Exit codes:
+#   QEMU exits with code 3 when kernel writes 0x01 to port 0xf4
+#   (isa-debug-exit: exit_code = (value << 1) | 1 = 3).
+#   timeout 10s prevents make test from hanging if the kernel stalls.
+#   || true: QEMU exit code 3 triggers set -e; we ignore it here.
 timeout 10s qemu-system-x86_64 \
-    -kernel "$KERNEL" \
+    -machine pc \
+    -cdrom "$ISO" \
+    -boot order=d \
     -nographic \
     -nodefaults \
     -serial stdio \
     -no-reboot \
     -m 128M \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-    > "$ACTUAL" 2>/dev/null || true
-# || true: QEMU exits 3 on clean kernel exit; set -e would treat that as failure.
-# -nodefaults: prevents firmware messages from contaminating serial output.
+    > "$RAW" 2>/dev/null || true
+
+# SeaBIOS and GRUB both write ANSI/VT100 escape sequences to COM1 before the
+# kernel starts. Strip those sequences, then keep only lines that begin with
+# '[' — every kernel status line follows the [SUBSYSTEM] format and nothing
+# from SeaBIOS or GRUB does after ANSI stripping.
+#
+#   \x1b\[[?0-9;]*[A-Za-z]  — strip ESC [ ... letter  (CSI sequences)
+#   \x1bc                   — strip ESC c              (terminal reset)
+sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g' "$RAW" \
+    | grep '^\[' \
+    > "$ACTUAL" || true
+# || true: grep exits 1 if no lines match (empty kernel output)
 
 diff "$EXPECTED" "$ACTUAL"
 # diff exits 0 on match, 1 on mismatch. Expected first: missing lines show as -,
