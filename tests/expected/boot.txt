@@ -7,5 +7,12 @@
 [PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
 [PIT] OK: timer at 100 Hz
 [KBD] OK: PS/2 keyboard ready
-[SCHED] OK: scheduler started, 2 tasks
+[GDT] OK: ring 3 descriptors installed
+[TSS] OK: RSP0 initialized
+[SYSCALL] OK: SYSCALL/SYSRET enabled
+[SCHED] OK: scheduler started, 3 tasks
+[USER] hello from ring 3
+[USER] hello from ring 3
+[USER] hello from ring 3
+[USER] done
 [AEGIS] System halted.
