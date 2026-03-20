@@ -2,6 +2,7 @@
 #include "printk.h"
 #include "cap.h"
 #include "pmm.h"
+#include "vmm.h"
 
 /*
  * kernel_main — top-level kernel entry point.
@@ -24,6 +25,7 @@ void kernel_main(uint32_t mb_magic, void *mb_info)
     arch_init();           /* serial_init + vga_init                  */
     arch_mm_init(mb_info); /* parse multiboot2 memory map             */
     pmm_init();            /* bitmap allocator — prints [PMM] OK      */
+    vmm_init();            /* page tables, higher-half map — [VMM] OK */
     cap_init();            /* [CAP] OK line                           */
     printk("[AEGIS] System halted.\n");
     arch_debug_exit(0x01); /* QEMU exits with code 3                  */
