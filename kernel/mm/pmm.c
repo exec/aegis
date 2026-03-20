@@ -126,7 +126,7 @@ void pmm_init(void)
         p = u64_to_dec(p, (uint64_t)nregions);
         p = append_str(p, " regions\n");
         *p = '\0';
-        printk(buf);
+        printk("%s", buf);
     }
 }
 
@@ -156,7 +156,7 @@ void pmm_free_page(uint64_t addr)
         p = u64_to_dec(p, addr);
         p = append_str(p, "\n");
         *p = '\0';
-        printk(buf);
+        printk("%s", buf);
         for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
     }
     uint64_t idx = addr / PAGE_SIZE;
@@ -165,7 +165,7 @@ void pmm_free_page(uint64_t addr)
         char *p = buf;
         p = append_str(p, "[PMM] FAIL: pmm_free_page addr out of managed range\n");
         *p = '\0';
-        printk(buf);
+        printk("%s", buf);
         for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
     }
     uint8_t  bit = (uint8_t)(1U << (idx % 8));
@@ -176,7 +176,7 @@ void pmm_free_page(uint64_t addr)
         p = u64_to_dec(p, addr);
         p = append_str(p, "\n");
         *p = '\0';
-        printk(buf);
+        printk("%s", buf);
         for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
     }
     pmm_bitmap[idx / 8] &= (uint8_t)~bit;
