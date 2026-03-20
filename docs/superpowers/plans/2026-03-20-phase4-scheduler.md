@@ -434,7 +434,12 @@ isr_dispatch(cpu_state_t *s)
 }
 ```
 
-- [ ] **Step 3: Verify idt.c compiles (will have missing-symbol warnings from pit.h/kbd.h — OK)**
+- [ ] **Step 3: Note — idt.c will NOT compile yet (expected)**
+
+`idt.c` includes `pit.h` and `kbd.h` which do not exist until Tasks 6 and 7. The
+compiler will emit a fatal `file not found` error, not merely linker warnings.
+This is expected at this stage. Do not attempt `make` until Tasks 6 and 7 are complete.
+The individual file `idt.c` can be written and reviewed now; compilation is verified in Task 13.
 
 ```bash
 make 2>&1 | grep -E "idt|error:" | head -20
@@ -1229,8 +1234,25 @@ void
 sched_start(void)
 {
     printk("[SCHED] OK: scheduler started, %u tasks\n", s_task_count);
-    /* Enable interrupts — the PIT will fire and call sched_tick() */
-    __asm__ volatile ("sti");
+
+    /* One-way switch into the first task.
+     *
+     * IMPORTANT: Do NOT call sti and return here. If we returned to the idle
+     * hlt loop and the first PIT tick fired from there, sched_tick would call
+     * ctx_switch(task_kbd, task_heartbeat) while RSP is deep in the ISR frame.
+     * ctx_switch would save the ISR stack pointer into task_kbd->rsp, corrupting
+     * the TCB. Resuming task_kbd later would load a garbage RSP and crash.
+     *
+     * Fix: switch directly into the first task using a stack-local dummy TCB.
+     * ctx_switch saves our current RSP into dummy.rsp (which we immediately
+     * abandon). The first task starts on its own correctly-constructed initial
+     * stack. Each task calls sti at startup to enable interrupts from task context.
+     *
+     * sched_start() never returns.
+     */
+    aegis_task_t dummy;
+    ctx_switch(&dummy, s_current);
+    __builtin_unreachable();
 }
 
 void
@@ -1380,6 +1402,10 @@ Replace the entire file with:
 static void
 task_kbd(void)
 {
+    /* Enable interrupts. Tasks own their interrupt-enable state.
+     * sti is called here (not in sched_start) so that the first ctx_switch
+     * into this task lands on our own stack before the PIT can fire. */
+    __asm__ volatile ("sti");
     for (;;) {
         char c = kbd_read();
         printk("%c", c);
@@ -1390,6 +1416,8 @@ task_kbd(void)
 static void
 task_heartbeat(void)
 {
+    /* Enable interrupts — see task_kbd comment. */
+    __asm__ volatile ("sti");
     uint64_t last = 0;
     for (;;) {
         uint64_t t = arch_get_ticks();
@@ -1424,13 +1452,9 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_kbd);
     sched_spawn(task_heartbeat);
-    sched_start();          /* prints [SCHED] OK, then sti — PIT takes over  */
-
-    /* sched_start() returns after sti but the scheduler is now live.
-     * The heartbeat task will call arch_debug_exit after 500 ticks.
-     * This idle loop runs between scheduled tasks. */
-    for (;;)
-        __asm__ volatile ("hlt");
+    sched_start();          /* prints [SCHED] OK, switches into first task   */
+    /* UNREACHABLE — sched_start() never returns */
+    __builtin_unreachable();
 }
 ```
 
