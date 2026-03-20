@@ -54,7 +54,7 @@ arch_init → arch_mm_init → pmm_init → vmm_init → cap_init
 | File | Change |
 |------|--------|
 | `kernel/arch/x86_64/vga.c` + `vga.h` | Cursor state, scroll, `vga_putchar`, hardware cursor |
-| `kernel/arch/x86_64/arch.h` | Declarations for idt_init, pic_init, pit_init, kbd_init, kbd_read, kbd_poll |
+| `kernel/arch/x86_64/arch.h` | Add: `idt_init`, `pic_init`, `pit_init`, `kbd_init`, `kbd_read`, `kbd_poll`, `arch_get_ticks`; update `ctx_switch` declaration; note `vga_write_string` now routes through `vga_putchar` |
 | `kernel/core/main.c` | Wire new inits, spawn 2 tasks, call sched_start |
 | `Makefile` | Add new source files to ARCH_SRCS and SCHED_SRCS |
 | `tests/expected/boot.txt` | 5 new subsystem lines |
@@ -128,11 +128,33 @@ typedef struct {
 } cpu_state_t;
 ```
 
-`isr_dispatch(cpu_state_t *s)` in `idt.c`:
-- vectors 0–31: `printk("[PANIC] exception %u at RIP=0x%x\n", ...)` + `for(;;){}`
-- vector 0x20: `pit_handler()` + EOI
-- vector 0x21: `kbd_handler()` + EOI
-- others: EOI only
+`isr_dispatch(cpu_state_t *s)` in `idt.c` — must use explicit `else if` chain:
+
+```c
+void isr_dispatch(cpu_state_t *s) {
+    if (s->vector < 32) {
+        /* CPU exception: panic */
+        printk("[PANIC] exception %lu at RIP=0x%lx\n", s->vector, s->rip);
+        for (;;) {}
+    } else if (s->vector < 0x30) {
+        /* Hardware IRQ: send EOI BEFORE calling handler.
+         * EOI must arrive before any context switch, because ctx_switch
+         * replaces RSP — if we switch away first, EOI is stranded on the
+         * outgoing task's return path and IRQ0 is silenced until that task
+         * is next scheduled. */
+        uint8_t irq = (uint8_t)(s->vector - 0x20);
+        pic_send_eoi(irq);
+        if      (s->vector == 0x20) { pit_handler(); }
+        else if (s->vector == 0x21) { kbd_handler(); }
+        /* other IRQs: EOI already sent, nothing else to do */
+    }
+    /* spurious vectors above 0x2F: ignored */
+}
+```
+
+Note: `pit_handler()` calls `sched_tick()` which calls `ctx_switch()`. Because EOI
+is sent before the handler, the PIC is ready for the next tick even if `ctx_switch`
+switches away and this function never returns on the outgoing task.
 
 ### 5.3 PIC (`pic.c` / `pic.h`)
 
@@ -155,13 +177,14 @@ Channel 0, mode 3 (square wave), divisor 11932 → ~100.03 Hz.
 #define PIT_HZ       100
 #define PIT_DIVISOR  11932   /* 1193182 / 100 */
 
-void pit_init(void);          /* program PIT, unmask IRQ0 */
-void pit_handler(void);       /* called by isr_dispatch on vector 0x20 */
-
-extern volatile uint64_t g_ticks;   /* incremented each tick */
+void     pit_init(void);        /* program PIT, unmask IRQ0 */
+void     pit_handler(void);     /* called by isr_dispatch on vector 0x20 */
+uint64_t arch_get_ticks(void);  /* returns current tick count; declared in arch.h */
 ```
 
-`pit_handler()` increments `g_ticks`, then calls `sched_tick()`.
+`pit_handler()` increments a file-static `s_ticks`, then calls `sched_tick()`.
+`arch_get_ticks()` is the arch-boundary accessor — `kernel/core/` and `kernel/sched/`
+use this instead of referencing the x86-specific `g_ticks` directly.
 `pit_init()` prints `[PIT] OK: timer at 100 Hz`.
 
 ### 5.5 PS/2 Keyboard (`kbd.c` / `kbd.h`)
@@ -213,9 +236,36 @@ ctx_switch:
 ```
 
 **New task stack setup** in `sched_spawn(fn)`:
-Push zeros for r15–r12, rbp, rbx (6 regs × 8 bytes), then push `fn` as the
-"return address". The first `ctx_switch` into this task pops the zeros and
-`ret`s into `fn`.
+
+The stack must look as if `ctx_switch` was already called on this task. Since
+`ctx_switch` pops r15 first and `ret`s last, the layout from high → low address is:
+
+```
+[fn address]   ← pushed first (deepest — this is what ret pops)
+[rbx = 0]
+[rbp = 0]
+[r12 = 0]
+[r13 = 0]
+[r14 = 0]
+[r15 = 0]      ← RSP points here after setup
+```
+
+In C (stack grows downward; `stack_top` is highest address of allocated region):
+```c
+uint64_t *sp = (uint64_t *)stack_top;
+*--sp = (uint64_t)fn;   /* return address: ret jumps here */
+*--sp = 0;              /* rbx */
+*--sp = 0;              /* rbp */
+*--sp = 0;              /* r12 */
+*--sp = 0;              /* r13 */
+*--sp = 0;              /* r14 */
+*--sp = 0;              /* r15  ← new task's saved RSP */
+task->rsp = (uint64_t)sp;
+```
+
+**Push order matters**: `fn` must be pushed first (deepest in the stack) so that
+after `ctx_switch` pops r15–rbx (6 registers), `ret` finds `fn` as the return
+address. Pushing `fn` last (shallowest) would cause `ret` to pop r15 instead.
 
 ### 5.7 Scheduler (`sched.c` / `sched.h`)
 
@@ -229,15 +279,24 @@ typedef struct aegis_task_t {
 
 void  sched_init(void);               /* init run queue, no tasks yet */
 void  sched_spawn(void (*fn)(void));  /* alloc TCB + 16KB stack, add to queue */
-void  sched_start(void);             /* sti — PIT takes over */
+void  sched_start(void);             /* print [SCHED] OK, then sti — PIT takes over */
 void  sched_tick(void);              /* called from pit_handler — advance + switch */
 ```
 
 `sched_tick()` advances `current = current->next`, calls `ctx_switch(old, current)`.
 Single-core only. No locking needed in Phase 4.
 
-`sched_init()` prints `[SCHED] OK: scheduler started, 2 tasks` after the two
-tasks are spawned (called from `main.c` before `sched_start()`).
+**`[SCHED]` OK line ownership**: `sched_start()` owns this print, not `sched_init()`.
+`sched_start()` is called after both tasks are spawned, so it can count the run
+queue and print the accurate task count before enabling interrupts.
+
+```c
+/* main.c call sequence: */
+sched_init();
+sched_spawn(task_kbd);
+sched_spawn(task_heartbeat);
+sched_start();   /* prints [SCHED] OK: scheduler started, 2 tasks — then sti */
+```
 
 **Phase 4 tasks (spawned in `main.c`):**
 
@@ -246,24 +305,24 @@ tasks are spawned (called from `main.c` before `sched_start()`).
 static void task_kbd(void) {
     for (;;) {
         char c = kbd_read();
-        vga_putchar(c);
+        printk("%c", c);   /* routes through vga_write_string → vga_putchar */
     }
 }
 
-/* Task 1: heartbeat — prints tick counter, exits after 500 ticks */
+/* Task 1: heartbeat — exits after 500 ticks to allow make test to complete */
 static void task_heartbeat(void) {
     uint64_t last = 0;
     uint32_t seconds = 0;
     for (;;) {
-        if (g_ticks >= 500) {
+        uint64_t t = arch_get_ticks();   /* arch-boundary accessor, not g_ticks */
+        if (t >= 500) {
             printk("[AEGIS] System halted.\n");
             arch_debug_exit(0x01);
         }
-        if (g_ticks - last >= 100) {
-            last = g_ticks;
+        if (t - last >= 100) {
+            last = t;
             seconds++;
-            /* write tick count to top-right corner of VGA */
-            /* (direct VGA write to avoid printk cursor interference) */
+            /* optional: printk heartbeat to serial for debugging */
         }
     }
 }
@@ -282,6 +341,8 @@ static int s_col = 0;
 ```
 
 Replace `vga_write_char` with `vga_putchar`:
+- Disables interrupts (`cli`) at entry, re-enables (`sti`) at exit — prevents
+  preemption mid-write from corrupting `s_row`/`s_col` shared state
 - Writes char at `(s_row, s_col)` with attribute 0x07
 - `\n` → col=0, row++
 - `\r` → col=0
@@ -289,6 +350,10 @@ Replace `vga_write_char` with `vga_putchar`:
 - After each char: if col==80 → col=0, row++
 - If row==25: scroll (copy rows 1–24 to rows 0–23 by word loop, clear row 24, row=24)
 - Update hardware cursor via ports 0x3D4/0x3D5
+
+**Note:** `cli`/`sti` in `vga_putchar` is safe in Phase 4 because all callers are
+kernel tasks with interrupts enabled. It serializes VGA writes without a full lock.
+Phase 5 (user space) will need a proper spinlock here.
 
 ### 6.2 Hardware Cursor
 
@@ -354,6 +419,12 @@ SCHED_SRCS = kernel/sched/sched.c
 - `sched.c` calls `ctx_switch` (asm) and `arch_debug_exit` — both declared in `arch.h`
 - `sched.c` calls `pmm_alloc_page` for stack allocation — arch-agnostic
 - `sched.h` and `sched.c` contain no x86-specific knowledge
+- `g_ticks` is a file-static in `pit.c`; `kernel/core/` accesses it only via
+  `arch_get_ticks()` declared in `arch.h` — never by including `pit.h` directly
+- `vga_putchar` is internal to `vga.c`; `kernel/core/` reaches it via
+  `printk("%c", c)` → `vga_write_string` → `vga_putchar`; not in `arch.h`
+- `ctx_switch` is declared in `arch.h` and called from `sched.c` — the asm
+  implementation is arch-specific but the call site is in the arch-agnostic scheduler
 
 ---
 
@@ -369,3 +440,8 @@ SCHED_SRCS = kernel/sched/sched.c
 | 500-tick test exit | 5 seconds gives scheduler time to prove it works; under the 10s QEMU timeout |
 | Shift-only kbd, no extended keys | YAGNI — US QWERTY letters/digits/punctuation sufficient for Phase 4 demo |
 | `vga_putchar` replaces `vga_write_char` | Unified output path with cursor state; `printk` and `vga_write_string` route through it |
+| EOI sent before handler in `isr_dispatch` | `pit_handler` calls `ctx_switch` which replaces RSP — EOI after handler return is stranded on the outgoing task's return path, silencing future PIT ticks until that task is rescheduled |
+| `cli`/`sti` in `vga_putchar` | Prevents cursor state corruption from preemption mid-write; simple and correct for Phase 4 kernel-only tasks |
+| `arch_get_ticks()` instead of `g_ticks` extern | PIT tick counter is x86-specific; `kernel/core/` must not reference arch internals directly |
+| `sched_start()` owns `[SCHED]` OK print | `sched_init()` initializes an empty queue; only `sched_start()` knows the final task count after all `sched_spawn()` calls |
+| Error-code exception list per Intel SDM Vol 3A Table 6-1 | Misclassifying an exception (ISR_ERR vs ISR_NOERR) misaligns the interrupt frame and crashes the handler |
