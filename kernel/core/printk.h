@@ -1,9 +1,9 @@
-#ifndef PRINTK_H
-#define PRINTK_H
+#ifndef AEGIS_PRINTK_H
+#define AEGIS_PRINTK_H
 
-/* Write a null-terminated string to all available outputs.
- * Routes to serial (always) and VGA (if initialised).
- * Not safe to call before arch_init(). */
-void printk(const char *s);
+/* printk — route formatted output to serial and VGA.
+ * Supports: %s (string), %c (char), %u (uint32_t), %lu (uint64_t),
+ *           %x (hex uint32_t), %lx (hex uint64_t), %% (literal %). */
+void printk(const char *fmt, ...);
 
-#endif
+#endif /* AEGIS_PRINTK_H */
