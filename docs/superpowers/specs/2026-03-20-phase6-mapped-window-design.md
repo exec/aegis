@@ -153,8 +153,13 @@ static uint64_t
 alloc_table(void)
 {
     uint64_t phys = pmm_alloc_page();
-    uint64_t *t   = vmm_window_map(phys);
-    for (int i = 0; i < 512; i++) t[i] = 0;
+    if (phys == 0) {
+        printk("[VMM] FAIL: out of memory allocating page table\n");
+        for (;;) {}
+    }
+    uint64_t *t = vmm_window_map(phys);
+    int i;
+    for (i = 0; i < 512; i++) t[i] = 0;
     vmm_window_unmap();
     return phys;
 }
