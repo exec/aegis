@@ -114,4 +114,35 @@ struct aegis_task_t;
  * again with that task as the incoming argument. */
 void ctx_switch(struct aegis_task_t *outgoing, struct aegis_task_t *incoming);
 
+/* -------------------------------------------------------------------------
+ * Phase 4: Interrupt infrastructure
+ * ------------------------------------------------------------------------- */
+
+/* IDT: install 48 interrupt gate descriptors and load with lidt. */
+void idt_init(void);
+
+/* PIC: remap 8259A dual PIC so IRQ0-15 land at vectors 0x20-0x2F.
+ * Masks all IRQs after init; drivers call pic_unmask(irq) when ready. */
+void pic_init(void);
+
+/* PIT: program channel 0 at 100 Hz and unmask IRQ0. */
+void pit_init(void);
+
+/* Returns the current PIT tick count (incremented 100x/second).
+ * Use this instead of accessing the pit.c-internal counter directly. */
+uint64_t arch_get_ticks(void);
+
+/* -------------------------------------------------------------------------
+ * Phase 4: Keyboard
+ * ------------------------------------------------------------------------- */
+
+/* Initialize PS/2 keyboard and unmask IRQ1. */
+void kbd_init(void);
+
+/* Blocking read — spins until a keypress is available. */
+char kbd_read(void);
+
+/* Non-blocking read. Returns 1 if a char was available and written to *out. */
+int kbd_poll(char *out);
+
 #endif
