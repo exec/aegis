@@ -14,6 +14,7 @@ CFLAGS = \
     -ffreestanding -nostdlib -nostdinc \
     -isystem $(GCC_INCLUDE) \
     -mcmodel=kernel \
+    -fno-pie -fno-pic \
     -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
     -fno-stack-protector \
     -Wall -Wextra -Werror \
@@ -32,6 +33,7 @@ ARCH_SRCS = \
     kernel/arch/x86_64/arch.c \
     kernel/arch/x86_64/arch_exit.c \
     kernel/arch/x86_64/arch_mm.c \
+    kernel/arch/x86_64/arch_vmm.c \
     kernel/arch/x86_64/serial.c \
     kernel/arch/x86_64/vga.c
 
