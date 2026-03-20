@@ -65,4 +65,19 @@ const aegis_mem_region_t  *arch_mm_get_reserved_regions(void);
  * pmm_init() uses this to reserve the kernel image pages. */
 #define ARCH_KERNEL_PHYS_BASE 0x100000UL
 
+/* Virtual base address of the kernel in the higher half. */
+#define ARCH_KERNEL_VIRT_BASE 0xFFFFFFFF80000000UL
+
+/* -------------------------------------------------------------------------
+ * Virtual memory interface (Phase 3+)
+ * ------------------------------------------------------------------------- */
+
+/* Load a physical PML4 page table address into CR3, replacing the current
+ * address space. Called by vmm_init() after building the higher-half map. */
+void arch_vmm_load_pml4(uint64_t phys);
+
+/* Invalidate the TLB entry for a single virtual address.
+ * Must be called after any PTE modification to ensure coherency. */
+void arch_vmm_invlpg(uint64_t virt);
+
 #endif
