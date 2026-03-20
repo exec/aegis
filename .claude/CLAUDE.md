@@ -117,7 +117,8 @@ This must:
      -machine pc \
      -cdrom aegis.iso \
      -boot order=d \
-     -nographic \
+     -display none \
+     -vga std \
      -nodefaults \
      -serial stdio \
      -no-reboot \
@@ -292,7 +293,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | VGA text mode driver | ✅ Done | 80×25, ROM font, attr 0x07 |
 | printk | ✅ Done | serial-first, VGA-conditional |
 | Test harness (make test) | ✅ Done | GRUB ISO + ANSI-strip + diff; exits 0 |
-| Physical memory manager | ⬜ Not started | |
+| Physical memory manager | ✅ Done | Bitmap allocator; single-page (4KB) only; multi-page deferred to buddy allocator |
 | Virtual memory / paging | ⬜ Not started | |
 | Scheduler (single-core) | ⬜ Not started | |
 | Syscall dispatch (Rust) | ⬜ Not started | |
@@ -308,6 +309,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | `x86_64-elf-gcc` | native cross-compiler | symlink → `x86_64-linux-gnu-gcc` 14.2 | Not in Debian repos; functionally equivalent with `-ffreestanding -nostdlib` |
 | Boot method | QEMU `-kernel aegis.elf` | GRUB + `-cdrom aegis.iso` | QEMU 10 dropped ELF64 multiboot2 detection via `-kernel`; GRUB detects correctly |
 | Serial output isolation | direct `diff` | strip ANSI + `grep ^[` + `diff` | SeaBIOS/GRUB write ANSI sequences to COM1 before kernel; our lines all start with `[` |
+| QEMU test flags | `-nographic` | `-display none -vga std` | Without VGA device, GRUB falls back to serial, contaminating COM1 with escape sequences even after ANSI stripping |
 ---
 
 ## Session Startup Checklist
@@ -324,4 +326,4 @@ Run through this at the start of every session before touching code:
 
 ---
 
-*Last updated: 2026-03-19 — Phase 1 complete, make test GREEN.*
+*Last updated: 2026-03-19 — Phase 2 complete, make test GREEN. PMM single-page only; multi-page allocation deferred to buddy allocator.*
