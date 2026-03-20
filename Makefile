@@ -23,7 +23,9 @@ CFLAGS = \
     -Ikernel/cap \
     -Ikernel/mm \
     -Ikernel/sched \
-    -Ikernel/proc
+    -Ikernel/proc \
+    -Ikernel/syscall \
+    -Ikernel/elf
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -41,7 +43,10 @@ ARCH_SRCS = \
     kernel/arch/x86_64/idt.c \
     kernel/arch/x86_64/pic.c \
     kernel/arch/x86_64/pit.c \
-    kernel/arch/x86_64/kbd.c
+    kernel/arch/x86_64/kbd.c \
+    kernel/arch/x86_64/gdt.c \
+    kernel/arch/x86_64/tss.c \
+    kernel/arch/x86_64/arch_syscall.c
 
 CORE_SRCS = \
     kernel/core/main.c \
@@ -56,9 +61,16 @@ CAP_LIB  = kernel/cap/target/x86_64-unknown-none/release/libcap.a
 
 ARCH_ASMS = \
     kernel/arch/x86_64/isr.asm \
-    kernel/arch/x86_64/ctx_switch.asm
+    kernel/arch/x86_64/ctx_switch.asm \
+    kernel/arch/x86_64/syscall_entry.asm
 
 SCHED_SRCS = kernel/sched/sched.c
+
+USERSPACE_SRCS = \
+    kernel/syscall/syscall.c \
+    kernel/proc/proc.c \
+    kernel/elf/elf.c \
+    kernel/init_bin.c
 
 ARCH_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
 CORE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(CORE_SRCS))
@@ -66,8 +78,9 @@ MM_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(MM_SRCS))
 BOOT_OBJ  = $(BUILD)/arch/x86_64/boot.o
 ARCH_ASM_OBJS = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
 SCHED_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
+USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 
-ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) $(SCHED_OBJS)
+ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) $(SCHED_OBJS) $(USERSPACE_OBJS)
 
 .PHONY: all iso run test clean
 
@@ -90,7 +103,13 @@ $(CAP_LIB): kernel/cap/src/lib.rs kernel/cap/Cargo.toml
 	    --target x86_64-unknown-none \
 	    --manifest-path kernel/cap/Cargo.toml
 
-$(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
+user/init/init.elf: user/init/main.c
+	$(MAKE) -C user/init
+
+kernel/init_bin.c: user/init/init.elf
+	cd user/init && xxd -i init.elf > ../../kernel/init_bin.c
+
+$(BUILD)/aegis.elf: kernel/init_bin.c $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
 $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
@@ -112,4 +131,6 @@ test: iso
 
 clean:
 	rm -rf $(BUILD)
+	rm -f kernel/init_bin.c
+	$(MAKE) -C user/init clean
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml
