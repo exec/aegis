@@ -27,7 +27,13 @@ sched_init(void)
 void
 sched_spawn(void (*fn)(void))
 {
-    /* Allocate TCB (one page from PMM — plenty of space) */
+    /* Allocate TCB (one page from PMM — plenty of space).
+     *
+     * IDENTITY MAP DEPENDENCY: pmm_alloc_page() returns a physical address.
+     * The cast to aegis_task_t * is valid only while the identity window
+     * [0..4MB) is active. Phase 4 must not tear down the identity map before
+     * replacing these raw physical casts with a mapped-window allocator.
+     * See CLAUDE.md "Phase 3 forward-looking constraints". */
     uint64_t tcb_phys = pmm_alloc_page();
     if (!tcb_phys) {
         printk("[SCHED] FAIL: OOM allocating TCB\n");
@@ -110,10 +116,14 @@ sched_start(void)
      * Fix: switch directly into the first task using a stack-local dummy TCB.
      * ctx_switch saves our current RSP into dummy.rsp (which we immediately
      * abandon). The first task starts on its own correctly-constructed initial
-     * stack. Each task calls sti at startup to enable interrupts from task context.
+     * stack. Each task enables interrupts at startup (arch-specific).
      *
      * sched_start() never returns.
      */
+    if (!s_current) {
+        printk("[SCHED] FAIL: sched_start called with no tasks\n");
+        for (;;) {}
+    }
     aegis_task_t dummy;
     ctx_switch(&dummy, s_current);
     __builtin_unreachable();
@@ -122,7 +132,9 @@ sched_start(void)
 void
 sched_tick(void)
 {
-    if (!s_current || !s_current->next)
+    if (!s_current)                        /* no tasks spawned yet */
+        return;
+    if (s_current->next == s_current)      /* single task: nowhere to switch */
         return;
 
     aegis_task_t *old = s_current;

@@ -18,7 +18,7 @@ void sched_spawn(void (*fn)(void));
 
 /* Print [SCHED] OK line, then switch directly into the first task via a
  * dummy TCB (one-way ctx_switch). Does not return. Each task enables
- * interrupts on entry via `sti`. */
+ * interrupts on entry via the arch interrupt-enable primitive. */
 void sched_start(void);
 
 /* Called by pit_handler on each timer tick.
