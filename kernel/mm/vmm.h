@@ -25,4 +25,22 @@ void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
  * 2MB huge pages; doing so will panic the kernel. */
 void vmm_unmap_page(uint64_t virt);
 
+/* Allocate a new PML4 and copy kernel high entries [256..511] from the
+ * master PML4. Returns physical address of the new PML4.
+ * Valid while identity map [0..4MB) is active (Phase 5 constraint). */
+uint64_t vmm_create_user_pml4(void);
+
+/* Map a single 4KB page in pml4_phys (NOT the active kernel PML4).
+ * All intermediate page-table entries (PML4e, PDPTe, PDe) created for
+ * this mapping have VMM_FLAG_USER set — required because the x86-64 MMU
+ * checks the USER bit at every level of the page-table walk.
+ * A leaf PTE with USER set but any ancestor without USER causes a ring-3
+ * #PF even if the leaf mapping is correct.
+ * flags: VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE as needed. */
+void vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
+                       uint64_t phys, uint64_t flags);
+
+/* Load pml4_phys into CR3. Flushes TLB. */
+void vmm_switch_to(uint64_t pml4_phys);
+
 #endif /* AEGIS_VMM_H */
