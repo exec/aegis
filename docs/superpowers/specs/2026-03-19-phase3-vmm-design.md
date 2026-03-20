@@ -334,7 +334,14 @@ Use a static helper (internal to `vmm.c`):
 ```c
 static void zero_page(uint64_t phys)
 {
-    /* Safe before identity mapping is torn down: physical == virtual for [0..2MB). */
+    /* Safe while the identity window [0..2MB) is active: physical == virtual.
+     * CONSTRAINT: phys must be < 2MB. All PMM allocations in Phase 3 satisfy
+     * this because the kernel + bitmap fit well within 2MB on a 128MB QEMU
+     * machine. If the kernel image ever grows past 2MB, or if vmm_map_page()
+     * is called with a deep mapping that triggers a PMM allocation above 2MB,
+     * this will write to an unmapped address and fault. Phase 4, which tears
+     * down or expands the identity map, must replace this with a mapped-window
+     * allocator. */
     volatile uint64_t *p = (volatile uint64_t *)(uintptr_t)phys;
     for (int i = 0; i < 512; i++)
         p[i] = 0;
@@ -342,8 +349,10 @@ static void zero_page(uint64_t phys)
 ```
 
 This is valid in Phase 3 because the identity window keeps `phys == virt` for all
-PMM-allocated pages (which come from physical RAM above 1MB, well within the 2MB
-identity window). Phase 4, which tears down the identity map, must revisit this.
+PMM-allocated pages that are below 2MB. The identity window is present in the new
+PML4 built by `vmm_init()` (step 2), so `zero_page()` is safe in `vmm_map_page()`
+calls after the cr3 switch — as long as the PMM does not return a page at or above
+2MB. Phase 4 must revisit this when mappings grow or identity is torn down.
 
 ### vmm_init() sequence
 
@@ -497,5 +506,6 @@ relocations that assume a low-address kernel.
 | `cr3` write location | `arch_vmm.c` only | Keeps `kernel/mm/` arch-agnostic; same pattern as arch boundary for PMM |
 | `invlpg` location | `arch_vmm.c` (`arch_vmm_invlpg`) | Same reason — arch-specific instruction |
 | `vmm_map_page` huge-page support | Not in public API | YAGNI; `vmm_init` handles huge pages internally; callers use 4KB API |
+| `zero_page()` validity post-cr3 | Relies on identity window extent (< 2MB) | All Phase 3 PMM allocations land below 2MB on a 128MB machine; Phase 4 must replace with a mapped-window allocator if identity is torn down or kernel grows past 2MB |
 | Freeing intermediate tables on unmap | Deferred | Requires a reclaim pass; out of scope for Phase 3 |
 | NX enforcement | Flag defined, not enforced | NXE bit in EFER not yet set; add in the phase that sets up proper segment/privilege separation |
