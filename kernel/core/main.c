@@ -4,6 +4,7 @@
 #include "pmm.h"
 #include "vmm.h"
 #include "sched.h"
+#include <stdint.h>
 
 /*
  * kernel_main — top-level kernel entry point.
@@ -36,19 +37,14 @@ task_heartbeat(void)
 {
     /* Enable interrupts — see task_kbd comment. */
     __asm__ volatile ("sti");
-    uint64_t last = 0;
     for (;;) {
-        uint64_t t = arch_get_ticks();
-        if (t >= 500) {
+        if (arch_get_ticks() >= 500) {
             printk("[AEGIS] System halted.\n");
             /* FIXME: arch_debug_exit called from within a scheduled task.
              * Stack state is indeterminate. Acceptable for Phase 4 because
              * isa-debug-exit writes to an I/O port and QEMU exits immediately.
              * Phase 5+ must implement a clean kernel shutdown path. */
             arch_debug_exit(0x01);
-        }
-        if (t - last >= 100) {
-            last = t;
         }
     }
 }
