@@ -8,8 +8,8 @@
 /* 64-byte ring buffer */
 #define KBD_BUF_SIZE 64
 static volatile char    s_buf[KBD_BUF_SIZE];
-static volatile uint8_t s_head = 0;  /* next write position */
-static volatile uint8_t s_tail = 0;  /* next read position  */
+static volatile uint32_t s_head = 0;  /* next write position */
+static volatile uint32_t s_tail = 0;  /* next read position  */
 
 /* Shift state */
 static volatile int s_shift = 0;
@@ -43,7 +43,7 @@ static const char s_sc_upper[] = {
 static void
 buf_push(char c)
 {
-    uint8_t next = (s_head + 1) & (KBD_BUF_SIZE - 1);
+    uint32_t next = (s_head + 1) & (KBD_BUF_SIZE - 1);
     if (next != s_tail) {   /* drop if full */
         s_buf[s_head] = c;
         s_head = next;
