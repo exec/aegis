@@ -21,7 +21,8 @@ CFLAGS = \
     -Ikernel/arch/x86_64 \
     -Ikernel/core \
     -Ikernel/cap \
-    -Ikernel/mm
+    -Ikernel/mm \
+    -Ikernel/sched
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -35,7 +36,11 @@ ARCH_SRCS = \
     kernel/arch/x86_64/arch_mm.c \
     kernel/arch/x86_64/arch_vmm.c \
     kernel/arch/x86_64/serial.c \
-    kernel/arch/x86_64/vga.c
+    kernel/arch/x86_64/vga.c \
+    kernel/arch/x86_64/idt.c \
+    kernel/arch/x86_64/pic.c \
+    kernel/arch/x86_64/pit.c \
+    kernel/arch/x86_64/kbd.c
 
 CORE_SRCS = \
     kernel/core/main.c \
@@ -48,12 +53,20 @@ MM_SRCS = \
 BOOT_SRC = kernel/arch/x86_64/boot.asm
 CAP_LIB  = kernel/cap/target/x86_64-unknown-none/release/libcap.a
 
+ARCH_ASMS = \
+    kernel/arch/x86_64/isr.asm \
+    kernel/arch/x86_64/ctx_switch.asm
+
+SCHED_SRCS = kernel/sched/sched.c
+
 ARCH_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
 CORE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(CORE_SRCS))
 MM_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(MM_SRCS))
 BOOT_OBJ  = $(BUILD)/arch/x86_64/boot.o
+ARCH_ASM_OBJS = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
+SCHED_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
 
-ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(CORE_OBJS) $(MM_OBJS)
+ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) $(SCHED_OBJS)
 
 .PHONY: all iso run test clean
 
@@ -64,6 +77,10 @@ $(BUILD)/%.o: kernel/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BOOT_OBJ): $(BOOT_SRC)
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) $< -o $@
+
+$(BUILD)/arch/x86_64/%.o: kernel/arch/x86_64/%.asm
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
 
