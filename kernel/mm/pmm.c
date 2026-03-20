@@ -112,7 +112,7 @@ void pmm_init(void)
      * inside this range).  Cast through uintptr_t first: direct
      * pointer-to-uint64_t cast may warn under C99 §7.18.1.4. */
     pmm_reserve_region(ARCH_KERNEL_PHYS_BASE,
-                       (uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_PHYS_BASE);
+                       ((uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE) - ARCH_KERNEL_PHYS_BASE);
 
     /* Step 5: report — derived from raw multiboot2 usable bytes (before
      * our own reservations) so this line stays stable as the kernel grows. */
