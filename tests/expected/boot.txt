@@ -12,6 +12,7 @@
 [GDT] OK: ring 3 descriptors installed
 [TSS] OK: RSP0 initialized
 [SYSCALL] OK: SYSCALL/SYSRET enabled
+[SMAP] OK: supervisor access prevention active
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 3 tasks
 [USER] hello from ring 3
