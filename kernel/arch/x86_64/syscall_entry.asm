@@ -53,24 +53,44 @@ syscall_entry:
     ;   Linux:  rax=num, rdi=arg1, rsi=arg2, rdx=arg3, r10=arg4, r8=arg5, r9=arg6
     ;   SysV 7-arg: rdi=num, rsi=arg1, rdx=arg2, rcx=arg3, r8=arg4, r9=arg5, [rsp+8]=arg6
     ;
-    ;   ORDERING: push r9 (user arg6) BEFORE modifying r9.
-    ;             Move r8→r9 (SysV arg5) BEFORE overwriting r8 with r10 (SysV arg4).
-    ;             The rdi/rsi/rdx/rcx shuffle is independent of r8/r9/r10.
+    ;   The Linux syscall ABI requires the kernel to preserve r8, r9, r10 for the
+    ;   calling process — musl relies on r8 surviving across syscall (e.g.
+    ;   __stdout_write saves FILE* in r8 and reads it back after a failed ioctl).
+    ;   We save them on the kernel stack and restore them after the C call.
     ;
-    ;   Stack layout after push r9 + call (inside syscall_dispatch):
-    ;     [rsp+0]  = return address (pushed by call instruction)
-    ;     [rsp+8]  = user r9 (arg6) — SysV 7th-argument slot
-    ;   After syscall_dispatch returns, add rsp, 8 discards arg6 before pop/sysret.
-    push r9          ; arg6 → stack (7th SysV arg; call will make it [rsp+8])
+    ;   Stack layout after the push block (deepest = saved first):
+    ;     ... (Step 2 frame: user RSP, rcx=RIP, r11=RFLAGS)
+    ;     [rsp+0]  = saved user r10
+    ;     [rsp+8]  = saved user r9
+    ;     [rsp+16] = saved user r8
+    ;   After push r9_arg6 (arg6 slot for SysV 7th param):
+    ;     [rsp+0]  = user arg6 (originally r9) — SysV 7th-argument slot
+    ;     [rsp+8]  = saved user r10
+    ;     [rsp+16] = saved user r9
+    ;     [rsp+24] = saved user r8
+    ;   After call instruction:
+    ;     [rsp+0]  = return addr; [rsp+8] = user arg6 (SysV stack arg)
+    ;
+    ;   ORDERING: save r8/r9/r10 first, then do the shuffle.
+    ;             push r9 (user arg6) AFTER saving r9, and the call makes it [rsp+8].
+    push r8          ; save user r8 (to restore after syscall_dispatch returns)
+    push r9          ; save user r9 (to restore after syscall_dispatch returns)
+    push r10         ; save user r10 (to restore after syscall_dispatch returns)
+    push r9          ; arg6 (user r9) → stack for 7th SysV arg (call makes it [rsp+8])
     mov  r9, r8      ; SysV arg5 ← user r8  (user arg5)
-    mov  r8, r10     ; SysV arg4 ← user r10 (user arg4; SYSCALL clobbered rcx with RIP)
+    mov  r8, r10     ; SysV arg4 ← user r10 (user arg4)
     mov  rcx, rdx    ; arg3 ← user rdx (safe: rcx was saved to stack in Step 2)
     mov  rdx, rsi    ; arg2 ← user rsi
     mov  rsi, rdi    ; arg1 ← user rdi
     mov  rdi, rax    ; num  ← syscall number (rax unchanged since SYSCALL)
 
     call syscall_dispatch
-    add  rsp, 8      ; discard pushed arg6; restore stack to post-Step-2 layout
+    add  rsp, 8      ; discard pushed arg6 slot; stack top = saved user r10
+
+    ; Restore user r8/r9/r10 so the process sees them unchanged after sysret.
+    pop  r10         ; restore user r10
+    pop  r9          ; restore user r9
+    pop  r8          ; restore user r8
     ; rax = return value (syscall_dispatch sets it; sysretq returns it to user)
 
     ; ── Step 4: restore RFLAGS, RIP, RSP; return to ring 3 ──────────────────

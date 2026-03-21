@@ -72,33 +72,53 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len, uint64_t *out_brk)
         if (this_end > seg_end)
             seg_end = this_end;
 
+        /*
+         * Page-align the virtual base downward.
+         * ELF segments are not required to start on a page boundary.
+         * The mapping must start at the page containing p_vaddr, and
+         * the data must be placed at the correct sub-page offset within
+         * that first page so the virtual layout is correct.
+         *
+         * va_base    = page-aligned start of mapping
+         * va_offset  = byte offset of p_vaddr within the first page
+         * page_count = pages covering [va_base, p_vaddr + p_memsz)
+         */
+        uint64_t va_base   = ph->p_vaddr & ~4095UL;
+        uint64_t va_offset = ph->p_vaddr & 4095UL;
+
         /* Allocate kva pages for this segment — no contiguity assumption on
          * physical frames; kva maps each PMM page to a consecutive kernel VA. */
-        uint64_t page_count = (ph->p_memsz + 4095UL) / 4096UL;
+        uint64_t page_count = (va_offset + ph->p_memsz + 4095UL) / 4096UL;
         uint64_t j;
 
         uint8_t *dst = kva_alloc_pages(page_count);
 
+        /* Zero the first (possibly partial) page so bytes before p_vaddr
+         * within it are clean.  Then copy file bytes at the sub-page offset. */
+        uint64_t k;
+        for (k = 0; k < va_offset; k++)
+            dst[k] = 0;
+
         /* Copy file bytes through kernel VA */
         const uint8_t *src = data + ph->p_offset;
-        uint64_t k;
         for (k = 0; k < ph->p_filesz; k++)
-            dst[k] = src[k];
+            dst[va_offset + k] = src[k];
 
         /* Zero BSS (bytes past p_filesz up to p_memsz) */
         for (k = ph->p_filesz; k < ph->p_memsz; k++)
-            dst[k] = 0;
+            dst[va_offset + k] = 0;
 
         /* Map each page into the user address space.
          * kva_page_phys recovers the physical address of each page
-         * (individual walk — O(page_count × 4) invlpg, acceptable at this scale). */
+         * (individual walk — O(page_count × 4) invlpg, acceptable at this scale).
+         * Mapping starts at the page-aligned va_base, not raw p_vaddr. */
         uint64_t map_flags = VMM_FLAG_USER;
         if (ph->p_flags & PF_W)
             map_flags |= VMM_FLAG_WRITABLE;
 
         for (j = 0; j < page_count; j++) {
             vmm_map_user_page(pml4_phys,
-                              ph->p_vaddr + j * 4096UL,
+                              va_base + j * 4096UL,
                               kva_page_phys(dst + j * 4096UL),
                               map_flags);
         }

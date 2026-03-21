@@ -61,6 +61,7 @@ sched_spawn(void (*fn)(void))
     task->kernel_stack_top = (uint64_t)(uintptr_t)(stack + STACK_SIZE);
     task->is_user          = 0;
     task->tid              = s_next_tid++;
+    task->stack_pages      = STACK_PAGES;
 
     /* Add to circular list */
     if (!s_current) {
@@ -125,6 +126,25 @@ sched_exit(void)
     prev->next          = s_current;
     s_task_count--;
 
+    if (dying->is_user) {
+        aegis_process_t *proc = (aegis_process_t *)dying;
+        vmm_free_user_pml4(proc->pml4_phys);
+
+        /* If no user tasks remain, request halt (deferred to next PIT tick). */
+        int has_user = 0;
+        aegis_task_t *t = s_current;
+        do {
+            if (t->is_user) { has_user = 1; break; }
+            t = t->next;
+        } while (t != s_current);
+
+        if (!has_user) {
+            printk("[AEGIS] System halted.\n");
+            arch_request_shutdown();
+            /* Continue — ctx_switch to idle/kbd; PIT tick exits QEMU. */
+        }
+    }
+
     if (s_current == dying) {  /* last task — everything has exited */
         arch_request_shutdown();
         for (;;) __asm__ volatile ("hlt");
@@ -145,7 +165,7 @@ sched_exit(void)
      * ctx_switch writes dying->rsp, so the TCB must remain valid until
      * after the RSP switch completes. */
     g_prev_dying_stack       = (void *)dying->stack_base;
-    g_prev_dying_stack_pages = dying->is_user ? 1 : STACK_PAGES;
+    g_prev_dying_stack_pages = dying->stack_pages;
     g_prev_dying_tcb         = dying;
     ctx_switch(dying, s_current);
     __builtin_unreachable();
@@ -185,6 +205,12 @@ sched_start(void)
     aegis_task_t dummy;
     ctx_switch(&dummy, s_current);
     __builtin_unreachable();
+}
+
+aegis_task_t *
+sched_current(void)
+{
+    return s_current;
 }
 
 void

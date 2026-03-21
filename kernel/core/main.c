@@ -52,6 +52,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_tss_init();        /* TSS RSP0 for ring-3 → ring-0 transitions      */
     arch_syscall_init();    /* enable SYSCALL/SYSRET MSRs — [SYSCALL] OK     */
     arch_smap_init();       /* SMAP detect + enable — [SMAP] OK/WARN         */
+    arch_sse_init();        /* enable SSE for user mode (CR0/CR4 bits)       */
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
     sched_init();           /* init run queue (no tasks yet)                 */

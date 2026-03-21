@@ -191,6 +191,13 @@ void arch_syscall_init(void);
  * [SMAP] WARN: not supported by CPU. Must be called after arch_syscall_init(). */
 void arch_smap_init(void);
 
+/* arch_sse_init — enable SSE/SSE2 for user-mode execution.
+ * Clears CR0.EM, sets CR0.MP, sets CR4.OSFXSR + CR4.OSXMMEXCPT.
+ * Must be called before sched_start() so that user processes can execute
+ * SSE instructions without triggering #UD (exception 6).
+ * The kernel itself is compiled -mno-sse and never touches XMM registers. */
+void arch_sse_init(void);
+
 /* Set to 1 by arch_smap_init() after successfully enabling CR4.SMAP.
  * Checked by arch_stac/arch_clac to avoid #UD on CPUs without SMAP. */
 extern int arch_smap_enabled;

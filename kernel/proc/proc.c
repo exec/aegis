@@ -63,12 +63,17 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         for (;;) {}
     }
 
-    /* Allocate and map user stack page */
+    /* Allocate and map user stack page.
+     * vmm_zero_page ensures the initial stack contents are zero — without
+     * this, PMM frames carry stale data.  musl's _start reads argc from
+     * [rsp] immediately; a zero there means argc=0, which is correct for
+     * a single-process system with no argv/envp. */
     uint64_t user_stack_phys = pmm_alloc_page();
     if (!user_stack_phys) {
         printk("[PROC] FAIL: OOM allocating user stack\n");
         for (;;) {}
     }
+    vmm_zero_page(user_stack_phys);
     vmm_map_user_page(proc->pml4_phys, USER_STACK_PAGE, user_stack_phys,
                       VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
 
@@ -90,7 +95,9 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     uint64_t *sp = (uint64_t *)(kstack + STACK_SIZE);
 
     *--sp = 0x1BULL;            /* SS  — user data | RPL=3       */
-    *--sp = USER_STACK_TOP;     /* RSP — user stack top           */
+    *--sp = USER_STACK_TOP - 128; /* RSP — 128 bytes below top; stack page is zeroed,
+                                   * so [rsp]=argc=0, [rsp+8]=argv[0]=NULL,
+                                   * [rsp+16]=envp[0]=NULL, [rsp+24]=AT_NULL. */
     *--sp = 0x202ULL;           /* RFLAGS — IF=1, reserved bit 1  */
     *--sp = 0x23ULL;            /* CS  — user code | RPL=3        */
     *--sp = entry_rip;          /* RIP — ELF entry point          */

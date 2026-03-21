@@ -9,6 +9,7 @@ typedef struct aegis_task_t {
     uint64_t             kernel_stack_top; /* RSP0 value: kernel stack top for this task */
     uint32_t             tid;              /* task ID */
     uint8_t              is_user;          /* 1 = user process (aegis_process_t), 0 = kernel task */
+    uint64_t             stack_pages;      /* kva pages allocated for this task's kernel stack */
     struct aegis_task_t *next;             /* circular linked list */
 } aegis_task_t;
 
@@ -36,5 +37,8 @@ void sched_add(aegis_task_t *task);
  * Called from sys_exit (syscall 60). Does not return.
  * TCB and kernel stack are freed via deferred kva_free_pages at the next sched_exit call. */
 void sched_exit(void);
+
+/* Return a pointer to the currently running task. */
+aegis_task_t *sched_current(void);
 
 #endif /* AEGIS_SCHED_H */
