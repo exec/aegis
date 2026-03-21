@@ -423,3 +423,109 @@ vmm_get_master_pml4(void)
 {
     return s_pml4_phys;
 }
+
+/* PTE_PS — Page Size bit. Set in a PDE indicates a 2MB huge page (the entry
+ * maps a 2MB frame directly, not a PT). Set in a PDPTE indicates a 1GB page.
+ * vmm_map_user_page only creates 4KB PTEs, so no user mapping should ever
+ * have PS set. If encountered, skip (leak) rather than misinterpret as a
+ * page-table pointer and double-free 512 ghost frames. */
+#define PTE_PS (1UL << 7)
+
+void
+vmm_free_user_pml4(uint64_t pml4_phys)
+{
+    int i, j, k, l;
+    for (i = 0; i < 256; i++) {
+        uint64_t pml4e = ((uint64_t *)vmm_window_map(pml4_phys))[i];
+        vmm_window_unmap();
+        if (!(pml4e & VMM_FLAG_PRESENT)) continue;
+        uint64_t pdpt_phys = pml4e & ~0xFFFUL;
+
+        for (j = 0; j < 512; j++) {
+            uint64_t pdpte = ((uint64_t *)vmm_window_map(pdpt_phys))[j];
+            vmm_window_unmap();
+            if (!(pdpte & VMM_FLAG_PRESENT)) continue;
+            if (pdpte & PTE_PS) continue; /* 1GB page — unexpected, skip */
+            uint64_t pd_phys = pdpte & ~0xFFFUL;
+
+            for (k = 0; k < 512; k++) {
+                uint64_t pde = ((uint64_t *)vmm_window_map(pd_phys))[k];
+                vmm_window_unmap();
+                if (!(pde & VMM_FLAG_PRESENT)) continue;
+                if (pde & PTE_PS) continue; /* 2MB page — unexpected, skip */
+                uint64_t pt_phys = pde & ~0xFFFUL;
+
+                for (l = 0; l < 512; l++) {
+                    uint64_t pte = ((uint64_t *)vmm_window_map(pt_phys))[l];
+                    vmm_window_unmap();
+                    if (!(pte & VMM_FLAG_PRESENT)) continue;
+                    pmm_free_page(pte & ~0xFFFUL);
+                }
+                pmm_free_page(pt_phys);
+            }
+            pmm_free_page(pd_phys);
+        }
+        pmm_free_page(pdpt_phys);
+    }
+    pmm_free_page(pml4_phys);
+}
+
+uint64_t
+vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
+{
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    /* Walk-overwrite pattern: overwrite window PTE at each level, single unmap. */
+    uint64_t *pml4  = vmm_window_map(pml4_phys);
+    uint64_t  pml4e = pml4[pml4_idx];
+    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return 0; }
+
+    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));
+    uint64_t  pdpte = pdpt[pdpt_idx];
+    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return 0; }
+
+    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));
+    uint64_t  pde = pd[pd_idx];
+    if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
+        vmm_window_unmap(); return 0;
+    }
+
+    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
+    uint64_t  pte = pt[pt_idx];
+    vmm_window_unmap();
+
+    return (pte & VMM_FLAG_PRESENT) ? PTE_ADDR(pte) : 0;
+}
+
+void
+vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
+{
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    /* Walk-overwrite pattern. Silent no-op if any level is absent. */
+    uint64_t *pml4  = vmm_window_map(pml4_phys);
+    uint64_t  pml4e = pml4[pml4_idx];
+    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return; }
+
+    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));
+    uint64_t  pdpte = pdpt[pdpt_idx];
+    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return; }
+
+    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));
+    uint64_t  pde = pd[pd_idx];
+    if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
+        vmm_window_unmap(); return;
+    }
+
+    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
+    if (pt[pt_idx] & VMM_FLAG_PRESENT)
+        pt[pt_idx] = 0;
+    vmm_window_unmap();
+    arch_vmm_invlpg(virt);
+}
