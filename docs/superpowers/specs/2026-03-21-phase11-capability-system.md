@@ -1,5 +1,19 @@
 # Phase 11: Capability System
 
+> **HARD PREREQUISITE:** Phase 10 (VFS + sys_open/read/close) must be fully
+> implemented and `make test` must be GREEN before ANY Phase 11 file is touched.
+> Phase 11 depends on `vfs_file_t`, `PROC_MAX_FDS`, `fds[]`, `sched_current()`,
+> and the `[VFS]`/`[INITRD]`/`[MOTD]` boot lines — all of which are Phase 10
+> additions. Verify with:
+> ```bash
+> grep -n 'sched_current' kernel/sched/sched.h   # must print a declaration
+> make test                                        # must exit 0
+> ```
+> Do not proceed if either command fails. If the `sched_current` grep
+> returns no output, Phase 10 is incomplete: request that Phase 10 adds
+> `aegis_task_t *sched_current(void)` to `kernel/sched/sched.h` and
+> `kernel/sched/sched.c` (returning `s_current`) before resuming Phase 11.
+
 ## Goal
 
 Replace the Phase 1 capability stub with a real, minimal capability system:
@@ -55,9 +69,20 @@ errnos used in this codebase (2, 9, 14, 24) and distinct from ENOSYS (-1).
 
 ### Rust module: `kernel/cap/src/lib.rs`
 
-Replace the Phase 1 stub with real types and functions.
+Replace the Phase 1 stub with real types and functions. **Preserve the existing
+`extern "C"` block** that declares `serial_write_string` — it is required by
+`cap_init`. The block looks like:
 
-**`CapSlot`** — `#[repr(C)]` so C can embed it directly in the PCB struct:
+```rust
+extern "C" {
+    fn serial_write_string(s: *const u8);
+}
+```
+
+Add the new items (`CapSlot`, `ENOCAP`, `cap_grant`, `cap_check`) after that block.
+The `cap_init` body is unchanged except for the string literal (`reserved` → `initialized`).
+
+**`CapSlot` and `ENOCAP`** — place these immediately after the `extern "C"` block:
 
 ```rust
 #[repr(C)]
@@ -65,6 +90,8 @@ pub struct CapSlot {
     pub kind:   u32,   /* CAP_KIND_* — 0 means empty */
     pub rights: u32,   /* CAP_RIGHTS_* bitfield */
 }
+
+const ENOCAP: u32 = 130;
 ```
 
 **`cap_init`** — updated message:
@@ -72,8 +99,12 @@ pub struct CapSlot {
 ```rust
 #[no_mangle]
 pub extern "C" fn cap_init() {
-    // SAFETY: serial_init() is called before cap_init() in kernel_main.
-    // The pointer is a valid NUL-terminated C string in read-only data.
+    // SAFETY: serial_init() is called in arch_init() before cap_init() is
+    // called in kernel_main, so the serial port is fully initialized.
+    // serial_write_string is a simple polling write with no shared mutable
+    // state and no re-entrancy concerns at this point in boot.
+    // The pointer is to a valid C string literal (null-terminated) in read-only data.
+    // `char` and `u8` have identical 8-bit ABI representation on x86-64/GCC.
     unsafe {
         serial_write_string(
             c"[CAP] OK: capability subsystem initialized\n".as_ptr() as *const u8
@@ -96,6 +127,9 @@ pub extern "C" fn cap_grant(
     // Called only from proc_spawn with proc->caps and CAP_TABLE_SIZE.
     // The PCB lives for the duration of the process; no concurrent mutation
     // occurs because proc_spawn runs before the task is added to the run queue.
+    // The `caps` array is at a 4-byte-aligned offset within the page-aligned
+    // PCB allocation (`kva_alloc_pages(1)` returns a page-aligned VA), so the
+    // pointer meets the alignment requirement for `CapSlot` (align = 4).
     let slots = unsafe { core::slice::from_raw_parts_mut(table, n as usize) };
     for (i, slot) in slots.iter_mut().enumerate() {
         if slot.kind == 0 {
@@ -130,8 +164,6 @@ pub extern "C" fn cap_check(
     }
     -(ENOCAP as i32)
 }
-
-const ENOCAP: u32 = 130;
 ```
 
 ### Updated `kernel/cap/cap.h`
@@ -162,8 +194,11 @@ typedef struct {
 #define CAP_RIGHTS_EXEC   (1u << 2)
 
 /* ENOCAP — Aegis-specific error: no matching capability found.
- * Value 130 is outside the range of Linux errnos used in this kernel. */
-#define ENOCAP 130u
+ * Value 130 is outside the range of Linux errnos used in this kernel.
+ * Defined without the 'u' suffix so that -ENOCAP is an unambiguous signed
+ * expression; callers should use `>= 0` to check for success rather than
+ * comparing to -ENOCAP to avoid signed/unsigned comparison warnings. */
+#define ENOCAP 130
 
 /* cap_init — initialize the capability subsystem.
  * Prints [CAP] OK line. Called from kernel_main before sched_init. */
@@ -183,6 +218,23 @@ int cap_check(const cap_slot_t *table, uint32_t n, uint32_t kind, uint32_t right
 
 ### Changes to `kernel/proc/proc.h`
 
+**Prerequisite:** Phase 10 must be fully implemented before Phase 11. The
+`vfs_file_t` type, `PROC_MAX_FDS` constant, and `fds[]` field shown below are
+added by Phase 10. The `sched_current()` function used in `syscall.c` is also
+added by Phase 10. Do not implement Phase 11 against the Phase 10 spec; implement
+it against the actual Phase 10 code once Phase 10 is complete and `make test`
+is GREEN.
+
+**`sched_current()` contract:** Phase 10 adds `aegis_task_t *sched_current(void)`
+to `kernel/sched/sched.h`, returning the currently running TCB. In `sys_open`
+the cast `(aegis_process_t *)sched_current()` is valid because `sys_open` can
+only be reached from a user process (ring-3 syscall), so `is_user == 1` and the
+task pointer is actually an `aegis_process_t`.
+
+**Include path:** `cap.h` is in `kernel/cap/`. The root Makefile already passes
+`-Ikernel/cap` (line 23) alongside the other kernel include paths, so
+`#include "cap.h"` resolves without any Makefile changes.
+
 Add `#include "cap.h"` and a `caps[]` field to `aegis_process_t`:
 
 ```c
@@ -196,6 +248,11 @@ typedef struct {
 } aegis_process_t;
 ```
 
+**Note:** `vfs_file_t` and `PROC_MAX_FDS` are declared in the Phase 10 VFS
+header (e.g. `vfs.h` or wherever Phase 10 places them). Find and verify that
+header is already included in `proc.h` via the Phase 10 changes before adding
+`#include "cap.h"`. Do not add a duplicate include.
+
 Size impact: `CAP_TABLE_SIZE` × 8 bytes = 64 bytes added to the PCB. Total PCB
 size remains well under 4 KB (the KVA page allocated for it).
 
@@ -204,31 +261,67 @@ size remains well under 4 KB (the KVA page allocated for it).
 Add `#include "cap.h"` (already pulled in transitively via `proc.h`, but explicit
 is better). In `proc_spawn`, after zeroing the fd table:
 
+**Note:** Phase 10 is responsible for zeroing `fds[]`. Phase 11 adds only the
+`caps[]` zero loop below. Do not duplicate Phase 10's fd table zeroing here.
+
 ```c
-/* Zero cap table — all slots start empty. */
+/* Zero cap table — all slots start empty.
+ * kva_alloc_pages maps raw physical frames without zeroing; the loop is
+ * required to ensure all slots start as CAP_KIND_NULL (= 0).
+ * Phase 10 is responsible for zeroing fds[] — this loop covers caps[] only. */
 uint32_t ci;
 for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
     proc->caps[ci].kind   = CAP_KIND_NULL;
     proc->caps[ci].rights = 0;
 }
 
-/* Grant initial capabilities to this user process. */
-cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN, CAP_RIGHTS_READ);
-printk("[CAP] OK: 1 capability granted to init\n");
+/* Grant initial capabilities to this user process.
+ * cap_grant returns the slot index (>= 0) on success or -ENOCAP if the table
+ * is full. With CAP_TABLE_SIZE = 8 and one grant, this cannot fail. */
+if (cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN, CAP_RIGHTS_READ) >= 0) {
+    printk("[CAP] OK: 1 capability granted to init\n");
+} else {
+    printk("[CAP] FAIL: cap_grant returned -ENOCAP (table full)\n");
+    for (;;) {}
+}
 ```
 
-**Placement in `kernel_main` output sequence:** `proc_spawn_init()` is called
-after `sched_spawn(task_idle)` and before `vmm_teardown_identity()`. The
-`[CAP] OK: 1 capability granted to init` line therefore appears between
+**Required `kernel_main` call order (Phase 10 + 11 combined):** The oracle
+below is only valid when Phase 10 implements `kernel_main` with this exact
+ordering of subsystem initialisation calls:
+
+```
+vfs_init()
+initrd_init()       → emits [VFS] and [INITRD] lines
+proc_spawn_init()   → emits [CAP] grant line (Phase 11)
+vmm_teardown_identity()  → emits [VMM] identity map removed
+sched_start()       → emits [SCHED] line, then runs user process → [MOTD]
+```
+
+`[CAP] OK: 1 capability granted to init` therefore appears between
 `[INITRD] OK: 1 file registered` and `[VMM] OK: identity map removed`.
+Phase 10 must implement this ordering. If Phase 10 places
+`vmm_teardown_identity` before `proc_spawn_init`, the oracle here is wrong
+and `make test` will produce a confusing diff. Verify the Phase 10
+`kernel_main` ordering before updating `boot.txt`.
 
 ### Changes to `kernel/syscall/syscall.c`
+
+**Phase 10 owns `sys_open` entirely** — its path copy, `vfs_open` call, fd
+allocation, and syscall dispatch wiring (syscall number 2, registered in
+`syscall_dispatch`). Phase 11 adds exactly **one thing**: a capability check at
+the very top of the already-existing `sys_open` function, before any path
+validation. Do not rewrite `sys_open`; find the function Phase 10 created and
+insert the gate shown below.
 
 `syscall.c` already includes `proc.h` (Phase 10). `proc.h` now includes `cap.h`,
 so `ENOCAP`, `cap_check`, `CAP_KIND_VFS_OPEN`, and `CAP_RIGHTS_READ` are all
 available without an additional include.
 
-Add capability check at the top of `sys_open`, before path validation:
+Add capability check at the top of `sys_open`, before path validation.
+**`sched_current()` is declared in `kernel/sched/sched.h` — verify the
+prerequisite grep at the top of this spec returned a result before editing
+`syscall.c`.**
 
 ```c
 static uint64_t
@@ -325,6 +418,18 @@ delegated capability values.
 ```
 
 ### Updated `tests/expected/boot.txt`
+
+**Prerequisite:** This oracle represents the target state after both Phase 10
+and Phase 11 are fully implemented. Phase 10 adds the `[VFS]` and `[INITRD]`
+lines and replaces the `[USER]` output lines with `[MOTD] Hello from initrd!`.
+The `[SCHED] OK: scheduler started, 3 tasks` line already exists in Phase 9 and
+is unchanged by Phase 10 or 11.
+
+**Implementation order:** Phase 10 must be complete and `make test` must be
+GREEN against the Phase 10 oracle before `tests/expected/boot.txt` is updated
+for Phase 11. The two Phase 11 changes to `boot.txt` (listed below) are applied
+on top of the already-passing Phase 10 oracle. Do not update `boot.txt` to the
+combined oracle shown here until Phase 10 is done.
 
 Two changes from Phase 10:
 
