@@ -627,6 +627,43 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
     return 0;
 }
 
+/* vmm_write_user_bytes — copy len bytes from kernel src into user virtual
+ * address range [va, va+len) within pml4_phys.  Handles writes crossing
+ * page boundaries by splitting at each page boundary.  Uses the mapped-window
+ * allocator; pages must already be mapped.
+ * Returns 0 on success, -1 if any page in the range is not mapped. */
+int
+vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
+                     const void *src, uint64_t len)
+{
+    const uint8_t *s = (const uint8_t *)src;
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t cur_va    = va + done;
+        uint64_t pg_va     = cur_va & ~0xFFFULL;
+        uint64_t off_in_pg = cur_va & 0xFFFULL;
+        uint64_t chunk     = 4096ULL - off_in_pg;
+        if (chunk > len - done) chunk = len - done;
+
+        uint64_t phys = vmm_phys_of_user(pml4_phys, pg_va);
+        if (!phys) return -1;
+
+        uint8_t *dst = (uint8_t *)vmm_window_map(phys) + off_in_pg;
+        __builtin_memcpy(dst, s + done, chunk);
+        vmm_window_unmap();
+
+        done += chunk;
+    }
+    return 0;
+}
+
+/* vmm_write_user_u64 — write one uint64_t to user VA in pml4_phys. */
+int
+vmm_write_user_u64(uint64_t pml4_phys, uint64_t va, uint64_t val)
+{
+    return vmm_write_user_bytes(pml4_phys, va, &val, sizeof(val));
+}
+
 /* vmm_free_user_pages — free only leaf physical frames in user half.
  * Does NOT free PT/PD/PDPT pages and does NOT free the PML4 itself.
  * Intended for sys_execve: the process keeps its PML4 and page-table

@@ -4,12 +4,15 @@
 #include "sched.h"
 #include "proc.h"
 #include "vfs.h"
+#include "initrd.h"
 #include "vmm.h"
 #include "pmm.h"
 #include "kva.h"
+#include "elf.h"
 #include "printk.h"
 #include "arch.h"
 #include <stdint.h>
+#include <stddef.h>
 
 extern void fork_child_return(void);
 
@@ -562,6 +565,258 @@ sys_fork(syscall_frame_t *frame)
     return (uint64_t)child->pid;
 }
 
+/*
+ * sys_execve — syscall 59
+ *
+ * arg1 = user pointer to null-terminated path
+ * arg2 = user pointer to null-terminated argv[] array (NULL-terminated)
+ * arg3 = user pointer to envp[] (ignored; Phase 15 always passes empty env)
+ *
+ * Replaces the calling process image in place:
+ *   1. Copy path and argv from user.
+ *   2. Look up path in initrd.
+ *   3. Free all user leaf pages; keep PML4 structure.
+ *   4. Reset brk/mmap_base/fs_base.
+ *   5. Load new ELF into the existing PML4.
+ *   6. Allocate a fresh user stack (4 pages / 16 KB).
+ *   7. Build x86-64 SysV ABI initial stack: argc, argv ptrs, NULL, envp
+ *      NULL, auxv (AT_PHDR, AT_PHNUM, AT_PAGESZ, AT_ENTRY, AT_NULL).
+ *   8. Redirect SYSRET to new entry point.
+ *
+ * Stack layout on return:
+ *   SP → argc
+ *        argv[0] ... argv[argc-1]
+ *        NULL (argv terminator)
+ *        NULL (envp terminator)
+ *        AT_PHDR  / phdr_va
+ *        AT_PHNUM / phdr_count
+ *        AT_PAGESZ / 4096
+ *        AT_ENTRY / er.entry
+ *        AT_NULL  / 0
+ *
+ * Alignment: RSP % 16 == 8 on entry to _start, per SysV ABI.
+ */
+
+#define USER_STACK_TOP_EXEC   0x7FFFFFFF000ULL
+#define USER_STACK_NPAGES     4ULL
+#define USER_STACK_BASE_EXEC  (USER_STACK_TOP_EXEC - USER_STACK_NPAGES * 4096ULL)
+
+static uint64_t
+sys_execve(syscall_frame_t *frame,
+           uint64_t path_uptr, uint64_t argv_uptr, uint64_t envp_uptr)
+{
+    (void)envp_uptr;  /* Phase 15: empty environment */
+
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+
+    /* 1. Copy path from user (<=255 bytes) */
+    if (!user_ptr_valid(path_uptr, 1))
+        return (uint64_t)-(int64_t)14;   /* EFAULT */
+    char path[256];
+    {
+        uint64_t i;
+        for (i = 0; i < sizeof(path) - 1; i++) {
+            if (!user_ptr_valid(path_uptr + i, 1))
+                return (uint64_t)-(int64_t)14;
+            char c;
+            copy_from_user(&c, (const void *)(uintptr_t)(path_uptr + i), 1);
+            path[i] = c;
+            if (c == '\0') break;
+        }
+        path[sizeof(path) - 1] = '\0';
+    }
+
+    /* 2. Copy argv from user (<=64 entries, each <=255 bytes) */
+    char  argv_bufs[64][256];
+    char *argv_ptrs[65];
+    int   argc = 0;
+    {
+        uint64_t ptr_addr = argv_uptr;
+        while (argc < 64) {
+            if (!user_ptr_valid(ptr_addr, 8))
+                return (uint64_t)-(int64_t)14;
+            uint64_t str_ptr;
+            copy_from_user(&str_ptr,
+                           (const void *)(uintptr_t)ptr_addr, 8);
+            if (!str_ptr) break;  /* NULL terminator */
+            {
+                uint64_t i;
+                for (i = 0; i < 255; i++) {
+                    if (!user_ptr_valid(str_ptr + i, 1))
+                        return (uint64_t)-(int64_t)14;
+                    char c;
+                    copy_from_user(&c,
+                        (const void *)(uintptr_t)(str_ptr + i), 1);
+                    argv_bufs[argc][i] = c;
+                    if (c == '\0') break;
+                }
+            }
+            argv_bufs[argc][255] = '\0';
+            argv_ptrs[argc] = argv_bufs[argc];
+            argc++;
+            ptr_addr += 8;
+        }
+        argv_ptrs[argc] = (char *)0;
+    }
+
+    /* 3. Look up path in initrd */
+    vfs_file_t f;
+    if (initrd_open(path, &f) != 0)
+        return (uint64_t)-(int64_t)2;    /* ENOENT */
+
+    /* 4. Free all user leaf pages; reuse PML4 and page-table structure */
+    vmm_free_user_pages(proc->pml4_phys);
+    vmm_switch_to(proc->pml4_phys);   /* reload CR3 to flush stale TLBs */
+
+    /* 5. Reset heap/mmap/TLS state */
+    proc->brk       = 0;
+    proc->mmap_base = 0x0000700000000000ULL;
+    proc->fs_base   = 0;
+
+    /* 6. Load new ELF */
+    elf_load_result_t er;
+    if (elf_load(proc->pml4_phys,
+                 (const uint8_t *)initrd_get_data(&f),
+                 (size_t)initrd_get_size(&f), &er) != 0)
+        return (uint64_t)-(int64_t)8;    /* ENOEXEC */
+    proc->brk = er.brk;
+
+    /* 7. Allocate + map 4 user stack pages (16 KB) */
+    {
+        uint64_t pn;
+        for (pn = 0; pn < USER_STACK_NPAGES; pn++) {
+            uint64_t phys = pmm_alloc_page();
+            if (!phys) return (uint64_t)-(int64_t)12;  /* ENOMEM */
+            vmm_zero_page(phys);
+            vmm_map_user_page(proc->pml4_phys,
+                              USER_STACK_BASE_EXEC + pn * 4096ULL, phys,
+                              VMM_FLAG_PRESENT | VMM_FLAG_USER |
+                              VMM_FLAG_WRITABLE);
+        }
+    }
+
+    /* 8. Build ABI initial stack at USER_STACK_TOP_EXEC.
+     *
+     * Pack argv strings first (working downward from top), then write the
+     * pointer table below.  Stack pointer must satisfy RSP % 16 == 8 at
+     * _start entry per the x86-64 SysV ABI.
+     */
+    uint64_t sp_va = USER_STACK_TOP_EXEC;
+
+    /* 8a. Write argv strings onto the stack, recording their VAs */
+    uint64_t str_ptrs[64];
+    {
+        int i;
+        for (i = argc - 1; i >= 0; i--) {
+            uint64_t slen = 0;
+            while (argv_ptrs[i][slen]) slen++;
+            slen++;  /* include null terminator */
+            if (sp_va - slen < USER_STACK_BASE_EXEC)
+                return (uint64_t)-(int64_t)7;   /* E2BIG */
+            sp_va -= slen;
+            if (vmm_write_user_bytes(proc->pml4_phys, sp_va,
+                                     argv_ptrs[i], slen) != 0)
+                return (uint64_t)-(int64_t)14;  /* EFAULT */
+            str_ptrs[i] = sp_va;
+        }
+    }
+
+    /* Align sp_va to 8 bytes for the pointer table */
+    sp_va &= ~7ULL;
+
+    /* Count pointer table entries:
+     *   1 (argc)
+     * + argc (argv pointers)
+     * + 1 (argv NULL)
+     * + 1 (envp NULL)
+     * + 10 (5 auxv key/value pairs)
+     * = argc + 13 qwords
+     */
+    uint64_t table_qwords = (uint64_t)(argc + 13);
+    uint64_t table_bytes  = table_qwords * 8ULL;
+
+    /* Ensure RSP % 16 == 8 on entry to _start */
+    sp_va -= table_bytes;
+    if ((sp_va % 16) != 8)
+        sp_va -= 8;
+    if (sp_va < USER_STACK_BASE_EXEC)
+        return (uint64_t)-(int64_t)7;   /* E2BIG */
+
+    /* 8b. Write the pointer table */
+    {
+        int i;
+        uint64_t wp = sp_va;
+
+        if (vmm_write_user_u64(proc->pml4_phys, wp,
+                               (uint64_t)argc) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        for (i = 0; i < argc; i++) {
+            if (vmm_write_user_u64(proc->pml4_phys, wp,
+                                   str_ptrs[i]) != 0)
+                return (uint64_t)-(int64_t)14;
+            wp += 8;
+        }
+
+        /* argv NULL terminator */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        /* envp NULL (empty environment) */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        /* auxv: AT_PHDR */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 3ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+        if (vmm_write_user_u64(proc->pml4_phys, wp, er.phdr_va) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        /* auxv: AT_PHNUM */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 5ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+        if (vmm_write_user_u64(proc->pml4_phys, wp,
+                               (uint64_t)er.phdr_count) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        /* auxv: AT_PAGESZ */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 6ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 4096ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        /* auxv: AT_ENTRY */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 9ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+        if (vmm_write_user_u64(proc->pml4_phys, wp, er.entry) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+
+        /* auxv: AT_NULL (end sentinel) */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+        wp += 8;
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
+            return (uint64_t)-(int64_t)14;
+    }
+
+    /* 9. Redirect SYSRET to new ELF entry point */
+    frame->rip      = er.entry;
+    frame->user_rsp = sp_va;
+
+    return 0;
+}
+
 uint64_t
 syscall_dispatch(syscall_frame_t *frame, uint64_t num,
                  uint64_t arg1, uint64_t arg2, uint64_t arg3,
@@ -579,6 +834,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 20: return sys_writev(arg1, arg2, arg3);
     case 39: return sys_getpid();
     case 57: return sys_fork(frame);
+    case 59: return sys_execve(frame, arg1, arg2, arg3);
     case 60: return sys_exit(arg1);
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);

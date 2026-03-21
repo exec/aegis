@@ -105,4 +105,16 @@ int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4);
  * Caller must reload CR3 after calling to flush stale TLB entries. */
 void vmm_free_user_pages(uint64_t pml4_phys);
 
+/* vmm_write_user_bytes — copy len bytes from kernel src into user VA range
+ * [va, va+len) in pml4_phys.  Handles writes that cross page boundaries.
+ * Uses the mapped-window allocator; caller must ensure pages are mapped.
+ * Returns 0 on success, -1 if a page is not mapped. */
+int vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
+                         const void *src, uint64_t len);
+
+/* vmm_write_user_u64 — write one uint64_t value to user VA in pml4_phys.
+ * Returns 0 on success, -1 if the page is not mapped.
+ * Convenience wrapper around vmm_write_user_bytes. */
+int vmm_write_user_u64(uint64_t pml4_phys, uint64_t va, uint64_t val);
+
 #endif /* AEGIS_VMM_H */

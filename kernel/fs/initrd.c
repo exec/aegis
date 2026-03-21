@@ -65,3 +65,17 @@ initrd_open(const char *path, vfs_file_t *out)
     }
     return -2; /* ENOENT */
 }
+
+const void *
+initrd_get_data(const vfs_file_t *f)
+{
+    if (!f->priv) return (const void *)0;
+    return (const void *)((const initrd_entry_t *)f->priv)->data;
+}
+
+uint32_t
+initrd_get_size(const vfs_file_t *f)
+{
+    if (!f->priv) return 0;
+    return ((const initrd_entry_t *)f->priv)->size;
+}
