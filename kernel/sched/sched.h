@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#define TASK_RUNNING  0U
+#define TASK_BLOCKED  1U
+#define TASK_ZOMBIE   2U
+
 typedef struct aegis_task_t {
     uint64_t             rsp;              /* MUST be first — ctx_switch reads [rdi+0] */
     uint8_t             *stack_base;       /* bottom of kva-allocated stack (freed on exit via kva_free_pages) */
@@ -10,6 +14,8 @@ typedef struct aegis_task_t {
     uint32_t             tid;              /* task ID */
     uint8_t              is_user;          /* 1 = user process (aegis_process_t), 0 = kernel task */
     uint64_t             stack_pages;      /* kva pages allocated for this task's kernel stack */
+    uint32_t             state;        /* TASK_RUNNING=0 TASK_BLOCKED=1 TASK_ZOMBIE=2 */
+    uint32_t             waiting_for;  /* PID this task waits for; 0=any child */
     struct aegis_task_t *next;             /* circular linked list */
 } aegis_task_t;
 

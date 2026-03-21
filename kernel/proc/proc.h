@@ -26,7 +26,14 @@ typedef struct {
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
     uint64_t      fs_base;                /* FS segment base for TLS; set by arch_prctl */
+    uint32_t      pid;          /* unique process ID; 1 = init */
+    uint32_t      ppid;         /* parent PID; 0 = no parent   */
+    char          cwd[256];     /* current working directory; init = "/" */
+    uint64_t      exit_status;  /* lower 8 bits = exit code; written before zombie */
 } aegis_process_t;
+
+/* Allocate and return the next unique process ID (monotonically increasing). */
+uint32_t proc_alloc_pid(void);
 
 /* Load elf_data into a new user process and add it to the scheduler run queue.
  * Called from kernel_main before sched_start. */

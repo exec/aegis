@@ -62,6 +62,8 @@ sched_spawn(void (*fn)(void))
     task->is_user          = 0;
     task->tid              = s_next_tid++;
     task->stack_pages      = STACK_PAGES;
+    task->state            = TASK_RUNNING;
+    task->waiting_for      = 0;
 
     /* Add to circular list */
     if (!s_current) {

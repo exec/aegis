@@ -10,6 +10,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
+static uint32_t s_next_pid = 1;
+
+uint32_t
+proc_alloc_pid(void)
+{
+    return s_next_pid++;
+}
+
 _Static_assert(offsetof(aegis_process_t, task) == 0,
                "aegis_process_t: task must be at offset 0 for safe cast");
 
@@ -151,6 +159,14 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
             proc->caps[ci].rights = 0;
         }
     }
+
+    proc->pid              = proc_alloc_pid();   /* 1 for init */
+    proc->ppid             = 0;
+    proc->cwd[0]           = '/';
+    proc->cwd[1]           = '\0';
+    proc->exit_status      = 0;
+    proc->task.state       = TASK_RUNNING;
+    proc->task.waiting_for = 0;
 
     /* Grant initial capabilities to this user process.
      * cap_grant returns the slot index (>= 0) on success or -ENOCAP if the
