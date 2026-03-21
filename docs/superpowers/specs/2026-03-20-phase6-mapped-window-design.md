@@ -66,12 +66,12 @@ A new BSS array `s_window_pt[512]` serves as the PT page for this range.
 Its physical address is computed at runtime from its link-time VMA:
 
 ```c
-uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
-                    - ARCH_KERNEL_VIRT_BASE + ARCH_KERNEL_PHYS_BASE;
+uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt - ARCH_KERNEL_VIRT_BASE;
 ```
 
-This formula is valid because `s_window_pt` is in BSS, which the linker script
-places within the kernel image segment loaded at `ARCH_KERNEL_PHYS_BASE`.
+This formula is valid because the linker script uses `AT(ADDR(.bss) - KERN_VMA)`,
+so LMA = VMA - KERN_VMA. `ARCH_KERNEL_PHYS_BASE` is 0, so the physical address
+is simply VMA minus the virtual base offset — no `+ ARCH_KERNEL_PHYS_BASE` term.
 
 ### Bootstrap Sequence (inside vmm_init)
 
@@ -86,8 +86,7 @@ is still valid (identity map active). The window is installed using that local:
 
 ```c
 /* Still inside vmm_init(), pd_hi local pointer in scope */
-uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
-                    - ARCH_KERNEL_VIRT_BASE + ARCH_KERNEL_PHYS_BASE;
+uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt - ARCH_KERNEL_VIRT_BASE;
 pd_hi[3]     = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
 s_window_pte = &s_window_pt[0];
 ```
