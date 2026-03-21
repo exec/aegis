@@ -42,7 +42,7 @@ typedef struct {
 #define EM_X86_64  0x3E
 
 uint64_t
-elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len)
+elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len, uint64_t *out_brk)
 {
     (void)len;
 
@@ -61,11 +61,16 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len)
     }
 
     const Elf64_Phdr *phdrs = (const Elf64_Phdr *)(data + eh->e_phoff);
+    uint64_t seg_end = 0;
     uint16_t i;
     for (i = 0; i < eh->e_phnum; i++) {
         const Elf64_Phdr *ph = &phdrs[i];
         if (ph->p_type != PT_LOAD)
             continue;
+
+        uint64_t this_end = ph->p_vaddr + ph->p_memsz;
+        if (this_end > seg_end)
+            seg_end = this_end;
 
         /* Allocate kva pages for this segment — no contiguity assumption on
          * physical frames; kva maps each PMM page to a consecutive kernel VA. */
@@ -99,5 +104,6 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len)
         }
     }
 
+    *out_brk = (seg_end + 4095UL) & ~4095UL;
     return eh->e_entry;
 }

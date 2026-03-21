@@ -2,6 +2,8 @@
 #define AEGIS_PROC_H
 
 #include "sched.h"
+#include "vfs.h"
+#include "cap.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -17,8 +19,11 @@
  * is unrelated.
  */
 typedef struct {
-    aegis_task_t task;      /* MUST be first — scheduler casts to aegis_task_t * */
-    uint64_t     pml4_phys; /* physical address of this process's PML4 */
+    aegis_task_t  task;                    /* MUST be first — scheduler casts to aegis_task_t * */
+    uint64_t      pml4_phys;              /* physical address of this process's PML4 */
+    vfs_file_t    fds[PROC_MAX_FDS];      /* Phase 10 — ops==NULL means slot free */
+    cap_slot_t    caps[CAP_TABLE_SIZE];   /* Phase 11 — capability table */
+    uint64_t      brk;                    /* current heap limit (user VA); grows up */
 } aegis_process_t;
 
 /* Load elf_data into a new user process and add it to the scheduler run queue.

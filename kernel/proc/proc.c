@@ -5,6 +5,8 @@
 #include "kva.h"
 #include "printk.h"
 #include "arch.h"
+#include "console.h"
+#include "kbd_vfs.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -54,7 +56,8 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->pml4_phys = vmm_create_user_pml4();
 
     /* Load ELF into the user address space */
-    uint64_t entry_rip = elf_load(proc->pml4_phys, elf_data, elf_len);
+    uint64_t brk_start;
+    uint64_t entry_rip = elf_load(proc->pml4_phys, elf_data, elf_len, &brk_start);
     if (!entry_rip) {
         printk("[PROC] FAIL: ELF parse error\n");
         for (;;) {}
@@ -120,6 +123,67 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + STACK_SIZE);
     proc->task.tid              = 0xFF;   /* fixed user-process TID for Phase 5 */
     proc->task.is_user          = 1;
+    proc->task.stack_pages      = 1;
+
+    /* Zero the fd table — all slots start as free (ops == NULL).
+     * kva_alloc_pages does not zero pages; explicit init required. */
+    {
+        uint64_t i;
+        for (i = 0; i < PROC_MAX_FDS; i++)
+            proc->fds[i].ops = (const vfs_ops_t *)0;
+    }
+
+    /* Zero cap table — all slots start empty.
+     * kva_alloc_pages maps raw physical frames without zeroing; the loop is
+     * required to ensure all slots start as CAP_KIND_NULL (= 0).
+     * Phase 10 is responsible for zeroing fds[] — this loop covers caps[] only. */
+    {
+        uint32_t ci;
+        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+            proc->caps[ci].kind   = CAP_KIND_NULL;
+            proc->caps[ci].rights = 0;
+        }
+    }
+
+    /* Grant initial capabilities to this user process.
+     * cap_grant returns the slot index (>= 0) on success or -ENOCAP if the
+     * table is full. With CAP_TABLE_SIZE = 8 and two grants, this cannot fail. */
+
+    /* Grant open capability. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_OPEN, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant VFS_OPEN returned -ENOCAP\n");
+        for (;;) {}
+    }
+
+    /* Grant write capability. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) < 0) {
+        printk("[CAP] FAIL: cap_grant VFS_WRITE returned -ENOCAP\n");
+        for (;;) {}
+    }
+
+    /* Grant read capability. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_READ, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant VFS_READ returned -ENOCAP\n");
+        for (;;) {}
+    }
+
+    /* Pre-open fd 1 (stdout) to the console device.
+     * User process inherits stdout without a sys_open call. */
+    proc->fds[1] = *console_open();
+
+    /* Pre-open fd 0 (stdin) to keyboard device. */
+    proc->fds[0] = *kbd_vfs_open();
+
+    /* Pre-open fd 2 (stderr) to console device. */
+    proc->fds[2] = *console_open();
+
+    /* Initialise heap break to top of ELF segments. */
+    proc->brk = brk_start;
+
+    printk("[CAP] OK: 3 capabilities granted to init\n");
 
     sched_add(&proc->task);
 }
