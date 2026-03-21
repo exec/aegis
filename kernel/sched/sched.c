@@ -88,6 +88,13 @@ sched_add(aegis_task_t *task)
     s_task_count++;
 }
 
+/* Deferred cleanup: dying task's resources cannot be freed before ctx_switch
+ * (ctx_switch writes dying->rsp; the dying stack is live until RSP switches).
+ * Record them here and free at the entry of the next sched_exit call. */
+static void    *g_prev_dying_tcb         = NULL;
+static void    *g_prev_dying_stack       = NULL;
+static uint64_t g_prev_dying_stack_pages = 0;
+
 void
 sched_exit(void)
 {
@@ -98,6 +105,14 @@ sched_exit(void)
      * After Phase 7: TCBs are kva-mapped higher-half VAs, visible from any CR3
      * (pd_hi is shared). The switch is retained as a defensive measure. */
     vmm_switch_to(vmm_get_master_pml4());
+
+    /* Free resources of the previously exited task (safe: ctx_switch has
+     * completed; that TCB and stack are no longer live on any CPU). */
+    if (g_prev_dying_tcb) {
+        kva_free_pages(g_prev_dying_stack, g_prev_dying_stack_pages);
+        kva_free_pages(g_prev_dying_tcb, 1);
+        g_prev_dying_tcb = NULL;
+    }
 
     /* IF=0 throughout (IA32_SFMASK cleared IF on SYSCALL entry) —
      * no preemption can occur during list manipulation. */
@@ -125,9 +140,13 @@ sched_exit(void)
     else if (s_current->is_user)
         vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
-    /* PHASE 8 CLEANUP: free dying->stack_base (kva pages) and dying itself
-     * once a kernel page-table free path (vmm_unmap_page + pmm_free_page)
-     * is available. See CLAUDE.md Phase 8 forward-looking constraints. */
+    /* Record dying task for deferred cleanup at the next sched_exit entry.
+     * Must be set AFTER all list manipulation and BEFORE ctx_switch:
+     * ctx_switch writes dying->rsp, so the TCB must remain valid until
+     * after the RSP switch completes. */
+    g_prev_dying_stack       = (void *)dying->stack_base;
+    g_prev_dying_stack_pages = dying->is_user ? 1 : STACK_PAGES;
+    g_prev_dying_tcb         = dying;
     ctx_switch(dying, s_current);
     __builtin_unreachable();
 }
