@@ -14,7 +14,7 @@
 [SYSCALL] OK: SYSCALL/SYSRET enabled
 [SMAP] OK: supervisor access prevention active
 [VFS] OK: initialized
-[INITRD] OK: 1 file registered
+[INITRD] OK: 10 files registered
 [CAP] OK: 3 capabilities granted to init
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 2 tasks
