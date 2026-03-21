@@ -12,6 +12,21 @@
 /* Physical address of the active PML4 table. */
 static uint64_t s_pml4_phys;
 
+/* Mapped-window allocator (Phase 6).
+ * A single virtual address whose PTE is permanently allocated in BSS.
+ * vmm_window_map(phys) installs phys into the PTE and flushes TLB.
+ * vmm_window_unmap() clears the PTE and flushes TLB.
+ * The window is non-reentrant: never hold it across any call that may
+ * itself call vmm_window_map (e.g. alloc_table). */
+#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x600000UL)
+
+static uint64_t           s_window_pt[512]; /* BSS — PT for window range       */
+static volatile uint64_t *s_window_pte;     /* → s_window_pt[0], set at init   *
+                                             * volatile: prevents the compiler  *
+                                             * from caching the PTE value; each *
+                                             * write must reach memory before   *
+                                             * the __asm__ volatile invlpg.     */
+
 /*
  * zero_page — zero all 512 entries of a physical page.
  *
@@ -54,6 +69,41 @@ static uint64_t *
 phys_to_table(uint64_t phys)
 {
     return (uint64_t *)(uintptr_t)phys;
+}
+
+/*
+ * vmm_window_map — map an arbitrary physical page into the window slot.
+ * Returns a pointer to VMM_WINDOW_VA, now backed by phys.
+ *
+ * Write ordering: the write to *s_window_pte must reach memory before the
+ * invlpg asm barrier. volatile on s_window_pte ensures the compiler does not
+ * hoist the write. arch_vmm_invlpg is __asm__ volatile, which also acts as
+ * a compiler barrier — so the write-then-invlpg ordering is guaranteed.
+ *
+ * Do NOT call this while a previous vmm_window_map result is still in use
+ * unless you are intentionally overwriting the mapping (walk-overwrite pattern).
+ */
+/* __attribute__((unused)): these functions are called in Task 3 (replace
+ * phys_to_table in zero_page/alloc_table). Defined here so the infrastructure
+ * is in place before the callers are written. Remove the attribute in Task 3
+ * once they have active call sites. */
+static __attribute__((unused)) void *
+vmm_window_map(uint64_t phys)
+{
+    *s_window_pte = phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+    arch_vmm_invlpg(VMM_WINDOW_VA);
+    return (void *)VMM_WINDOW_VA;
+}
+
+/*
+ * vmm_window_unmap — clear the window PTE and flush TLB.
+ * Call this after the last use of any vmm_window_map result.
+ */
+static __attribute__((unused)) void
+vmm_window_unmap(void)
+{
+    *s_window_pte = 0;
+    arch_vmm_invlpg(VMM_WINDOW_VA);
 }
 
 /*
@@ -103,10 +153,23 @@ vmm_init(void)
     pd_hi[0]     = 0x000000UL   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | (1UL << 7);
     pd_hi[1]     = 0x200000UL   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | (1UL << 7);
 
+    /* Install the mapped-window PT into pd_hi[3].
+     * pd_hi is a local pointer (phys_to_table(pd_hi_phys)) in scope here.
+     * pd_hi[0] and pd_hi[1] are the two 2MB kernel huge pages.
+     * pd_hi[2] is used by KSTACK_VA at runtime — do not touch.
+     * pd_hi[3] covers 0xFFFFFFFF80600000 (VMM_WINDOW_VA) — currently NULL. */
+    {
+        uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
+                            - ARCH_KERNEL_VIRT_BASE + ARCH_KERNEL_PHYS_BASE;
+        pd_hi[3]     = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+        s_window_pte = &s_window_pt[0];
+    }
+
     s_pml4_phys = pml4_phys;
     arch_vmm_load_pml4(pml4_phys);
 
     printk("[VMM] OK: kernel mapped to 0xFFFFFFFF80000000\n");
+    printk("[VMM] OK: mapped-window allocator active\n");
 }
 
 void
