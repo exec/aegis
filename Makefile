@@ -54,7 +54,8 @@ CORE_SRCS = \
 
 MM_SRCS = \
     kernel/mm/pmm.c \
-    kernel/mm/vmm.c
+    kernel/mm/vmm.c \
+    kernel/mm/kva.c
 
 BOOT_SRC = kernel/arch/x86_64/boot.asm
 CAP_LIB  = kernel/cap/target/x86_64-unknown-none/release/libcap.a

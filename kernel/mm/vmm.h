@@ -47,4 +47,14 @@ void vmm_switch_to(uint64_t pml4_phys);
  * Used by the scheduler to restore the master PML4 after a user task runs. */
 uint64_t vmm_get_master_pml4(void);
 
+/* vmm_phys_of — return the physical address of the 4KB page mapped at virt.
+ * Uses the walk-overwrite window pattern. Panics if any level is not present. */
+uint64_t vmm_phys_of(uint64_t virt);
+
+/* vmm_teardown_identity — clear pml4[0] (the [0..512GB) identity range)
+ * and reload CR3 for a full TLB flush. Must be called after all kernel
+ * objects have been allocated via kva (so no identity-map cast remains).
+ * Prints [VMM] OK: identity map removed. */
+void vmm_teardown_identity(void);
+
 #endif /* AEGIS_VMM_H */

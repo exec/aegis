@@ -3,6 +3,7 @@
 #include "cap.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "kva.h"
 #include "sched.h"
 #include "../proc/proc.h"
 #include <stdint.h>
@@ -68,6 +69,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_mm_init(mb_info);  /* parse multiboot2 memory map                   */
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */
+    kva_init();             /* kernel virtual allocator — [KVA] OK           */
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
     cap_init();             /* capability stub — [CAP] OK                    */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */

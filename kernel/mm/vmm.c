@@ -289,6 +289,66 @@ vmm_unmap_page(uint64_t virt)
 }
 
 uint64_t
+vmm_phys_of(uint64_t virt)
+{
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    /* Walk-overwrite pattern: overwrite window PTE at each level without
+     * an intervening unmap. Single vmm_window_unmap at the end. */
+    uint64_t *pml4  = vmm_window_map(s_pml4_phys);
+    uint64_t  pml4e = pml4[pml4_idx];
+    if (!(pml4e & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
+        printk("[VMM] FAIL: vmm_phys_of not mapped (pml4)\n");
+        for (;;) {}
+    }
+
+    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));
+    uint64_t  pdpte = pdpt[pdpt_idx];
+    if (!(pdpte & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
+        printk("[VMM] FAIL: vmm_phys_of not mapped (pdpt)\n");
+        for (;;) {}
+    }
+
+    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));
+    uint64_t  pde = pd[pd_idx];
+    if (!(pde & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
+        printk("[VMM] FAIL: vmm_phys_of not mapped (pd)\n");
+        for (;;) {}
+    }
+
+    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
+    uint64_t  pte = pt[pt_idx];
+    vmm_window_unmap();
+
+    if (!(pte & VMM_FLAG_PRESENT)) {
+        printk("[VMM] FAIL: vmm_phys_of not mapped (pt)\n");
+        for (;;) {}
+    }
+    return PTE_ADDR(pte);
+}
+
+void
+vmm_teardown_identity(void)
+{
+    /* Clear pml4[0]: removes the entire [0..512GB) low identity range.
+     * pdpt_lo and pd_lo pages remain allocated but are now unreachable;
+     * they will be reclaimed when a kernel page-table free path exists. */
+    uint64_t *pml4 = vmm_window_map(s_pml4_phys);
+    pml4[0] = 0;
+    vmm_window_unmap();
+    /* Full CR3 reload for a complete TLB flush. invlpg of each individual
+     * huge page would work but CR3 reload is simpler and more complete. */
+    arch_vmm_load_pml4(s_pml4_phys);
+    printk("[VMM] OK: identity map removed\n");
+}
+
+uint64_t
 vmm_create_user_pml4(void)
 {
     uint64_t new_pml4_phys = alloc_table();   /* zeroed by alloc_table */
