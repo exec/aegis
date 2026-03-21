@@ -241,43 +241,50 @@ vmm_unmap_page(uint64_t virt)
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
     uint64_t pt_idx   = (virt >> 12) & 0x1FF;
 
-    uint64_t *pml4 = vmm_window_map(s_pml4_phys);
-    uint64_t pml4e = pml4[pml4_idx];
-    vmm_window_unmap();
+    /* Walk-overwrite pattern: each vmm_window_map call overwrites the PTE
+     * from the previous level without an intervening unmap. Only one
+     * vmm_window_unmap call at the very end. This halves the invlpg count
+     * (4 maps + 1 unmap = 5 vs. 4 maps + 4 unmaps = 8) and eliminates the
+     * window between unmap and remap where a stale TLB entry could yield
+     * a silent wrong read if any interleaved code runs between them. */
+    uint64_t *pml4  = vmm_window_map(s_pml4_phys);
+    uint64_t  pml4e = pml4[pml4_idx];
     if (!(pml4e & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pml4)\n");
         for (;;) {}
     }
 
-    uint64_t *pdpt = vmm_window_map(PTE_ADDR(pml4e));
-    uint64_t pdpte = pdpt[pdpt_idx];
-    vmm_window_unmap();
+    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));  /* overwrites PTE */
+    uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pdpt)\n");
         for (;;) {}
     }
 
-    uint64_t *pd = vmm_window_map(PTE_ADDR(pdpte));
-    uint64_t pde = pd[pd_idx];
-    vmm_window_unmap();
+    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));    /* overwrites PTE */
+    uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pd)\n");
         for (;;) {}
     }
     if (pde & (1UL << 7)) {
+        vmm_window_unmap();
         printk("[VMM] FAIL: vmm_unmap_page called on huge-page-backed address\n");
         for (;;) {}
     }
 
-    uint64_t *pt = vmm_window_map(PTE_ADDR(pde));
-    uint64_t pte = pt[pt_idx];
+    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));      /* overwrites PTE */
+    uint64_t  pte = pt[pt_idx];
     if (!(pte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pt)\n");
         for (;;) {}
     }
     pt[pt_idx] = 0;
-    vmm_window_unmap();
+    vmm_window_unmap();          /* single unmap at the end of the walk */
     arch_vmm_invlpg(virt);
 }
 
