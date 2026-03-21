@@ -114,6 +114,35 @@ proc_spawn_init(void)
 }
 ```
 
+### New helper: `kernel/mm/vmm.h` + `kernel/mm/vmm.c`
+
+`MAP_ANONYMOUS` must return zeroed pages (Linux guarantee). `vmm_window_map`/`vmm_window_unmap` are `static` in `vmm.c`, so expose a thin public wrapper:
+
+**`vmm.h` — add declaration after `vmm_unmap_user_page`:**
+
+```c
+/* vmm_zero_page — zero the physical page at phys using the mapped-window slot.
+ * Required for MAP_ANONYMOUS: musl's heap allocator depends on zeroed pages.
+ * Uses vmm_window_map + memset + vmm_window_unmap. */
+void vmm_zero_page(uint64_t phys);
+```
+
+**`vmm.c` — add implementation before `vmm_phys_of_user`:**
+
+```c
+void
+vmm_zero_page(uint64_t phys)
+{
+    uint8_t *p = vmm_window_map(phys);
+    int i;
+    for (i = 0; i < 4096; i++)
+        p[i] = 0;
+    vmm_window_unmap();
+}
+```
+
+(No `memset` — the kernel has no libc. Same hand-rolled loop pattern as `alloc_table`.)
+
 ### Changes to `kernel/syscall/syscall.c`
 
 #### sys_mmap (syscall 9)
@@ -141,7 +170,7 @@ static uint64_t
 sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
          uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
-    (void)arg6;  /* offset — ignored (must be 0, validated below) */
+    (void)arg6;  /* offset — ignored (not validated; musl always passes 0 for MAP_ANONYMOUS) */
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
@@ -166,7 +195,8 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     for (va = base; va < base + len; va += 4096UL) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
-            /* OOM: unmap already-mapped pages and return current base */
+            /* OOM: unmap already-mapped pages and return -ENOMEM.
+             * MAP_FAILED = (void *)-1 — musl's allocator checks for this. */
             uint64_t v2;
             for (v2 = base; v2 < va; v2 += 4096UL) {
                 uint64_t p = vmm_phys_of_user(proc->pml4_phys, v2);
@@ -175,8 +205,12 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
                     pmm_free_page(p);
                 }
             }
-            return (uint64_t)-(int64_t)12;  /* OOM — ENOMEM; musl checks MAP_FAILED */
+            return (uint64_t)-(int64_t)12;  /* -ENOMEM */
         }
+        /* MAP_ANONYMOUS guarantee: zero the page before mapping it.
+         * musl's heap allocator reads free-list metadata from fresh pages;
+         * stale PMM data would corrupt the allocator. */
+        vmm_zero_page(phys);
         vmm_map_user_page(proc->pml4_phys, va, phys,
                           VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
     }
@@ -411,6 +445,8 @@ Replace `[MOTD] Hello from initrd!` and `[HEAP] OK: brk works` with the single m
 | File | Change |
 |------|--------|
 | `kernel/arch/x86_64/arch.h` | Add `arch_set_fs_base` static inline |
+| `kernel/mm/vmm.h` | Add `vmm_zero_page` declaration |
+| `kernel/mm/vmm.c` | Add `vmm_zero_page` implementation |
 | `kernel/proc/proc.h` | Add `mmap_base` + `fs_base` fields |
 | `kernel/proc/proc.c` | Init new fields; update externs to `hello_elf`; update `proc_spawn_init` |
 | `kernel/syscall/syscall.c` | Add `sys_mmap`, `sys_munmap`, `sys_arch_prctl`, 5 stubs; extend dispatch to 6 args |
