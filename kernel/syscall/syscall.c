@@ -45,6 +45,73 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 }
 
 /*
+ * sys_writev — syscall 20
+ *
+ * arg1 = fd
+ * arg2 = user pointer to struct iovec array
+ * arg3 = iovcnt (number of vectors)
+ *
+ * musl's __stdio_write uses writev instead of write for buffered I/O.
+ * We implement it by iterating over the iovec array and calling the fd's
+ * write op for each non-empty vector.
+ *
+ * struct iovec { void *iov_base; size_t iov_len; }  — 16 bytes on x86-64.
+ * Returns total bytes written on success, negative errno on failure.
+ * Requires CAP_KIND_VFS_WRITE.
+ */
+typedef struct {
+    uint64_t iov_base;   /* user pointer */
+    uint64_t iov_len;
+} aegis_iovec_t;
+
+static uint64_t
+sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops ||
+        !proc->fds[arg1].ops->write)
+        return (uint64_t)-9;   /* EBADF */
+
+    /* Reject unreasonable iovcnt before multiplying to avoid overflow. */
+    if (arg3 > 1024)
+        return (uint64_t)-(int64_t)22;  /* EINVAL */
+
+    /* Validate the iovec array itself is in user space */
+    if (!user_ptr_valid(arg2, arg3 * sizeof(aegis_iovec_t)))
+        return (uint64_t)-14;  /* EFAULT */
+
+    uint64_t total = 0;
+    uint64_t i;
+    for (i = 0; i < arg3; i++) {
+        aegis_iovec_t iov;
+        /* Copy the iovec descriptor from user space */
+        copy_from_user(&iov,
+                       (const void *)(uintptr_t)(arg2 + i * sizeof(aegis_iovec_t)),
+                       sizeof(aegis_iovec_t));
+
+        if (iov.iov_len == 0)
+            continue;
+
+        if (!user_ptr_valid(iov.iov_base, iov.iov_len))
+            return (uint64_t)-14;  /* EFAULT */
+
+        int r = proc->fds[arg1].ops->write(
+                    proc->fds[arg1].priv,
+                    (const void *)(uintptr_t)iov.iov_base,
+                    iov.iov_len);
+        if (r < 0)
+            return (uint64_t)(int64_t)r;
+        total += (uint64_t)r;
+    }
+    return total;
+}
+
+/*
  * sys_exit — syscall 60
  *
  * arg1 = exit code (ignored for Phase 5)
@@ -254,6 +321,12 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
         return (uint64_t)-(int64_t)22;   /* EINVAL */
 
     uint64_t base = proc->mmap_base;
+
+    /* Guard: mmap_base must stay in user address space (below 0x800000000000).
+     * Without this check, a large enough mapping would overflow mmap_base into
+     * the kernel-half VA range, corrupting shared kernel page tables. */
+    if (base + len > 0x0000800000000000ULL || base + len < base)
+        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
     uint64_t va;
     for (va = base; va < base + len; va += 4096UL) {
         uint64_t phys = pmm_alloc_page();
@@ -388,6 +461,7 @@ syscall_dispatch(uint64_t num, uint64_t arg1, uint64_t arg2,
     case  9: return sys_mmap(arg1, arg2, arg3, arg4, arg5, arg6);
     case 11: return sys_munmap(arg1, arg2);
     case 12: return sys_brk(arg1);
+    case 20: return sys_writev(arg1, arg2, arg3);
     case 14: return sys_rt_sigprocmask(arg1, arg2, arg3, arg4);
     case 39: return sys_getpid();
     case 60: return sys_exit(arg1);
