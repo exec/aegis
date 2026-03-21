@@ -10,9 +10,8 @@ void kva_init(void);
 
 /* kva_alloc_pages — allocate n 4KB pages, map them to consecutive higher-half
  * virtual addresses, and return the base VA as a pointer.
- * Panics on PMM exhaustion. Never pass VMM_FLAG_USER — kva pages are mapped
- * into pd_hi (shared with user PML4s); without USER the MMU blocks ring-3
- * access. */
+ * Panics on PMM exhaustion. Never pass VMM_FLAG_USER — kva pages are kernel-only;
+ * USER must be absent so the MMU denies ring-3 access to kernel objects. */
 void *kva_alloc_pages(uint64_t n);
 
 /* kva_page_phys — return the physical address of the page mapped at va.

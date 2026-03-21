@@ -321,6 +321,11 @@ vmm_phys_of(uint64_t virt)
         printk("[VMM] FAIL: vmm_phys_of not mapped (pd)\n");
         for (;;) {}
     }
+    if (pde & (1UL << 7)) {
+        vmm_window_unmap();
+        printk("[VMM] FAIL: vmm_phys_of called on huge-page-backed address\n");
+        for (;;) {}
+    }
 
     uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
     uint64_t  pte = pt[pt_idx];

@@ -39,6 +39,8 @@ kva_alloc_pages(uint64_t n)
         vmm_map_page(s_kva_next, phys, VMM_FLAG_WRITABLE);
         s_kva_next += 4096UL;
     }
+    /* SAFETY: base is a higher-half VA set from s_kva_next at function entry;
+     * all n pages at [base, s_kva_next) have been mapped via vmm_map_page. */
     return (void *)base;
 }
 
