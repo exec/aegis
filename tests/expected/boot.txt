@@ -4,7 +4,7 @@
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
 [VMM] OK: mapped-window allocator active
 [KVA] OK: kernel virtual allocator active
-[CAP] OK: capability subsystem reserved
+[CAP] OK: capability subsystem initialized
 [IDT] OK: 48 vectors installed
 [PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
 [PIT] OK: timer at 100 Hz
@@ -13,10 +13,11 @@
 [TSS] OK: RSP0 initialized
 [SYSCALL] OK: SYSCALL/SYSRET enabled
 [SMAP] OK: supervisor access prevention active
+[VFS] OK: initialized
+[INITRD] OK: 1 file registered
+[CAP] OK: 3 capabilities granted to init
 [VMM] OK: identity map removed
-[SCHED] OK: scheduler started, 3 tasks
-[USER] hello from ring 3
-[USER] hello from ring 3
-[USER] hello from ring 3
-[USER] done
+[SCHED] OK: scheduler started, 2 tasks
+[MOTD] Hello from initrd!
+[HEAP] OK: brk works
 [AEGIS] System halted.
