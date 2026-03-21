@@ -297,6 +297,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Virtual memory / paging | ✅ Done | Higher-half kernel at 0xFFFFFFFF80000000; 5-table setup (identity + kernel); identity map kept; teardown deferred to Phase 4 |
 | Mapped-window allocator | ✅ Done | VMM_WINDOW_VA=0xFFFFFFFF80600000; phys_to_table/zero_page eliminated from vmm.c; identity map still active (teardown Phase 7) |
 | Identity map teardown | ✅ Done | kva bump allocator at pd_hi[4+]; phys casts in sched/proc/elf eliminated; pml4[0] cleared |
+| SMAP + user pointer validation | ✅ Done | CR4.SMAP enabled (Broadwell+); sys_write returns EFAULT for kernel addresses; stac/clac per-byte load |
 | IDT | ✅ Done | 48 interrupt gates; isr_dispatch handles PIC EOI before calling handlers |
 | PIC | ✅ Done | 8259A remapped; IRQ0-15 → vectors 0x20-0x2F; per-driver unmask |
 | PIT | ✅ Done | Channel 0 at 100 Hz; arch_get_ticks() accessor; arch_request_shutdown() defers exit to ISR |
@@ -353,6 +354,8 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 *Last updated: 2026-03-21 — Phase 6 complete, make test GREEN. Mapped-window allocator live; phys_to_table/zero_page eliminated from vmm.c.*
 
 *Last updated: 2026-03-21 — Phase 7 complete, make test GREEN. Identity map removed; kva allocator live; per-process kernel stacks.*
+
+*Last updated: 2026-03-21 — Phase 8 complete, make test GREEN. SMAP enabled; sys_write validates user pointers; EFAULT returned for kernel addresses.*
 
 ### Phase 4 forward-looking constraints
 
@@ -443,26 +446,21 @@ remove the `[0..4MB) → [0..4MB)` identity entries from `pd_lo` and flush TLB.
 work involving concurrent kernel threads or DMA mappings may require additional
 slots.
 
-### Phase 8 forward-looking constraints
+### Phase 9 forward-looking constraints
 
-**No remaining physical-address-as-pointer casts.** After Phase 7,
-`grep -rn '(uintptr_t)' kernel/ --include='*.c'` must produce only
-legitimate VA→integer or VA→arithmetic hits. Any new physical cast introduced
-in Phase 8+ must carry a `// SAFETY:` comment and a forward-looking note for
-removal.
+**`USER_ADDR_MAX` lives in `syscall.c`.** When `sys_read` or any other
+pointer-taking syscall is added, move `USER_ADDR_MAX` to `arch.h` and
+`user_ptr_valid` to a shared `kernel/syscall/syscall_util.h` so all syscall
+handlers share a single definition. Duplication is a vulnerability.
 
-**kva has no free path.** `kva_alloc_pages` is a one-way bump allocator.
-The `sched_exit` code does not free TCB or stack pages (pre-existing leak).
-Phase 8+ must introduce a slab or free-list and wire `pmm_free_page` +
-`vmm_unmap_page` into the exit path.
+**Per-character stac/clac is intentionally conservative.** `sys_write` uses
+a per-byte `stac`/`clac` window because no kernel scratch buffer exists yet.
+Phase 9 must introduce a `copy_from_user(dst_kernel, src_user, len)` helper
+that does one `stac`, `memcpy`, `clac` — the standard Linux approach. This
+removes the per-iteration overhead and makes the pattern reusable for
+`sys_read`.
 
-**SMAP not enabled.** `sys_write` in `syscall.c` dereferences user virtual
-addresses (`arg2`) directly with no bounds check. Phase 8 must add:
-1. Bounds check: `arg2 + arg3 <= 0x00007FFFFFFFFFFF`
-2. Enable SMAP (`CR4.SMAP`) so unintentional kernel→user dereferences fault
-instead of silently succeeding.
-
-**pdpt_lo and pd_lo pages are leaked.** Two pages allocated by `vmm_init`
-for the now-removed identity map are unreachable. They are correctly marked
-allocated in the PMM bitmap (won't be reused), but are wasted. Reclaim when
-a kernel page-table free path exists.
+**kva has no free path.** Every exited process permanently leaks its TCB,
+PCB, and stack pages. Phase 9 must introduce a free-list for kva pages and
+wire `pmm_free_page` + `vmm_unmap_page` into `sched_exit`. Without this,
+sequential process execution exhausts physical memory.
