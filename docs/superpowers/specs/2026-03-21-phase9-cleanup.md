@@ -158,20 +158,25 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 One `stac`/`clac` pair per 256-byte chunk instead of one per byte. `printk` is called
 outside the AC window.
 
-### Changes to `kernel/mm/vmm.c` + `kernel/mm/vmm.h`
+### `kernel/mm/vmm.c` + `kernel/mm/vmm.h` — no change needed
 
-**`vmm_unmap_page(uint64_t virt)`** — 4-level walk using the window pattern (identical
-to the walk in `vmm_phys_of`), clears the PTE, calls `arch_vmm_invlpg`. Panics if any
-level is not present (unmapping an unmapped address is a kernel bug).
-
-Declaration in `vmm.h`:
-```c
-void vmm_unmap_page(uint64_t virt);
-```
+**`vmm_unmap_page(uint64_t virt)`** was already implemented and declared as part of
+Phase 8 work. It performs a 4-level walk using the window pattern (identical to
+`vmm_phys_of`), clears the PTE, and calls `arch_vmm_invlpg`. Panics if any level is
+not present. **Do not re-implement; it is already present.**
 
 ### Changes to `kernel/mm/kva.c` + `kernel/mm/kva.h`
 
 **`kva_free_pages(void *va, uint64_t n)`** — for each of the `n` pages starting at `va`:
+
+Cast `va` to `uint64_t` once before the loop (pointer arithmetic on `void *` is
+undefined in standard C and a compile error under `-Werror`):
+
+```c
+uint64_t addr = (uint64_t)(uintptr_t)va;
+```
+
+Then for `i` from 0 to `n-1`:
 
 1. Recover the physical address via `vmm_phys_of(addr + i * 4096UL)`
 2. Unmap the virtual address via `vmm_unmap_page(addr + i * 4096UL)`
@@ -236,8 +241,8 @@ the entire PCB. For kernel tasks, `dying` points to the `aegis_task_t` directly.
 | `kernel/syscall/syscall_util.h` | New — `USER_ADDR_MAX` + `user_ptr_valid` |
 | `kernel/mm/uaccess.h` | New — `copy_from_user` static inline |
 | `kernel/syscall/syscall.c` | Add includes; remove local definitions; rewrite `sys_write` |
-| `kernel/mm/vmm.c` | Add `vmm_unmap_page` |
-| `kernel/mm/vmm.h` | Declare `vmm_unmap_page` |
+| `kernel/mm/vmm.c` | No change — `vmm_unmap_page` already implemented (Phase 8) |
+| `kernel/mm/vmm.h` | No change — `vmm_unmap_page` already declared (Phase 8) |
 | `kernel/mm/kva.c` | Add `kva_free_pages` |
 | `kernel/mm/kva.h` | Declare `kva_free_pages` |
 | `kernel/sched/sched.c` | Add deferred-free globals; wire cleanup into `sched_exit` |
