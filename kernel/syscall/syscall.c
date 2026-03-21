@@ -6,9 +6,12 @@
 #include "vfs.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "kva.h"
 #include "printk.h"
 #include "arch.h"
 #include <stdint.h>
+
+extern void fork_child_return(void);
 
 /*
  * sys_write — syscall 1
@@ -454,12 +457,116 @@ static uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
     return 0;
 }
 
+/*
+ * sys_fork — syscall 57
+ *
+ * Duplicates the calling process.  Returns child PID in the parent,
+ * 0 in the child (via the fork_child_return SYSRET path).
+ *
+ * Steps:
+ *   1. Allocate child PCB via kva.
+ *   2. Copy parent fd table, capability table, and scalar fields.
+ *   3. Create a new PML4 and deep-copy all user pages.
+ *   4. Allocate a kernel stack for the child.
+ *   5. Build the initial kernel stack frame so ctx_switch resumes at
+ *      fork_child_return, which issues SYSRET back to user space with rax=0.
+ *   6. Add child to the run queue.
+ *   7. Return child PID to the parent.
+ */
+static uint64_t
+sys_fork(syscall_frame_t *frame)
+{
+    aegis_task_t    *parent_task = sched_current();
+    aegis_process_t *parent      = (aegis_process_t *)parent_task;
+
+    /* 1. Allocate child PCB */
+    aegis_process_t *child = kva_alloc_pages(1);
+    if (!child) return (uint64_t)-(int64_t)12;   /* -ENOMEM */
+
+    /* 2. Copy parent fields */
+    uint32_t ci;
+    for (ci = 0; ci < PROC_MAX_FDS; ci++)
+        child->fds[ci] = parent->fds[ci];
+    for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
+        child->caps[ci] = parent->caps[ci];
+    child->brk             = parent->brk;
+    child->mmap_base       = parent->mmap_base;
+    child->fs_base         = parent->fs_base;
+    __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
+    child->pid             = proc_alloc_pid();
+    child->ppid            = parent->pid;
+    child->exit_status     = 0;
+    child->task.state      = TASK_RUNNING;
+    child->task.waiting_for = 0;
+    child->task.is_user    = 1;
+    child->task.tid        = child->pid;   /* use pid as tid */
+    child->task.stack_pages = 1;
+
+    /* 3. Create child PML4 */
+    child->pml4_phys = vmm_create_user_pml4();
+
+    /* 4. Copy parent user pages into child PML4 */
+    if (vmm_copy_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
+        kva_free_pages(child, 1);
+        return (uint64_t)-(int64_t)12;           /* -ENOMEM */
+    }
+
+    /* 5. Allocate child kernel stack */
+    uint8_t *kstack = kva_alloc_pages(1);
+    if (!kstack) {
+        vmm_free_user_pml4(child->pml4_phys);
+        kva_free_pages(child, 1);
+        return (uint64_t)-(int64_t)12;           /* -ENOMEM */
+    }
+
+    /* 6. Build child initial kernel stack frame.
+     *
+     * Layout from low to high address (stack grows down):
+     *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0]  <- ctx_switch callee-saves
+     *   [fork_child_return]                           <- ret addr for ctx_switch
+     *   [r10 = frame->r10]     <- syscall_frame_t +0
+     *   [r9  = frame->r9]      <- syscall_frame_t +8
+     *   [r8  = frame->r8]      <- syscall_frame_t +16
+     *   [rflags = frame->rflags] <- syscall_frame_t +24
+     *   [rip    = frame->rip]  <- syscall_frame_t +32
+     *   [user_rsp = frame->user_rsp] <- syscall_frame_t +40
+     *
+     * Push order: highest address first (sp decrements then we write).
+     */
+    uint64_t *sp = (uint64_t *)(kstack + 4096);
+    *--sp = frame->user_rsp;
+    *--sp = frame->rip;
+    *--sp = frame->rflags;
+    *--sp = frame->r8;
+    *--sp = frame->r9;
+    *--sp = frame->r10;
+    *--sp = (uint64_t)(uintptr_t)fork_child_return;
+    *--sp = 0;  /* rbx */
+    *--sp = 0;  /* rbp */
+    *--sp = 0;  /* r12 */
+    *--sp = 0;  /* r13 */
+    *--sp = 0;  /* r14 */
+    *--sp = 0;  /* r15 <- task.rsp points here */
+
+    child->task.rsp              = (uint64_t)(uintptr_t)sp;
+    child->task.stack_base       = kstack;
+    child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4096);
+
+    /* Update TSS RSP0 for parent (it remains current) */
+    arch_set_kernel_stack(parent_task->kernel_stack_top);
+
+    /* 7. Add child to run queue */
+    sched_add(&child->task);
+
+    /* Return child PID to parent */
+    return (uint64_t)child->pid;
+}
+
 uint64_t
 syscall_dispatch(syscall_frame_t *frame, uint64_t num,
                  uint64_t arg1, uint64_t arg2, uint64_t arg3,
                  uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
-    (void)frame;  /* used by sys_fork/sys_execve in future phases */
     switch (num) {
     case  0: return sys_read(arg1, arg2, arg3);
     case  1: return sys_write(arg1, arg2, arg3);
@@ -468,9 +575,10 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  9: return sys_mmap(arg1, arg2, arg3, arg4, arg5, arg6);
     case 11: return sys_munmap(arg1, arg2);
     case 12: return sys_brk(arg1);
-    case 20: return sys_writev(arg1, arg2, arg3);
     case 14: return sys_rt_sigprocmask(arg1, arg2, arg3, arg4);
+    case 20: return sys_writev(arg1, arg2, arg3);
     case 39: return sys_getpid();
+    case 57: return sys_fork(frame);
     case 60: return sys_exit(arg1);
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);
