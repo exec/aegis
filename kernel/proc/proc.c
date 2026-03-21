@@ -64,12 +64,13 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->pml4_phys = vmm_create_user_pml4();
 
     /* Load ELF into the user address space */
-    uint64_t brk_start;
-    uint64_t entry_rip = elf_load(proc->pml4_phys, elf_data, elf_len, &brk_start);
-    if (!entry_rip) {
+    elf_load_result_t er;
+    if (elf_load(proc->pml4_phys, elf_data, elf_len, &er) != 0) {
         printk("[PROC] FAIL: ELF parse error\n");
         for (;;) {}
     }
+    uint64_t entry_rip = er.entry;
+    uint64_t brk_start = er.brk;
 
     /* Allocate and map user stack page.
      * vmm_zero_page ensures the initial stack contents are zero — without

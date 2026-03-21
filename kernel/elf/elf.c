@@ -41,8 +41,9 @@ typedef struct {
 #define ET_EXEC    2
 #define EM_X86_64  0x3E
 
-uint64_t
-elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len, uint64_t *out_brk)
+int
+elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
+         elf_load_result_t *out)
 {
     (void)len;
 
@@ -52,21 +53,32 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len, uint64_t *out_brk)
     if (eh->e_ident[0] != 0x7F || eh->e_ident[1] != 'E' ||
         eh->e_ident[2] != 'L'  || eh->e_ident[3] != 'F') {
         printk("[ELF] FAIL: bad magic\n");
-        return 0;
+        return -1;
     }
     if (eh->e_ident[4] != ELFCLASS64 || eh->e_type != ET_EXEC ||
         eh->e_machine != EM_X86_64) {
         printk("[ELF] FAIL: not a static ELF64 x86-64 executable\n");
-        return 0;
+        return -1;
     }
 
     const Elf64_Phdr *phdrs = (const Elf64_Phdr *)(data + eh->e_phoff);
     uint64_t seg_end = 0;
+    /* first_pt_load_vaddr: p_vaddr of the first PT_LOAD segment.
+     * Used to compute phdr_va = first_pt_load_vaddr + e_phoff, which is
+     * the virtual address at which the program header table appears in the
+     * loaded image (needed for the AT_PHDR auxv entry). */
+    uint64_t first_pt_load_vaddr = 0;
+    int found_pt_load = 0;
     uint16_t i;
     for (i = 0; i < eh->e_phnum; i++) {
         const Elf64_Phdr *ph = &phdrs[i];
         if (ph->p_type != PT_LOAD)
             continue;
+
+        if (!found_pt_load) {
+            first_pt_load_vaddr = ph->p_vaddr;
+            found_pt_load = 1;
+        }
 
         uint64_t this_end = ph->p_vaddr + ph->p_memsz;
         if (this_end > seg_end)
@@ -124,6 +136,14 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len, uint64_t *out_brk)
         }
     }
 
-    *out_brk = (seg_end + 4095UL) & ~4095UL;
-    return eh->e_entry;
+    if (!found_pt_load) {
+        printk("[ELF] FAIL: no PT_LOAD segment\n");
+        return -1;
+    }
+
+    out->entry       = eh->e_entry;
+    out->brk         = (seg_end + 4095UL) & ~4095UL;
+    out->phdr_va     = first_pt_load_vaddr + eh->e_phoff;
+    out->phdr_count  = eh->e_phnum;
+    return 0;
 }
