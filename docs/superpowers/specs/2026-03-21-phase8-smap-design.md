@@ -120,7 +120,8 @@ Add `USER_ADDR_MAX` and `user_ptr_valid` above `sys_write`:
 
 /* user_ptr_valid — return 1 if [addr, addr+len) lies entirely within the
  * canonical user address space, 0 otherwise.
- * Safe for len=0 (passes when addr is a valid user address).
+ * For len=0, validates that addr itself is a canonical user address (does
+ * NOT unconditionally pass — a kernel addr with len=0 still returns 0).
  * Overflow-safe: addr <= USER_ADDR_MAX - len avoids addr+len wraparound. */
 static inline int
 user_ptr_valid(uint64_t addr, uint64_t len)
@@ -142,8 +143,13 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     uint64_t i;
     for (i = 0; i < arg3; i++) {
         char c;
-        /* Narrow stac/clac window: bracket only the user-memory load.
-         * Never call functions between stac and clac. */
+        /* Narrow stac/clac window: bracket only the single user-memory load.
+         * Never call functions between stac and clac.
+         * Per-character stac/clac is intentionally conservative — IF=0
+         * throughout syscall dispatch so there is no interrupt exposure risk.
+         * Phase 9: replace with copy_from_user pattern (stac, memcpy to
+         * kernel scratch buffer, clac, then pass kernel buffer to printk)
+         * once a kernel scratch allocator exists. */
         arch_stac();
         c = s[i];
         arch_clac();
@@ -192,6 +198,12 @@ timeout 10s qemu-system-x86_64 \
 host CPU. On hosts without SMAP, `make run` will emit `[SMAP] WARN` instead
 of `[SMAP] OK`. This is expected behavior — the test oracle is enforced only
 by `make test` (which uses `-cpu Broadwell`).
+
+**Implementer note:** Before committing `tests/expected/boot.txt` with the
+`[SMAP] OK` line, run `make test` once and verify the actual output contains
+`[SMAP] OK` (not `[SMAP] WARN`). QEMU's Broadwell CPU model exposes SMAP
+(`CPUID.7.0:EBX[20]=1`), but this should be confirmed empirically against
+the installed QEMU version rather than assumed.
 
 ---
 
@@ -244,9 +256,9 @@ by `make test` (which uses `-cpu Broadwell`).
 ## Success Criteria
 
 1. `make test` exits 0.
-2. `grep -rn 'stac\|clac' kernel/` shows exactly the two definitions in
-   `arch.h` and their two call sites in `syscall.c` (one `arch_stac()`, one
-   `arch_clac()`).
+2. `grep -rn 'arch_stac()\|arch_clac()' kernel/` shows exactly two call sites
+   in `syscall.c` (one `arch_stac()`, one `arch_clac()`). Using the full call
+   syntax avoids matching declarations and doc comments in `arch.h`.
 3. `user_ptr_valid(0xFFFFFFFF80000000UL, 1)` returns 0 (kernel address
    rejected); `user_ptr_valid(0x400000UL, 4096)` returns 1 (valid user range).
 
