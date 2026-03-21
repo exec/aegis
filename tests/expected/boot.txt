@@ -3,6 +3,7 @@
 [PMM] OK: 127MB usable across 2 regions
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
 [VMM] OK: mapped-window allocator active
+[KVA] OK: kernel virtual allocator active
 [CAP] OK: capability subsystem reserved
 [IDT] OK: 48 vectors installed
 [PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
@@ -11,6 +12,7 @@
 [GDT] OK: ring 3 descriptors installed
 [TSS] OK: RSP0 initialized
 [SYSCALL] OK: SYSCALL/SYSRET enabled
+[VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 3 tasks
 [USER] hello from ring 3
 [USER] hello from ring 3
