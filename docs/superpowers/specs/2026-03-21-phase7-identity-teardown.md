@@ -117,6 +117,10 @@ kva_alloc_pages(uint64_t n)
             printk("[KVA] FAIL: out of memory\n");
             for (;;) {}
         }
+        /* IMPORTANT: never pass VMM_FLAG_USER here. kva pages are mapped into
+         * pd_hi which is shared with user PML4s (same physical pd_hi page).
+         * Absent VMM_FLAG_USER, the MMU blocks user-mode access to these PTEs.
+         * Setting VMM_FLAG_USER would expose all kernel objects to ring-3. */
         vmm_map_page(s_kva_next, phys, VMM_FLAG_WRITABLE);
         s_kva_next += 4096UL;
     }
@@ -262,6 +266,8 @@ kva_init();               /* bump allocator online */
 sched_spawn(task_kbd);
 sched_spawn(task_heartbeat);
 proc_spawn_init();
+/* All TCBs and stacks are in kva range at this point —
+ * safe to remove the identity map. */
 vmm_teardown_identity();  /* pml4[0] = 0, CR3 reload */
 sched_start();
 ```
