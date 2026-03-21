@@ -49,3 +49,16 @@ kva_page_phys(void *va)
 {
     return vmm_phys_of((uint64_t)(uintptr_t)va);
 }
+
+void
+kva_free_pages(void *va, uint64_t n)
+{
+    uint64_t addr = (uint64_t)(uintptr_t)va;
+    uint64_t i;
+    for (i = 0; i < n; i++) {
+        uint64_t page_va = addr + i * 4096UL;
+        uint64_t phys    = vmm_phys_of(page_va);
+        vmm_unmap_page(page_va);
+        pmm_free_page(phys);
+    }
+}
