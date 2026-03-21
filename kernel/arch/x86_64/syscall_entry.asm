@@ -49,16 +49,28 @@ syscall_entry:
     push rcx                       ; return RIP
     push r11                       ; RFLAGS    (top, popped first on return)
 
-    ; ── Step 3: translate Linux syscall ABI → SysV C calling convention ──────
-    ;   Linux: rax=num, rdi=arg1, rsi=arg2, rdx=arg3
-    ;   SysV:  rdi=num, rsi=arg1, rdx=arg2, rcx=arg3
-    ; rcx already pushed above (return RIP) — safe to overwrite now.
-    mov  rcx, rdx    ; arg3 ← user rdx
+    ; ── Step 3: Linux syscall ABI → SysV C 7-argument calling convention ──────
+    ;   Linux:  rax=num, rdi=arg1, rsi=arg2, rdx=arg3, r10=arg4, r8=arg5, r9=arg6
+    ;   SysV 7-arg: rdi=num, rsi=arg1, rdx=arg2, rcx=arg3, r8=arg4, r9=arg5, [rsp+8]=arg6
+    ;
+    ;   ORDERING: push r9 (user arg6) BEFORE modifying r9.
+    ;             Move r8→r9 (SysV arg5) BEFORE overwriting r8 with r10 (SysV arg4).
+    ;             The rdi/rsi/rdx/rcx shuffle is independent of r8/r9/r10.
+    ;
+    ;   Stack layout after push r9 + call (inside syscall_dispatch):
+    ;     [rsp+0]  = return address (pushed by call instruction)
+    ;     [rsp+8]  = user r9 (arg6) — SysV 7th-argument slot
+    ;   After syscall_dispatch returns, add rsp, 8 discards arg6 before pop/sysret.
+    push r9          ; arg6 → stack (7th SysV arg; call will make it [rsp+8])
+    mov  r9, r8      ; SysV arg5 ← user r8  (user arg5)
+    mov  r8, r10     ; SysV arg4 ← user r10 (user arg4; SYSCALL clobbered rcx with RIP)
+    mov  rcx, rdx    ; arg3 ← user rdx (safe: rcx was saved to stack in Step 2)
     mov  rdx, rsi    ; arg2 ← user rsi
     mov  rsi, rdi    ; arg1 ← user rdi
     mov  rdi, rax    ; num  ← syscall number (rax unchanged since SYSCALL)
 
     call syscall_dispatch
+    add  rsp, 8      ; discard pushed arg6; restore stack to post-Step-2 layout
     ; rax = return value (syscall_dispatch sets it; sysretq returns it to user)
 
     ; ── Step 4: restore RFLAGS, RIP, RSP; return to ring 3 ──────────────────
