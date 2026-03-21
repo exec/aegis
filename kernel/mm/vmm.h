@@ -81,4 +81,9 @@ uint64_t vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt);
  * Silent no-op if the page is not mapped. */
 void vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt);
 
+/* vmm_zero_page — zero the physical page at phys using the mapped-window slot.
+ * Required for MAP_ANONYMOUS: musl's heap allocator depends on zeroed pages.
+ * Uses the internal vmm_window_map/vmm_window_unmap pair. */
+void vmm_zero_page(uint64_t phys);
+
 #endif /* AEGIS_VMM_H */

@@ -470,6 +470,16 @@ vmm_free_user_pml4(uint64_t pml4_phys)
     pmm_free_page(pml4_phys);
 }
 
+void
+vmm_zero_page(uint64_t phys)
+{
+    uint8_t *p = (uint8_t *)vmm_window_map(phys);
+    int i;
+    for (i = 0; i < 4096; i++)
+        p[i] = 0;
+    vmm_window_unmap();
+}
+
 uint64_t
 vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
 {
