@@ -4,7 +4,7 @@
 
 Run a musl-linked static binary on Aegis. Prove the capability stack works end-to-end with a real C runtime: `printf("[INIT] Hello from musl libc!\n")` appears in the serial oracle output.
 
-Seven syscalls are added: three real implementations (`sys_mmap`, `sys_munmap`, `sys_arch_prctl`) and four stubs (`exit_group`, `getpid`, `set_tid_address`, `set_robust_list`, `rt_sigprocmask`). The FS segment base (TLS) is wired via MSR write. A new `user/hello/` binary replaces `user/init/` as the spawned process.
+Seven syscalls are added: three real implementations (`sys_mmap`, `sys_munmap`, `sys_arch_prctl`) and five stubs (`exit_group`, `getpid`, `set_tid_address`, `set_robust_list`, `rt_sigprocmask`). The FS segment base (TLS) is wired via MSR write. A new `user/hello/` binary replaces `user/init/` as the spawned process.
 
 ---
 
@@ -128,7 +128,7 @@ proc_spawn_init(void)
  * fd must be -1, offset must be 0.
  *
  * Returns mapped VA on success, negative errno on failure.
- * Returns current mmap_base unchanged on OOM (Linux-compatible).
+ * Returns -ENOMEM on OOM (Linux-compatible: MAP_FAILED = (void *)-1).
  * No capability gate — process expands its own address space only.
  */
 #define MAP_SHARED      0x01
@@ -175,7 +175,7 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
                     pmm_free_page(p);
                 }
             }
-            return proc->mmap_base;  /* OOM — return current base unchanged */
+            return (uint64_t)-(int64_t)12;  /* OOM — ENOMEM; musl checks MAP_FAILED */
         }
         vmm_map_user_page(proc->pml4_phys, va, phys,
                           VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
@@ -287,10 +287,34 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t arg1, uint64_t arg2,
                            uint64_t arg6)
 ```
 
-In `syscall_entry.asm`, the Linux syscall ABI passes:
-- arg1 = rdi, arg2 = rsi, arg3 = rdx, arg4 = r10, arg5 = r8, arg6 = r9
+In `syscall_entry.asm`, the Linux syscall ABI delivers:
+- arg1 = rdi, arg2 = rsi, arg3 = rdx, **arg4 = r10**, arg5 = r8, arg6 = r9
 
-Read the current `syscall_entry.asm` to understand how it saves registers and calls `syscall_dispatch`. Extend the call to pass r10, r8, r9 as arg4, arg5, arg6. Existing syscalls that take fewer arguments ignore the extras via `(void)argN`.
+The `syscall` instruction clobbers rcx (saves return RIP there), so the kernel uses r10 for arg4 instead of rcx. The SysV C ABI passes the first six arguments in rdi, rsi, rdx, rcx, r8, r9 and the seventh on the stack at [rsp+8] when inside the callee.
+
+Replace the existing Step 3 register shuffle block in `syscall_entry.asm` with the following. The ordering is critical — push r9 before overwriting it, then move r8 before overwriting it:
+
+```nasm
+    ; ── Step 3: Linux syscall ABI → SysV C 7-argument calling convention ──────
+    ;   Linux: rax=num, rdi=arg1, rsi=arg2, rdx=arg3, r10=arg4, r8=arg5, r9=arg6
+    ;   SysV:  rdi=num, rsi=arg1, rdx=arg2, rcx=arg3, r8=arg4,  r9=arg5, [rsp+8]=arg6
+    ;
+    ;   ORDERING: push r9 (user arg6) BEFORE modifying r9.
+    ;             Move r8→r9 (SysV arg5) BEFORE overwriting r8 with r10 (SysV arg4).
+    ;             The rdi/rsi/rdx/rcx shuffle is independent of r8/r9/r10.
+    push r9          ; arg6 → stack (7th SysV arg; must be at [rsp+8] inside callee)
+    mov  r9, r8      ; SysV arg5 ← user r8  (user arg5)
+    mov  r8, r10     ; SysV arg4 ← user r10 (user arg4)
+    mov  rcx, rdx    ; arg3 ← user rdx
+    mov  rdx, rsi    ; arg2 ← user rsi
+    mov  rsi, rdi    ; arg1 ← user rdi
+    mov  rdi, rax    ; num  ← syscall number
+
+    call syscall_dispatch
+    add  rsp, 8      ; discard pushed arg6 before the pop/sysret sequence
+```
+
+The `pop r11 / pop rcx / pop rsp / o64 sysret` sequence in Step 4 is unchanged.
 
 Updated dispatch switch:
 
