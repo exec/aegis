@@ -83,6 +83,9 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     sched_spawn(task_kbd);
     sched_spawn(task_heartbeat);
     proc_spawn_init();      /* spawn init user process in ring 3             */
+    /* All TCBs and stacks are in kva range at this point —
+     * safe to remove the identity map. */
+    vmm_teardown_identity(); /* pml4[0] = 0, CR3 reload — [VMM] OK          */
     sched_start();          /* prints [SCHED] OK, switches into first task   */
     /* UNREACHABLE — sched_start() never returns */
     __builtin_unreachable();
