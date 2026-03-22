@@ -53,6 +53,7 @@ bits 64
 section .text
 
 extern isr_dispatch
+extern signal_deliver
 extern g_master_pml4
 
 %macro ISR_NOERR 1
@@ -167,6 +168,14 @@ isr_common_stub:
     ; (one qword above the saved-CR3 slot).
     lea  rdi, [rsp + 8]
     call isr_dispatch
+
+    ; Signal delivery — check pending signals before returning to user space.
+    ; Only delivers if cpu_state.cs == 0x23 (ring-3 return).
+    ; Called while CR3 = master PML4, IF = 0, cpu_state_t intact at [rsp+8].
+    ; Must be BEFORE isr_post_dispatch label so fork-child and sigreturn
+    ; jump targets bypass this check (they have pending_signals=0 or handler=0).
+    lea  rdi, [rsp + 8]   ; cpu_state_t * (same offset as above: rsp+8 skips saved CR3)
+    call signal_deliver    ; may call sched_exit (noreturn) or patch s->rip/rsp
 
 ; isr_post_dispatch — entry point for fork child's first scheduling.
 ;
