@@ -97,6 +97,7 @@ static const vfs_ops_t initrd_ops = {
     .read    = initrd_read_fn,
     .close   = initrd_close_fn,
     .readdir = (void *)0,
+    .dup     = (void *)0,
 };
 
 /* ── Directory entry type and static directory listings ────────────────── */
@@ -147,6 +148,7 @@ static const vfs_ops_t dir_ops = {
     .read    = dir_read_fn,
     .close   = dir_close_fn,
     .readdir = dir_readdir_fn,
+    .dup     = (void *)0,
 };
 
 /* ── Public API ─────────────────────────────────────────────────────────── */

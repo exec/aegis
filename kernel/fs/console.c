@@ -50,6 +50,7 @@ static const vfs_ops_t s_console_ops = {
     .write   = console_write_fn,
     .close   = console_close_fn,
     .readdir = (void *)0,
+    .dup     = (void *)0,
 };
 
 static vfs_file_t s_console_file = {

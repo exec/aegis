@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define PROC_MAX_FDS 8
+#define PROC_MAX_FDS 16 /* was 8; bumped for Phase 16 pipe fd budget */
 
 /* File operations vtable. Each open file carries a pointer to its driver's ops. */
 typedef struct {
@@ -20,6 +20,10 @@ typedef struct {
      * type: DT_REG=8, DT_DIR=4.
      * Set to NULL for non-directory fds (e.g. console, kbd). */
     int (*readdir)(void *priv, uint64_t index, char *name_out, uint8_t *type_out);
+    /* dup — called when this fd is duplicated (dup/dup2/fork).
+     * Increment any reference counts held by this driver.
+     * NULL = stateless driver, no action needed (initrd, console, kbd). */
+    void (*dup)(void *priv);
 } vfs_ops_t;
 
 /* Open file descriptor. Embedded inline in aegis_process_t.fds[].

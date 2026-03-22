@@ -40,6 +40,7 @@ static const vfs_ops_t s_kbd_ops = {
 	.write   = kbd_vfs_write_fn,
 	.close   = kbd_vfs_close_fn,
 	.readdir = (void *)0,
+	.dup     = (void *)0,
 };
 
 static vfs_file_t s_kbd_file = {
