@@ -37,6 +37,8 @@ typedef struct {
     uint64_t sa_mask;               /* signals to mask while handler runs */
 } k_sigaction_t;
 
+_Static_assert(sizeof(k_sigaction_t) == 32, "k_sigaction_t must be 32 bytes (musl struct sigaction x86-64)");
+
 /* gregset_t indices (Linux x86-64, REG_* in <sys/ucontext.h>) */
 #define REG_R8       0
 #define REG_R9       1

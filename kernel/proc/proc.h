@@ -4,7 +4,7 @@
 #include "sched.h"
 #include "vfs.h"
 #include "cap.h"
-#include "../signal/signal.h"
+#include "signal.h"
 #include <stdint.h>
 #include <stddef.h>
 

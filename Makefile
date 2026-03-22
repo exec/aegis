@@ -28,7 +28,8 @@ CFLAGS = \
     -Ikernel/proc \
     -Ikernel/syscall \
     -Ikernel/elf \
-    -Ikernel/fs
+    -Ikernel/fs \
+    -Ikernel/signal
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
