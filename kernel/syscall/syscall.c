@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "proc.h"
 #include "signal.h"
+#include "kbd.h"
 #include "vfs.h"
 #include "pipe.h"
 #include "initrd.h"
@@ -657,7 +658,13 @@ static uint64_t sys_exit_group(uint64_t arg1)
     __builtin_unreachable();
 }
 
-static uint64_t sys_getpid(void) { return 1; }
+static uint64_t
+sys_getpid(void)
+{
+    aegis_task_t *task = sched_current();
+    if (!task->is_user) return 0;
+    return (uint64_t)((aegis_process_t *)task)->pid;
+}
 
 /*
  * sys_rt_sigaction — syscall 13
@@ -782,6 +789,44 @@ sys_rt_sigreturn(syscall_frame_t *frame)
     proc->signal_mask &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
 
     return SIGRETURN_MAGIC;
+}
+
+/*
+ * sys_kill — syscall 62
+ *
+ * arg1 = pid (target process ID), arg2 = signum
+ *
+ * Sends signal signum to process with PID pid.
+ * Group/broadcast kills (pid <= 0) not supported in Phase 17 — return ESRCH.
+ * signal_send_pid internally guards is_user before treating a task as aegis_process_t.
+ */
+static uint64_t
+sys_kill(uint64_t arg1, uint64_t arg2)
+{
+    int64_t pid    = (int64_t)arg1;
+    int     signum = (int)arg2;
+
+    if (pid <= 0) return (uint64_t)-(int64_t)3; /* ESRCH: group kill not supported */
+    if (signum < 0 || signum >= 64) return (uint64_t)-(int64_t)22; /* EINVAL */
+
+    signal_send_pid((uint32_t)pid, signum);
+    return 0;
+}
+
+/*
+ * sys_setfg — syscall 360 (Aegis private)
+ *
+ * arg1 = pid of the foreground process (0 = clear foreground)
+ *
+ * Registers the foreground PID with the keyboard driver so Ctrl-C sends
+ * SIGINT to that process. The shell calls this before waitpid and clears
+ * it after.
+ */
+static uint64_t
+sys_setfg(uint64_t arg1)
+{
+    kbd_set_foreground_pid((uint32_t)arg1);
+    return 0;
 }
 
 static uint64_t sys_set_tid_address(uint64_t arg1) { (void)arg1; return 1; }
@@ -1534,6 +1579,8 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 59: return sys_execve(frame, arg1, arg2, arg3);
     case 60: return sys_exit(arg1);
     case 61: return sys_waitpid(arg1, arg2, arg3);
+    case 62: return sys_kill(arg1, arg2);
+    case 360: return sys_setfg(arg1);
     case  79: return sys_getcwd(arg1, arg2);
     case  80: return sys_chdir(arg1);
     case 217: return sys_getdents64(arg1, arg2, arg3);
