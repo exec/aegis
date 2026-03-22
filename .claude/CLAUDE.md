@@ -282,6 +282,62 @@ If any of these fail, stop and tell the user before writing code.
 
 ---
 
+## Debug Tooling (added Phase 15 post-fix)
+
+These tools exist to shorten debugging sessions. Use them whenever there
+is a kernel panic, unexpected crash, or behavior that needs inspection.
+
+### Compiler flags
+CFLAGS includes `-g` (DWARF debug info) and `-fno-omit-frame-pointer`.
+`-fno-omit-frame-pointer` ensures every kernel frame has a valid RBP chain
+at any optimization level, making stack unwinding reliable.
+
+### Panic backtrace
+`isr_dispatch` in `kernel/arch/x86_64/idt.c` calls `panic_backtrace(s->rbp)`
+on any kernel-mode exception (CS=0x08). It walks the RBP frame chain and
+prints up to 16 return addresses to serial output:
+```
+[PANIC] backtrace (resolve: make sym ADDR=0x<addr>):
+[PANIC]   [0] 0xffffffff80107abc
+[PANIC]   [1] 0xffffffff80109def
+```
+For ring-3 faults (CS=0x23) the backtrace is skipped — the RBP is a
+user-space pointer and not meaningful for kernel tracing.
+
+### Address resolution
+```bash
+make sym ADDR=0xffffffff80107abc
+# → copy_from_user at kernel/mm/uaccess.h:23
+```
+Wraps `addr2line -e build/aegis.elf -f -p`. Requires a build with `-g`.
+Use this immediately on any RIP or return address from a panic.
+
+### Interactive GDB session
+```bash
+make gdb
+```
+Boots QEMU with `-s -S` (GDB server on :1234, CPU halted at first instruction).
+Serial output captured to `build/debug.log`. GDB auto-connects via
+`tools/aegis.gdb` with the right arch and symbol file loaded.
+
+In GDB:
+- `c` — start the kernel
+- `Ctrl-C` — pause at current instruction
+- `bt` — backtrace
+- `break isr_dispatch` — catch any exception before the panic halt
+- `info registers` — all registers
+- `x/20gx $rsp` — dump 20 qwords from the stack
+- `p *s` — print the full `cpu_state_t` (when stopped inside `isr_dispatch`)
+
+### Workflow for a kernel panic
+1. Read the serial output — RIP and CR2 are printed by `isr_dispatch`
+2. Run `make sym ADDR=<RIP>` to get the source line
+3. Read the backtrace addresses, run `make sym` on each to get the call chain
+4. If that's not enough context, `make gdb`, set a breakpoint before the
+   faulting code, and step through it interactively
+
+---
+
 ## Build Status — Keep This Updated
 
 Update this section at the end of every session.

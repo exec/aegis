@@ -277,6 +277,12 @@ test shows throughput scaling with core count.
   `mmap`, `mprotect`, and `AT_DYNAMIC` auxv entries. Target: Phase 19+.
   Required if you want to run unmodified (dynamically linked) server binaries.
 
+- **ext2 reference implementation:** `reference/ext2/` (gitignored) contains
+  the Linux kernel's ext2 driver (`fs/ext2/`), pulled 2026-03-21. Use as a
+  cross-reference during Phase 19 implementation — especially `ext2.h` for
+  on-disk struct layouts and `inode.c` / `dir.c` for edge-case behavior.
+  Do not copy code directly; it is deeply coupled to Linux's VFS and MM.
+
 - **Security audit:** at Phase 22, the kernel is small enough (~10-15k lines)
   that a serious line-by-line audit is feasible. Every syscall path, every
   capability check, every pointer validation. This is the gate before
