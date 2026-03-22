@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase 16 pipe smoke tests. Boots the shell ISO and sends pipe commands."""
-import subprocess, time, sys, os, signal
+import subprocess, time, sys, os, signal, select
 
 QEMU = "qemu-system-x86_64"
 ISO  = "build/aegis.iso"
@@ -8,16 +8,10 @@ TIMEOUT = 30
 
 def run_shell_session(commands):
     """Boot QEMU shell, send commands one by one, collect all serial output."""
-    # Try to build the shell ISO; if it fails, use existing ISO if available
-    r = subprocess.run(["make", "INIT=shell", "iso"], capture_output=True)
+    r = subprocess.run(["make", "INIT=shell", "iso"])
     if r.returncode != 0:
-        # Try to use existing ISO; if it doesn't exist, fail
-        import os
-        if not os.path.exists(ISO):
-            print("[FAIL] make INIT=shell iso failed:")
-            print(r.stderr.decode())
-            sys.exit(1)
-        # Otherwise proceed with existing ISO
+        print("[FAIL] make INIT=shell iso failed")
+        sys.exit(1)
 
     cmd = [
         QEMU,
@@ -40,7 +34,9 @@ def run_shell_session(commands):
     buf = b""
     while time.time() - start < TIMEOUT:
         try:
-            proc.stdout.readable() and None
+            ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+            if not ready:
+                continue
             chunk = proc.stdout.read(1)
             if not chunk:
                 break
@@ -59,6 +55,9 @@ def run_shell_session(commands):
         buf = b""
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
+            ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+            if not ready:
+                continue
             chunk = proc.stdout.read(1)
             if not chunk:
                 break
