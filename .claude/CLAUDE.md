@@ -372,6 +372,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | stdin/stderr/sys_brk (Phase 13) | ✅ Done | kbd VFS (fd 0); stderr (fd 2); sys_brk (syscall 12); CAP_KIND_VFS_READ gate on sys_read; task_kbd retired; task count 2 |
 | musl port (Phase 14) | ✅ Done | musl-gcc static binary; sys_mmap anon bump; sys_arch_prctl TLS; sys_writev; SSE init; r8/r9/r10 preserved |
 | musl port + shell (Phase 15) | ✅ Done | fork/execve/waitpid; interactive shell; 8 companion programs in initrd |
+| Pipes + I/O redirection (Phase 16) | ✅ Done | sys_pipe2/dup/dup2; pipe.c ring buffer; shell pipeline parser; 5/5 smoke tests pass |
 
 ### Phase 1 deviations from original spec
 
@@ -578,3 +579,5 @@ them would corrupt every other process.
 *Last updated: 2026-03-21 — Phase 15 complete, make test GREEN. Interactive shell live; fork/execve/waitpid; 8 companion programs in initrd.*
 
 *Last updated: 2026-03-21 — Phase 15 post-fix: three bugs resolved, test_shell.py all 9 commands clean. (1) fork_child_return SYSRET path replaced with isr_post_dispatch iretq path — child's first scheduling now uses complete fake isr_common_stub frame, eliminating r12=0 #PF. (2) arch_set_fs_base now set BEFORE ctx_switch for incoming task in sched_tick/block/yield_to_next. (3) sys_open 256-byte bulk copy replaced with byte-by-byte null-terminated copy — prevents #PF when argv string is within 256 bytes of USER_STACK_TOP (0x7fffffff000). console_write_fn capped to current page boundary.*
+
+*Last updated: 2026-03-21 — Phase 16 complete, test_pipe.py 5/5 GREEN. sys_pipe2/dup/dup2; kernel/fs/pipe.c ring buffer; shell pipeline parser; I/O redirection (<, >, 2>&1). Root cause of test_redirect_stdin flakiness: boot takes 600+ s on loaded host; BOOT_TIMEOUT raised to 900 s and separated from CMD_TIMEOUT (120 s). sys_read gains page-boundary cap matching console_write_fn. test_pipe.py wired into run_tests.sh.*

@@ -56,3 +56,9 @@ diff "$EXPECTED" "$ACTUAL"
 # CONSTRAINT: every kernel status line MUST begin with '[' (e.g. [SERIAL], [VGA]).
 # Lines not starting with '[' are silently dropped by the grep above.
 # When adding a new subsystem, verify its OK/FAIL line starts with '['.
+
+# Phase 16 pipe smoke tests — boots the shell ISO and sends pipe commands via
+# PS/2 keyboard injection.  Each test spawns its own QEMU instance.
+# BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
+# effect so any Python exit code != 0 will abort this script.
+python3 tests/test_pipe.py

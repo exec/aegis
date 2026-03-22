@@ -44,11 +44,25 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (!user_ptr_valid(arg2, arg3))
         return (uint64_t)-14;  /* EFAULT */
 
-    int r = proc->fds[arg1].ops->write(
-                proc->fds[arg1].priv,
-                (const void *)(uintptr_t)arg2,
-                arg3);
-    return (uint64_t)(int64_t)r;
+    /* Retry loop: the write op (e.g. console_write_fn) may return a partial
+     * count when the user buffer straddles a page boundary.  Loop until all
+     * bytes are written or the write op signals an error (r <= 0).
+     *
+     * For pipes, pipe_write_fn returns a positive partial count or a negative
+     * errno (-EPIPE).  The loop handles both correctly:
+     *   - partial positive: advance offset and retry the remainder.
+     *   - zero or negative: break and return that value. */
+    uint64_t total = 0;
+    while (total < arg3) {
+        int r = proc->fds[arg1].ops->write(
+                    proc->fds[arg1].priv,
+                    (const void *)(uintptr_t)(arg2 + total),
+                    arg3 - total);
+        if (r <= 0)
+            return (total > 0) ? total : (uint64_t)(int64_t)r;
+        total += (uint64_t)r;
+    }
+    return total;
 }
 
 /*
@@ -108,14 +122,25 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         if (!user_ptr_valid(iov.iov_base, iov.iov_len))
             return (uint64_t)-14;  /* EFAULT */
 
-        int r = proc->fds[arg1].ops->write(
-                    proc->fds[arg1].priv,
-                    (const void *)(uintptr_t)iov.iov_base,
-                    iov.iov_len);
-        if (r < 0)
-            return (uint64_t)(int64_t)r;
-        total += (uint64_t)r;
+        /* Retry loop per iovec: console_write_fn returns a partial count when
+         * the user buffer straddles a page boundary.  Loop until all bytes of
+         * this vector are written or the write op signals an error. */
+        uint64_t vec_written = 0;
+        while (vec_written < iov.iov_len) {
+            int r = proc->fds[arg1].ops->write(
+                        proc->fds[arg1].priv,
+                        (const void *)(uintptr_t)(iov.iov_base + vec_written),
+                        iov.iov_len - vec_written);
+            if (r <= 0) {
+                if (r < 0 && total == 0)
+                    return (uint64_t)(int64_t)r;
+                goto done;
+            }
+            vec_written += (uint64_t)r;
+        }
+        total += vec_written;
     }
+done:
     return total;
 }
 
@@ -222,8 +247,15 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
      * Kernel stack is 16 KB; both are within budget. */
     #define SYS_READ_BUF 4096
     char kbuf[SYS_READ_BUF];
+    /* Cap request to current page boundary so copy_to_user never crosses
+     * into an unmapped page (e.g. the guard page just past USER_STACK_TOP).
+     * Mirrors the same pattern in console_write_fn.  The caller (musl libc)
+     * loops on short reads, so returning fewer bytes than requested is safe. */
+    uint64_t page_off = arg2 & 0xFFFULL;
+    uint64_t to_end   = 0x1000ULL - page_off;
     uint64_t n = arg3;
     if (n > SYS_READ_BUF) n = SYS_READ_BUF;
+    if (n > to_end)       n = to_end;
     int64_t got = (int64_t)f->ops->read(f->priv, kbuf, f->offset, n);
     if (got < 0) return (uint64_t)got;   /* propagate -errno (e.g. -EPIPE) */
     if (got == 0) return 0;              /* clean EOF */
@@ -642,6 +674,87 @@ static uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
 }
 
 /*
+ * sys_ioctl — syscall 16
+ * Stub: musl calls ioctl(TIOCGWINSZ) for terminal width detection.
+ * Return ENOTTY for all requests — we have no real tty.
+ */
+static uint64_t
+sys_ioctl(uint64_t fd, uint64_t req, uint64_t arg)
+{
+    (void)fd; (void)req; (void)arg;
+    return (uint64_t)-(int64_t)25;  /* -ENOTTY */
+}
+
+/*
+ * sys_mprotect — syscall 10
+ * Stub: musl calls mprotect on mmap'd pages to set permissions.
+ * We don't enforce W^X yet; return success unconditionally.
+ */
+static uint64_t
+sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot)
+{
+    (void)addr; (void)len; (void)prot;
+    return 0;
+}
+
+/*
+ * sys_fcntl — syscall 72
+ * Handle the subset musl uses:
+ *   F_GETFD (1) — return 0 (no flags set)
+ *   F_SETFD (2) — accept FD_CLOEXEC flag; store nothing (no exec yet)
+ *   F_GETFL (3) — return O_RDONLY (0)
+ *   F_SETFL (4) — ignore flags; return 0
+ * Anything else returns 0 (benign default).
+ */
+static uint64_t
+sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
+{
+    (void)fd; (void)arg;
+    /* All supported commands succeed silently. */
+    if (cmd == 1 || cmd == 2 || cmd == 3 || cmd == 4)
+        return 0;
+    return 0;  /* unknown cmds: succeed rather than EINVAL for now */
+}
+
+/*
+ * sys_lseek — syscall 8
+ *
+ * arg1 = fd, arg2 = offset, arg3 = whence (SEEK_SET=0, SEEK_CUR=1, SEEK_END=2)
+ *
+ * For non-seekable fds (pipes, console, kbd): return -ESPIPE (-29).
+ * For initrd files: update f->offset accordingly and return new offset.
+ * Kernel uses f->offset for position tracking; lseek must keep it consistent.
+ */
+static uint64_t
+sys_lseek(uint64_t arg1, uint64_t arg2, uint64_t arg3)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops)
+        return (uint64_t)-9;   /* EBADF */
+    vfs_file_t *f = &proc->fds[arg1];
+
+    /* Non-seekable fd (no size): return ESPIPE */
+    if (f->size == 0)
+        return (uint64_t)-(int64_t)29;   /* -ESPIPE */
+
+    int64_t new_off;
+    int64_t off = (int64_t)arg2;
+    if (arg3 == 0)        /* SEEK_SET */
+        new_off = off;
+    else if (arg3 == 1)   /* SEEK_CUR */
+        new_off = (int64_t)f->offset + off;
+    else if (arg3 == 2)   /* SEEK_END */
+        new_off = (int64_t)f->size + off;
+    else
+        return (uint64_t)-(int64_t)22;   /* EINVAL */
+
+    if (new_off < 0)
+        return (uint64_t)-(int64_t)22;   /* EINVAL */
+    f->offset = (uint64_t)new_off;
+    return (uint64_t)new_off;
+}
+
+/*
  * sys_fork — syscall 57
  *
  * Duplicates the calling process.  Returns child PID in the parent,
@@ -697,7 +810,7 @@ sys_fork(syscall_frame_t *frame)
     child->task.waiting_for = 0;
     child->task.is_user    = 1;
     child->task.tid        = child->pid;   /* use pid as tid */
-    child->task.stack_pages = 1;
+    child->task.stack_pages = 4;  /* 4 pages / 16 KB — see proc.c KSTACK_NPAGES */
 
     /* 3. Create child PML4 */
     child->pml4_phys = vmm_create_user_pml4();
@@ -708,8 +821,10 @@ sys_fork(syscall_frame_t *frame)
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
 
-    /* 5. Allocate child kernel stack */
-    uint8_t *kstack = kva_alloc_pages(1);
+    /* 5. Allocate child kernel stack (4 pages / 16 KB — same as proc_spawn).
+     * pipe_write_fn's 4060-byte staging buffer requires at least 4 pages;
+     * see proc.c KSTACK_NPAGES comment for the full budget analysis. */
+    uint8_t *kstack = kva_alloc_pages(4);
     if (!kstack) {
         vmm_free_user_pml4(child->pml4_phys);
         kva_free_pages(child, 1);
@@ -740,7 +855,7 @@ sys_fork(syscall_frame_t *frame)
      *
      * isr_post_dispatch: pop CR3 → mov cr3 → pop r15..rax → add rsp,16 → iretq
      */
-    uint64_t *sp = (uint64_t *)(kstack + 4096);
+    uint64_t *sp = (uint64_t *)(kstack + 4 * 4096);
 
     /* CPU ring-3 interrupt frame (ss = highest address) */
     *--sp = 0x1B;                   /* ss = user data selector              */
@@ -785,7 +900,7 @@ sys_fork(syscall_frame_t *frame)
 
     child->task.rsp              = (uint64_t)(uintptr_t)sp;
     child->task.stack_base       = kstack;
-    child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4096);
+    child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4 * 4096);
 
     /* Update TSS RSP0 for parent (it remains current) */
     arch_set_kernel_stack(parent_task->kernel_stack_top);
@@ -1277,11 +1392,16 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  1: return sys_write(arg1, arg2, arg3);
     case  2: return sys_open(arg1, arg2, arg3);
     case  3: return sys_close(arg1);
+    case  8: return sys_lseek(arg1, arg2, arg3);
+    case 10: return sys_mprotect(arg1, arg2, arg3);
+    case 16: return sys_ioctl(arg1, arg2, arg3);
+    case 22: return sys_pipe2(arg1, 0); /* pipe(2) = pipe2(pipefd, 0) */
     case 32: return sys_dup(arg1);
     case 33: return sys_dup2(arg1, arg2);
     case  9: return sys_mmap(arg1, arg2, arg3, arg4, arg5, arg6);
     case 11: return sys_munmap(arg1, arg2);
     case 12: return sys_brk(arg1);
+    case 72: return sys_fcntl(arg1, arg2, arg3);
     case 14: return sys_rt_sigprocmask(arg1, arg2, arg3, arg4);
     case 20: return sys_writev(arg1, arg2, arg3);
     case 39: return sys_getpid();
@@ -1298,6 +1418,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 231: return sys_exit_group(arg1);
     case 273: return sys_set_robust_list(arg1, arg2);
     case 293: return sys_pipe2(arg1, arg2);
-    default: return (uint64_t)-1;   /* ENOSYS */
+    default:
+        return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }
 }
