@@ -31,6 +31,7 @@ signal_send_pid(uint32_t pid, int signum)
      * Single-core, IF=0 at call sites — no lock needed.
      */
     aegis_task_t *cur = sched_current();
+    if (!cur) return;
     aegis_task_t *t   = cur;
     do {
         if (t->is_user) {
@@ -51,6 +52,7 @@ int
 signal_check_pending(void)
 {
     aegis_task_t *task = sched_current();
+    if (!task) return 0;
     if (!task->is_user) return 0;
     aegis_process_t *proc = (aegis_process_t *)task;
     return (proc->pending_signals & ~proc->signal_mask) != 0;
