@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "proc.h"
 #include "vfs.h"
+#include "pipe.h"
 #include "initrd.h"
 #include "vmm.h"
 #include "pmm.h"
@@ -1134,6 +1135,127 @@ done:
     return ret;
 }
 
+/*
+ * sys_pipe2 — syscall 293
+ *
+ * arg1 = user pointer to int[2] — receives [read_fd, write_fd]
+ * arg2 = flags (O_CLOEXEC etc.) — accepted, ignored (O_CLOEXEC deferred)
+ *
+ * Allocates a pipe_t from kva, installs read and write ends into two free
+ * fd slots, writes the fd numbers to user pipefd.
+ */
+static uint64_t
+sys_pipe2(uint64_t arg1, uint64_t arg2)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    (void)arg2;   /* flags ignored */
+
+    if (!user_ptr_valid(arg1, 2 * sizeof(int)))
+        return (uint64_t)-14;   /* EFAULT */
+
+    /* Find two free fd slots */
+    int rfd = -1, wfd = -1;
+    int i;
+    for (i = 0; i < PROC_MAX_FDS; i++) {
+        if (!proc->fds[i].ops) {
+            if (rfd < 0) { rfd = i; }
+            else         { wfd = i; break; }
+        }
+    }
+    if (wfd < 0)
+        return (uint64_t)-24;   /* EMFILE */
+
+    /* Allocate and zero-initialize pipe_t (exactly one kva page) */
+    pipe_t *p = kva_alloc_pages(1);
+    if (!p)
+        return (uint64_t)-12;   /* ENOMEM */
+    __builtin_memset(p, 0, sizeof(pipe_t));
+    p->read_refs  = 1;
+    p->write_refs = 1;
+
+    /* Install read end */
+    proc->fds[rfd].ops    = &g_pipe_read_ops;
+    proc->fds[rfd].priv   = p;
+    proc->fds[rfd].offset = 0;
+    proc->fds[rfd].size   = 0;
+
+    /* Install write end */
+    proc->fds[wfd].ops    = &g_pipe_write_ops;
+    proc->fds[wfd].priv   = p;
+    proc->fds[wfd].offset = 0;
+    proc->fds[wfd].size   = 0;
+
+    /* Write [rfd, wfd] to user pipefd array */
+    int out[2] = { rfd, wfd };
+    copy_to_user((void *)(uintptr_t)arg1, out, sizeof(out));
+
+    return 0;
+}
+
+/*
+ * sys_dup — syscall 32
+ *
+ * arg1 = oldfd
+ *
+ * Duplicates oldfd into the lowest free fd slot. Calls the dup hook
+ * to increment any driver-side reference counts (e.g., pipe_t refs).
+ */
+static uint64_t
+sys_dup(uint64_t arg1)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops)
+        return (uint64_t)-9;    /* EBADF */
+
+    int newfd = -1;
+    int i;
+    for (i = 0; i < PROC_MAX_FDS; i++) {
+        if (!proc->fds[i].ops) { newfd = i; break; }
+    }
+    if (newfd < 0)
+        return (uint64_t)-24;   /* EMFILE */
+
+    /* Copy fd struct by value, then bump refcount via dup hook. */
+    proc->fds[newfd] = proc->fds[arg1];
+    if (proc->fds[newfd].ops->dup)
+        proc->fds[newfd].ops->dup(proc->fds[newfd].priv);
+
+    return (uint64_t)newfd;
+}
+
+/*
+ * sys_dup2 — syscall 33
+ *
+ * arg1 = oldfd, arg2 = newfd
+ *
+ * Duplicates oldfd into newfd. Closes newfd first if it is open.
+ * If oldfd == newfd, returns newfd with no changes.
+ */
+static uint64_t
+sys_dup2(uint64_t arg1, uint64_t arg2)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops)
+        return (uint64_t)-9;    /* EBADF */
+    if (arg2 >= PROC_MAX_FDS)
+        return (uint64_t)-9;    /* EBADF */
+    if (arg1 == arg2)
+        return arg2;            /* no-op per POSIX */
+
+    /* Close existing target fd */
+    if (proc->fds[arg2].ops) {
+        proc->fds[arg2].ops->close(proc->fds[arg2].priv);
+        __builtin_memset(&proc->fds[arg2], 0, sizeof(vfs_file_t));
+    }
+
+    /* Copy fd struct by value, then bump refcount via dup hook. */
+    proc->fds[arg2] = proc->fds[arg1];
+    if (proc->fds[arg2].ops->dup)
+        proc->fds[arg2].ops->dup(proc->fds[arg2].priv);
+
+    return arg2;
+}
+
 uint64_t
 syscall_dispatch(syscall_frame_t *frame, uint64_t num,
                  uint64_t arg1, uint64_t arg2, uint64_t arg3,
@@ -1144,6 +1266,8 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  1: return sys_write(arg1, arg2, arg3);
     case  2: return sys_open(arg1, arg2, arg3);
     case  3: return sys_close(arg1);
+    case 32: return sys_dup(arg1);
+    case 33: return sys_dup2(arg1, arg2);
     case  9: return sys_mmap(arg1, arg2, arg3, arg4, arg5, arg6);
     case 11: return sys_munmap(arg1, arg2);
     case 12: return sys_brk(arg1);
@@ -1162,6 +1286,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 218: return sys_set_tid_address(arg1);
     case 231: return sys_exit_group(arg1);
     case 273: return sys_set_robust_list(arg1, arg2);
+    case 293: return sys_pipe2(arg1, arg2);
     default: return (uint64_t)-1;   /* ENOSYS */
     }
 }
