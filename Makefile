@@ -17,6 +17,8 @@ CFLAGS = \
     -fno-pie -fno-pic \
     -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
     -fno-stack-protector \
+    -fno-omit-frame-pointer \
+    -g \
     -Wall -Wextra -Werror \
     -Ikernel/arch/x86_64 \
     -Ikernel/core \
@@ -247,6 +249,25 @@ run: iso
 
 shell:
 	$(MAKE) INIT=shell run
+
+# ── Debug targets ─────────────────────────────────────────────────────────────
+# make gdb      — boot kernel frozen at first instruction; attach GDB.
+#                 Serial output captured to build/debug.log.
+#                 In GDB: type 'c' to start, 'Ctrl-C' to pause, 'bt' for stack.
+# make sym ADDR=0x... — resolve a raw kernel address to file:line
+gdb: iso
+	@echo "[GDB] QEMU GDB server on :1234 — serial -> $(BUILD)/debug.log"
+	@qemu-system-x86_64 \
+	    -cdrom $(BUILD)/aegis.iso -boot order=d \
+	    -serial file:$(BUILD)/debug.log \
+	    -vga std -no-reboot -m 128M \
+	    -s -S \
+	    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+	    -display none & \
+	sleep 0.3 && gdb -x tools/aegis.gdb
+
+sym:
+	@addr2line -e $(BUILD)/aegis.elf -f -p $(ADDR)
 
 test: iso
 	@bash tests/run_tests.sh

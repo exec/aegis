@@ -41,6 +41,28 @@ idt_init(void)
     printk("[IDT] OK: 48 vectors installed\n");
 }
 
+/* Walk the RBP frame-pointer chain and print return addresses.
+ * Only valid for kernel-mode exceptions (CS=0x08).
+ * At -O0 with -fno-omit-frame-pointer, every frame pushes RBP.
+ * Each frame: [rbp+0] = saved previous RBP, [rbp+8] = return address.
+ * Resolve addresses with: make sym ADDR=0x<addr>
+ * Limit of 16 frames keeps us well within a single 4KB kernel stack page. */
+static void
+panic_backtrace(uint64_t rbp)
+{
+    printk("[PANIC] backtrace (resolve: make sym ADDR=0x<addr>):\n");
+    for (int i = 0; i < 16; i++) {
+        /* RBP must be 8-byte aligned and in the higher-half kernel VA range */
+        if (rbp < 0xFFFFFFFF80000000ULL || (rbp & 7ULL))
+            break;
+        uint64_t retaddr = ((uint64_t *)rbp)[1];
+        if (retaddr < 0xFFFFFFFF80000000ULL || retaddr == 0)
+            break;
+        printk("[PANIC]   [%d] 0x%lx\n", i, retaddr);
+        rbp = ((uint64_t *)rbp)[0];
+    }
+}
+
 void __attribute__((used))
 isr_dispatch(cpu_state_t *s)
 {
@@ -70,6 +92,10 @@ isr_dispatch(cpu_state_t *s)
             printk("[PANIC] #GP iretq frame: RIP=%lx CS=%lx FL=%lx RSP=%lx SS=%lx\n",
                    f[0], f[1], f[2], f[3], f[4]);
         }
+        /* Print kernel backtrace for kernel-mode faults.
+         * For ring-3 faults (CS=0x23) rbp is a user-space pointer — skip. */
+        if (s->cs == 0x08)
+            panic_backtrace(s->rbp);
         for (;;) {}
     } else if (s->vector < 0x30) {
         /* Hardware IRQ: send EOI BEFORE the handler.
