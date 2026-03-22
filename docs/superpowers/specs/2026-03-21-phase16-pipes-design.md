@@ -4,7 +4,7 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add Unix pipes and input redirection to Aegis so shell pipelines like
-`ls /bin | grep sh` and `grep foo < /etc/motd` work correctly.
+`ls /bin | grep sh` and `cat < /etc/motd` work correctly.
 
 **Architecture:** A kernel-side pipe VFS driver backed by a 4 KB ring buffer
 with `sched_block`/`sched_wake` for flow control. Three new syscalls
@@ -28,6 +28,7 @@ Phase 19 (ext2 writable FS).
 - `vfs_ops_t` extended with optional `dup` hook
 - `sys_fork` updated to call `dup` hook on inherited fds
 - `sys_read` fixed: propagate negative return values; increase kernel buffer cap
+- `sched_exit` fixed: close all open fds before marking task zombie
 
 **Out of scope (Phase 19+):**
 - Output redirection to files (`>`, `>>`) — requires writable FS
@@ -41,13 +42,16 @@ Phase 19 (ext2 writable FS).
 ## Kernel: Pipe Subsystem
 
 ### New files
-- `kernel/fs/pipe.h` — `pipe_t` struct, `pipe_alloc`, `pipe_free` declarations
+- `kernel/fs/pipe.h` — `pipe_t` struct, `PIPE_BUF_SIZE`, function declarations
 - `kernel/fs/pipe.c` — implementation
 
 ### `pipe_t` struct
 
 ```c
-#define PIPE_BUF_SIZE 4096
+/* PIPE_BUF_SIZE must be chosen so sizeof(pipe_t) <= 4096 (one kva page).
+ * Metadata fields after buf: 5x uint32_t (20 bytes) + 2x pointer (16 bytes)
+ * = 36 bytes. So PIPE_BUF_SIZE = 4096 - 36 = 4060. */
+#define PIPE_BUF_SIZE 4060
 
 typedef struct {
     uint8_t          buf[PIPE_BUF_SIZE];
@@ -59,61 +63,101 @@ typedef struct {
     aegis_task_t    *reader_waiting;  /* task blocked waiting for data */
     aegis_task_t    *writer_waiting;  /* task blocked waiting for space */
 } pipe_t;
+/* static_assert(sizeof(pipe_t) <= 4096, "pipe_t must fit in one page"); */
 ```
 
-The struct is 4096 + 36 bytes = 4132 bytes. Allocate via `kva_alloc_pages(2)`;
-free via `kva_free_pages(pipe, 2)` in all close and free paths. The second page
-is mostly unused — acceptable at Phase 16 scope.
+`sizeof(pipe_t)` = 4060 + 20 + 16 = 4096 bytes exactly. Allocate via
+`kva_alloc_pages(1)`; free via `kva_free_pages(pipe, 1)` in all paths.
 
 ### VFS ops
 
-Two separate `vfs_ops_t` singletons — both include the `dup` hook:
+Two separate `vfs_ops_t` singletons. Use **designated initializers** to make
+field mapping unambiguous and future-proof against struct reordering:
 
 ```c
-static const vfs_ops_t g_pipe_read_ops  = {
-    pipe_read_fn, NULL, pipe_read_close_fn, NULL, pipe_dup_read_fn
+static const vfs_ops_t g_pipe_read_ops = {
+    .read    = pipe_read_fn,
+    .write   = NULL,
+    .close   = pipe_read_close_fn,
+    .readdir = NULL,
+    .dup     = pipe_dup_read_fn,
 };
 static const vfs_ops_t g_pipe_write_ops = {
-    NULL, pipe_write_fn, pipe_write_close_fn, NULL, pipe_dup_write_fn
+    .read    = NULL,
+    .write   = pipe_write_fn,
+    .close   = pipe_write_close_fn,
+    .readdir = NULL,
+    .dup     = pipe_dup_write_fn,
 };
 ```
 
-(`vfs_ops_t` gains an optional `dup` field — see VFS changes below.)
+All existing ops structs (initrd, console, kbd) must also be updated to use
+designated initializers and set `.dup = NULL` explicitly.
 
 **`pipe_read_fn(priv, buf, offset, len)`:**
-- `offset` is ignored (pipes have no seek position)
-1. If `count == 0` and `write_refs == 0`: return 0 (EOF)
-2. If `count == 0` and `write_refs > 0`: store `s_current` in `reader_waiting`,
-   call `sched_block()`, retry from step 1
-3. Copy `min(len, count)` bytes from ring buffer into `buf` (plain kernel-to-kernel
-   `memcpy` — `buf` is the kernel buffer inside `sys_read`, not a user pointer)
-4. Advance `read_pos`, decrement `count`
-5. If `writer_waiting != NULL`: call `sched_wake(writer_waiting)`, clear it
-6. Return bytes copied (always > 0 on this path)
+- `offset` is ignored (pipes have no seek position; the `vfs_file_t.offset`
+  field is not updated for pipe fds)
+- `buf` is a kernel buffer (`kbuf` inside `sys_read`), not a user pointer —
+  plain `memcpy` is correct here
+
+Intended flow with retry-as-loop:
+```
+loop:
+  if count == 0 and write_refs == 0: return 0  /* EOF */
+  if count == 0 and write_refs > 0:
+      reader_waiting = s_current   /* s_current via sched_current() */
+      sched_block()                /* task suspends here; resumes below */
+      /* on resume: another task wrote data or closed the write end.
+         go back to top of loop — re-check both conditions. */
+      goto loop
+  /* count > 0: data available */
+  n = min(len, count)
+  memcpy(buf, &ring[read_pos], n)   /* wrapping handled */
+  read_pos = (read_pos + n) % PIPE_BUF_SIZE
+  count -= n
+  if writer_waiting: sched_wake(writer_waiting); writer_waiting = NULL
+  return n
+```
+
+EOF-while-blocked path: if the write end is closed while a reader is blocked,
+`pipe_write_close_fn` calls `sched_wake(reader_waiting)`. The reader resumes,
+retries the loop, sees `count == 0 && write_refs == 0`, and returns 0. This is
+the correct EOF signal.
 
 **`pipe_write_fn(priv, buf, len)`:**
-- `buf` is a user virtual address. Use `copy_from_user(kbuf, buf, n)` to copy
-  from user space into a kernel-side staging buffer before writing to the ring.
-  This is required for SMAP correctness (same pattern as `console_write_fn`).
-1. If `read_refs == 0`: return `-EPIPE`
-2. If `count == PIPE_BUF_SIZE`: store `s_current` in `writer_waiting`,
-   call `sched_block()`, retry from step 1
-3. `n = min(len, PIPE_BUF_SIZE - count)`; `copy_from_user(staging, buf, n)`;
-   copy `staging` into ring buffer; advance `write_pos`; increment `count` by `n`
-4. If `reader_waiting != NULL`: call `sched_wake(reader_waiting)`, clear it
-5. Return `n` (partial write; caller must loop if `n < len`)
+- `buf` is a **user virtual address** (from `sys_write`). Use
+  `copy_from_user(staging, buf, n)` for SMAP correctness.
+- `staging` is a local `char staging[PIPE_BUF_SIZE]` on `pipe_write_fn`'s
+  stack frame (4060 bytes). See kernel stack budget note in Constraints.
+
+Intended flow with retry-as-loop:
+```
+loop:
+  if read_refs == 0: return -EPIPE
+  if count == PIPE_BUF_SIZE:
+      writer_waiting = s_current
+      sched_block()
+      goto loop
+  n = min(len, PIPE_BUF_SIZE - count)
+  copy_from_user(staging, buf, n)
+  memcpy(&ring[write_pos], staging, n)   /* wrapping handled */
+  write_pos = (write_pos + n) % PIPE_BUF_SIZE
+  count += n
+  if reader_waiting: sched_wake(reader_waiting); reader_waiting = NULL
+  return n   /* partial write; sys_write caller must loop if n < len */
+```
 
 **`pipe_read_close_fn(priv)`:**
 1. Decrement `read_refs`
 2. If `writer_waiting != NULL`: `sched_wake(writer_waiting)`, clear it
    (writer will get -EPIPE on next call)
-3. If `read_refs == 0` and `write_refs == 0`: `kva_free_pages(pipe, 2)`
+3. If `read_refs == 0` and `write_refs == 0`: `kva_free_pages(pipe, 1)`
 
 **`pipe_write_close_fn(priv)`:**
 1. Decrement `write_refs`
 2. If `reader_waiting != NULL`: `sched_wake(reader_waiting)`, clear it
-   (reader will get EOF on next call)
-3. If `read_refs == 0` and `write_refs == 0`: `kva_free_pages(pipe, 2)`
+   (reader will get EOF on next call via the retry loop)
+3. If `read_refs == 0` and `write_refs == 0`: `kva_free_pages(pipe, 1)`
 
 **`pipe_dup_read_fn(priv)` / `pipe_dup_write_fn(priv)`:**
 Increment `read_refs` or `write_refs` respectively. Called by `sys_dup`,
@@ -133,7 +177,8 @@ typedef struct {
 } vfs_ops_t;
 ```
 
-All existing ops structs (initrd, console, kbd) set `.dup = NULL`.
+All existing ops structs (initrd, console, kbd) set `.dup = NULL` via
+designated initializers.
 
 ---
 
@@ -146,25 +191,23 @@ Two pre-existing limitations in `sys_read` must be fixed as part of this phase:
 int got = f->ops->read(f->priv, kbuf, f->offset, n);
 if (got <= 0) return 0;
 ```
-This converts any negative return (including `-EPIPE` from a pipe read) into a
-silent EOF. Fix: distinguish negative errors from clean EOF:
+This converts any negative return (including `-EPIPE` from a future pipe-read
+error) into a silent EOF. Fix:
 ```c
 int64_t got = (int64_t)f->ops->read(f->priv, kbuf, f->offset, n);
 if (got < 0) return (uint64_t)got;   /* propagate -errno */
-if (got == 0) return 0;              /* EOF */
+if (got == 0) return 0;              /* clean EOF */
 ```
 
-**Fix 2 — Buffer size cap.** Current code caps `sys_read` at 256 bytes via a
-stack buffer `char kbuf[256]`. Pipe reads must be able to drain up to
-`PIPE_BUF_SIZE` bytes per call (otherwise musl stdio loops excessively and
-performance suffers). Increase the cap:
+**Fix 2 — Buffer size cap.** Current code caps `sys_read` at 256 bytes.
+Pipe reads need up to `PIPE_BUF_SIZE` bytes per call for reasonable
+throughput. Increase:
 ```c
 #define SYS_READ_BUF 4096
 char kbuf[SYS_READ_BUF];
 uint64_t n = arg3 < SYS_READ_BUF ? arg3 : SYS_READ_BUF;
 ```
-Stack usage increases from 256 to 4096 bytes. The kernel stack is 4 pages
-(16 KB); this is within budget.
+Stack usage increases from 256 to 4096 bytes. See kernel stack budget note.
 
 ---
 
@@ -176,14 +219,14 @@ Stack usage increases from 256 to 4096 bytes. The kernel stack is 4 pages
 int pipe2(int pipefd[2], int flags)
 ```
 
-1. Validate `pipefd` pointer (2 ints = 8 bytes, user space)
+1. Validate `pipefd` pointer (2 ints = 8 bytes, user space) via `user_ptr_valid`
 2. Find two free slots in `proc->fds[]`; return `-EMFILE` if fewer than 2
-3. Allocate `pipe_t` via `kva_alloc_pages(2)`; zero it
+3. Allocate `pipe_t` via `kva_alloc_pages(1)`; zero it with `memset`
 4. Set `read_refs = 1`, `write_refs = 1`
 5. Install read-end `vfs_file_t` at `fds[read_fd]`:
-   `ops = &g_pipe_read_ops`, `priv = pipe`
+   `ops = &g_pipe_read_ops`, `priv = pipe`, `offset = 0`, `size = 0`
 6. Install write-end `vfs_file_t` at `fds[write_fd]`:
-   `ops = &g_pipe_write_ops`, `priv = pipe`
+   `ops = &g_pipe_write_ops`, `priv = pipe`, `offset = 0`, `size = 0`
 7. Copy `[read_fd, write_fd]` to user `pipefd` via `copy_to_user`
 8. `flags` accepted but ignored (O_CLOEXEC deferred)
 9. Return 0
@@ -194,9 +237,9 @@ int pipe2(int pipefd[2], int flags)
 int dup(int oldfd)
 ```
 
-1. Validate `oldfd` in range and `fds[oldfd].ops != NULL`
+1. Validate `oldfd` in range and `fds[oldfd].ops != NULL`; return `-EBADF` otherwise
 2. Find first free slot `newfd`; return `-EMFILE` if none
-3. Copy `fds[oldfd]` to `fds[newfd]`
+3. Copy `fds[oldfd]` to `fds[newfd]` (struct copy by value)
 4. If `fds[newfd].ops->dup != NULL`: call `fds[newfd].ops->dup(fds[newfd].priv)`
 5. Return `newfd`
 
@@ -206,40 +249,53 @@ int dup(int oldfd)
 int dup2(int oldfd, int newfd)
 ```
 
-1. Validate `oldfd` in range and open
-2. Validate `newfd` in range (`0 ≤ newfd < PROC_MAX_FDS`)
-3. If `oldfd == newfd`: return `newfd`
+1. Validate `oldfd` in range and open; return `-EBADF` otherwise
+2. Validate `newfd` in range (`0 ≤ newfd < PROC_MAX_FDS`); return `-EBADF` otherwise
+3. If `oldfd == newfd`: return `newfd` (no-op)
 4. If `fds[newfd].ops != NULL`: call `fds[newfd].ops->close(fds[newfd].priv)`,
-   zero slot
-5. Copy `fds[oldfd]` to `fds[newfd]`
+   zero the slot (`memset(&fds[newfd], 0, sizeof(vfs_file_t))`)
+5. Copy `fds[oldfd]` to `fds[newfd]` (struct copy by value)
 6. If `fds[newfd].ops->dup != NULL`: call `fds[newfd].ops->dup(fds[newfd].priv)`
 7. Return `newfd`
 
 ### `sys_fork` update
 
-After the fd table copy-by-value loop, add:
+After the fd table copy-by-value loop, add a second loop to call dup hooks:
 
 ```c
+/* fds[] was copied by value above (memcpy semantics — no ref bumps yet).
+ * Now call dup hooks to reflect that the child holds an additional reference
+ * to each fd. This two-pass ordering is required: if dup hooks ran during
+ * the copy loop, a failed allocation midway could leave ref counts
+ * inconsistent. Copy all first, then bump all. */
 for (int i = 0; i < PROC_MAX_FDS; i++) {
     if (child->fds[i].ops && child->fds[i].ops->dup)
         child->fds[i].ops->dup(child->fds[i].priv);
 }
 ```
 
-This keeps pipe ref counts correct across fork.
-
 ### `sched_exit` update — close fds on process exit
 
 `sched_exit` currently marks user processes as `TASK_ZOMBIE` without closing
-their open fds. This is benign today (console and kbd close ops are no-ops),
-but breaks pipes: the write-end of a pipe never calls `pipe_write_close_fn`,
-so `write_refs` never reaches zero, so the reader blocks forever waiting for
-EOF instead of seeing it.
+their open fds. This breaks pipes: the write-end of a pipe never calls
+`pipe_write_close_fn`, so `write_refs` never reaches zero, so the reader
+blocks forever waiting for EOF instead of seeing it.
 
-In `sched_exit`, in the user-process branch, before marking `TASK_ZOMBIE`:
+The fd-close loop must run **before** `vmm_free_user_pml4`. Pipe close ops
+access `pipe_t` which lives in kva (kernel virtual space) — safe regardless
+of which PML4 is active. However, any future close callback that calls
+`copy_to_user` (e.g., a hypothetical Phase 17 signal-fd cleanup) would fault
+after the user PML4 is freed. The rule: **fd close loop always runs before
+`vmm_free_user_pml4`**.
+
+In `sched_exit`, user-process branch, before `vmm_free_user_pml4`:
 
 ```c
-/* Close all open fds — required for pipe ref count correctness */
+/* Close all open fds before freeing user address space.
+ * Required for pipe ref count correctness: write-end close triggers
+ * sched_wake on any blocked reader, which must happen before the
+ * task is marked TASK_ZOMBIE. Also required for any future fd type
+ * whose close op accesses user memory (must run before vmm_free_user_pml4). */
 aegis_process_t *dying_proc = (aegis_process_t *)dying;
 for (int i = 0; i < PROC_MAX_FDS; i++) {
     if (dying_proc->fds[i].ops) {
@@ -249,22 +305,19 @@ for (int i = 0; i < PROC_MAX_FDS; i++) {
 }
 ```
 
-Without this, `ls /bin | cat` hangs after `ls` exits because the pipe write
-end is never released.
-
 ---
 
 ## Process: FD Table Bump
 
-`PROC_MAX_FDS` is defined in `kernel/fs/vfs.h` (not proc.h):
+`PROC_MAX_FDS` is defined in `kernel/fs/vfs.h` (not `proc.h`):
 
 ```c
 #define PROC_MAX_FDS 16   /* was 8 */
 ```
 
-`aegis_process_t.fds[16]` — struct grows by ~256 bytes. Still fits in kva
-allocation. All loops over fds use `PROC_MAX_FDS` already; no other changes
-required beyond updating this one definition.
+`aegis_process_t.fds[16]` — struct grows by ~256 bytes. Still fits in its kva
+allocation. All loops over fds already use `PROC_MAX_FDS`; no other changes
+needed.
 
 ---
 
@@ -284,8 +337,8 @@ maximum pipeline depth is `(16 - 3) / 2 = 6` stages.
 
 typedef struct {
     char *argv[MAX_ARGV];
-    char *stdin_file;    /* path for < redirect, or NULL */
-    char *stdout_file;   /* path for > redirect (NULL until Phase 19) */
+    char *stdin_file;       /* path for < redirect, or NULL */
+    char *stdout_file;      /* path for > redirect (stored, ignored until Phase 19) */
     int   stderr_to_stdout; /* 1 if 2>&1 */
 } cmd_t;
 ```
@@ -307,26 +360,34 @@ Return count of stages (capped at `MAX_PIPELINE`). Each stage string passed to
 
 ```
 run_pipeline(cmds, n):
-  create n-1 pipes: pipes[0..n-2][2]  (read=0, write=1)
+  create n-1 pipes: pipes[0..n-2][2]   (pipes[i][0]=read, pipes[i][1]=write)
 
   pids[MAX_PIPELINE]
   for i in 0..n-1:
     pid = fork()
     if pid == 0:  // child
+      // Set up stdin/stdout redirects via dup2
       if i > 0:   dup2(pipes[i-1][0], STDIN_FILENO)
       if i < n-1: dup2(pipes[i][1], STDOUT_FILENO)
       if stdin_file: fd=open(stdin_file,O_RDONLY); dup2(fd,0); close(fd)
       if stderr_to_stdout: dup2(1, 2)
-      // close all pipe fds in child
+
+      // CRITICAL: close all pipe fds in the child after dup2 redirects.
+      // If any write-end fd remains open in a child that is reading from the
+      // same pipe, that child will never see EOF even after the writer exits —
+      // because the write-end ref count stays > 0 (the child itself holds it).
       for j in 0..n-2: close(pipes[j][0]); close(pipes[j][1])
+
       execve(...)
       _exit(127)
     pids[i] = pid
 
-  // parent: close all pipe fds after all children are forked
+  // Parent: close all pipe fds after all children are forked.
+  // Must happen before waitpid — otherwise the parent holds the write ends
+  // open and the last-stage reader never gets EOF.
   for j in 0..n-2: close(pipes[j][0]); close(pipes[j][1])
 
-  // wait for all children
+  // Wait for all children in order
   for i in 0..n-1: waitpid(pids[i], &status, 0)
 ```
 
@@ -350,7 +411,7 @@ Manual smoke tests (run via `make shell`):
 ls /bin | cat
 echo hello | cat
 ls /bin | cat | cat
-grep motd < /etc/motd
+cat < /etc/motd
 ls /bin 2>&1 | cat
 ```
 
@@ -364,11 +425,14 @@ Phase 15 shell test.
 
 | Action | File | What changes |
 |--------|------|--------------|
-| New | `kernel/fs/pipe.h` | `pipe_t`, `PIPE_BUF_SIZE`, function declarations |
+| New | `kernel/fs/pipe.h` | `pipe_t`, `PIPE_BUF_SIZE 4060`, function declarations |
 | New | `kernel/fs/pipe.c` | Full pipe driver implementation |
 | Modify | `kernel/fs/vfs.h` | Add `dup` field to `vfs_ops_t`; `PROC_MAX_FDS` 8 → 16 |
-| Modify | `kernel/syscall/syscall.c` | `sys_read` error propagation + buffer size fix; `sys_pipe2`, `sys_dup`, `sys_dup2`; `sys_fork` dup-hook loop |
-| Modify | `kernel/sched/sched.c` | `sched_exit`: close all open fds before marking task zombie |
+| Modify | `kernel/fs/initrd.c` | Update ops struct to designated initializers + `.dup = NULL` |
+| Modify | `kernel/fs/console.c` | Update ops struct to designated initializers + `.dup = NULL` |
+| Modify | `kernel/fs/kbd_vfs.c` | Update ops struct to designated initializers + `.dup = NULL` |
+| Modify | `kernel/syscall/syscall.c` | `sys_read` fixes; `sys_pipe2`, `sys_dup`, `sys_dup2`; `sys_fork` dup-hook loop |
+| Modify | `kernel/sched/sched.c` | `sched_exit`: fd-close loop before `vmm_free_user_pml4` |
 | Modify | `Makefile` | Add `kernel/fs/pipe.c` to `FS_SRCS` |
 | Modify | `user/shell/main.c` | Full parser rewrite (~280 lines) |
 | Modify | `tests/` | New pipe smoke tests |
@@ -377,32 +441,52 @@ Phase 15 shell test.
 
 ## Constraints and Risks
 
-**`sched_block` from VFS context**: Pipe read/write call `sched_block()` from
-inside `sys_read`/`sys_write` syscall handlers. This is safe — the syscall
-handler returns to `syscall_entry.asm` after `sched_block` unblocks, which
-then executes `sysret` back to user space with the correct return value.
-No re-entrancy issue at single-core scope.
+**Kernel stack budget.** Two large stack buffers exist in the syscall paths:
+- `sys_read`: `char kbuf[4096]` — 4 KB
+- `pipe_write_fn`: `char staging[PIPE_BUF_SIZE]` (4060 bytes) — ~4 KB
 
-**Single waiter per pipe end**: `pipe_t` holds one `reader_waiting` and one
-`writer_waiting`. If two tasks both block reading the same pipe (not a normal
-shell scenario), only the first one is woken. Known limitation for Phase 16.
+These are in separate syscall paths (`sys_read` vs `sys_write`) and do not
+stack on top of each other. The kernel stack is 4 pages (16 KB). Total frame
+depth for `sys_write → pipe_write_fn` is approximately 4060 + ~300 bytes of
+saved frames, well within budget. **Do not add further large locals to any
+function in the `sys_write → pipe_write_fn` call chain without re-auditing
+the stack budget.**
 
-**Partial writes**: `pipe_write_fn` may copy fewer bytes than requested if the
-buffer is nearly full. The caller (sys_write loop or musl stdio) must handle
-partial writes. This matches POSIX pipe semantics.
+**`sched_block` retry pattern.** The `sched_block()` call in `pipe_read_fn`
+and `pipe_write_fn` is a mid-function suspend. When the task unblocks,
+execution resumes at the statement immediately after `sched_block()` — the
+`goto loop` / retry. This is the same pattern used by `sys_waitpid`. The
+function does not re-enter from the top; it continues within the same stack
+frame. Do not refactor to a callback or coroutine model.
 
-**`sys_read` stack grows to 4 KB**: The `kbuf[4096]` on the kernel stack is
-safe — the kernel stack is 4 pages (16 KB). The existing 256-byte cap was
-unnecessarily restrictive; 4096 bytes is the right size for pipe throughput.
+**`sched_block` from VFS context.** Pipe read/write call `sched_block()` from
+inside `sys_read`/`sys_write`. This is safe — after unblocking, the ops
+function returns a byte count to `sys_read`/`sys_write`, which then copies to
+user space and returns via `sysret`. No re-entrancy issue at single-core scope.
 
-**No `SIGPIPE`**: Writers to a pipe with no readers get `-EPIPE`, not a signal.
-musl handles `-EPIPE` errno gracefully in most cases. Full `SIGPIPE` delivery
-is Phase 17.
+**`sched_exit` fd-close ordering.** The fd-close loop runs before
+`vmm_free_user_pml4`. This is the required order. Future close callbacks that
+touch user memory (Phase 17+) will rely on this invariant. Do not reorder.
 
-**`pipe_write_fn` staging buffer**: `pipe_write_fn` uses a local `char staging[PIPE_BUF_SIZE]` on its stack for the `copy_from_user` transfer. At 4096 bytes on a 16 KB kernel stack this is within budget.
+**Child pipe fd close is mandatory.** After `dup2` redirects in each pipeline
+child, all pipe fds must be explicitly closed before `execve`. If a child
+retains the write end of a pipe it is reading from, it will never see EOF even
+after the writer exits (write_refs stays > 1 because the reader itself holds
+one). This is the most common pipe bug — the pipeline execution pseudocode
+makes it explicit.
 
-**`pipe_write_fn` SMAP**: Data arrives as a user virtual address via `sys_write`.
-`pipe_write_fn` must use `copy_from_user` (with `arch_stac`/`arch_clac`) to
-copy from user space into the kernel ring buffer — same pattern as
-`console_write_fn`. A plain `memcpy` from a user pointer will fault at the
-SMAP boundary.
+**Single waiter per pipe end.** `pipe_t` holds one `reader_waiting` and one
+`writer_waiting`. Multiple tasks blocking on the same pipe end is not a normal
+shell scenario at Phase 16 scope. Known limitation.
+
+**Partial writes.** `pipe_write_fn` may write fewer bytes than requested if the
+buffer is nearly full. The `sys_write` caller in musl must loop. This matches
+POSIX pipe semantics.
+
+**No `SIGPIPE`.** Writers to a closed-read pipe get `-EPIPE` (errno), not a
+signal. musl handles `-EPIPE` gracefully. Full `SIGPIPE` delivery is Phase 17.
+
+**`pipe_write_fn` SMAP.** Data arrives as a user virtual address. The
+`copy_from_user` + staging buffer pattern (same as `console_write_fn`)
+satisfies the SMAP boundary requirement. A plain `memcpy` from a user pointer
+will fault.
