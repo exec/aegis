@@ -466,6 +466,14 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 
 **`opendir`/`readdir` are not generic VFS paths.** The initrd `readdir` is a synthetic listing. A real directory hierarchy with on-disk inodes is Phase 16+.
 
+### Phase 17 forward-looking constraints
+
+**`sys_rt_sigreturn` must NOT restore GS/FS from `gregs[REG_CSGSFS]`.** `signal_deliver` stores only the CS value in `sf.gregs[REG_CSGSFS]` (GS=0, FS=0). When `sys_rt_sigreturn` restores the context, it must set `s->cs` from `gregs[REG_CSGSFS]` and separately call `arch_set_fs_base(proc->fs_base)` to restore musl's TLS pointer. Blindly writing `gregs[REG_CSGSFS]` to the GS/FS registers would zero FS base, corrupting musl thread-local storage on the very first signal return.
+
+**`signal_deliver` is called on every interrupt including ring-0.** The cs check (`s->cs != 0x23`) guards against delivering to kernel context, but the call itself has a small overhead on every PIT tick and keyboard interrupt. If interrupt rate becomes a concern, guard the call in `isr.asm` with a ring-3 check in assembly before the `call signal_deliver`.
+
+**`proc_spawn` kernel stack (4KB) is safe for signal delivery.** Maximum depth at `signal_deliver` entry from RSP0: ~750 bytes (cpu_state_t + signal_deliver frame + 560-byte `rt_sigframe_t` local). 4KB minus 750 bytes leaves ~3350 bytes of headroom, which is adequate.
+
 ### Phase 16 forward-looking constraints
 
 **`O_CLOEXEC` deferred.** `sys_pipe2` accepts but ignores the `O_CLOEXEC` flag. Pipe fds are inherited by `execve`. A server that forks workers while holding pipe fds will leak them into workers. Implement `O_CLOEXEC` alongside Phase 17 signal work.
