@@ -166,6 +166,9 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->cwd[0]           = '/';
     proc->cwd[1]           = '\0';
     proc->exit_status      = 0;
+    proc->pending_signals  = 0;
+    proc->signal_mask      = 0;
+    __builtin_memset(proc->sigactions, 0, sizeof(proc->sigactions));
     proc->task.state       = TASK_RUNNING;
     proc->task.waiting_for = 0;
 

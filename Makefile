@@ -71,7 +71,8 @@ ARCH_SRCS = \
 
 CORE_SRCS = \
     kernel/core/main.c \
-    kernel/core/printk.c
+    kernel/core/printk.c \
+    kernel/signal/signal.c
 
 MM_SRCS = \
     kernel/mm/pmm.c \

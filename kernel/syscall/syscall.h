@@ -7,7 +7,7 @@
  * Field order matches the push sequence in syscall_entry.asm.
  * The last-pushed value is at the lowest address (= struct base).
  * sys_execve writes frame->rip and frame->user_rsp to redirect sysret. */
-typedef struct {
+typedef struct syscall_frame {
     uint64_t r10;       /* offset +0:  saved user r10 (Linux arg4) */
     uint64_t r9;        /* offset +8:  saved user r9  (Linux arg6) */
     uint64_t r8;        /* offset +16: saved user r8  (Linux arg5) */
