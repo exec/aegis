@@ -168,6 +168,17 @@ isr_common_stub:
     lea  rdi, [rsp + 8]
     call isr_dispatch
 
+; isr_post_dispatch — entry point for fork child's first scheduling.
+;
+; sys_fork builds a fake isr_common_stub frame on the child's kernel stack
+; and sets the ctx_switch return address to this label.  When ctx_switch
+; pops the child's callee-saved registers and rets here, the stack looks
+; exactly as if isr_dispatch just returned: [RSP] = saved CR3, followed by
+; the full cpu_state_t.  The child enters user space via iretq with rax=0
+; (fork returns 0 in child) and all registers from the parent's syscall frame.
+global isr_post_dispatch
+isr_post_dispatch:
+
     ; Restore the original CR3 (from the stack slot at [RSP]).
     pop  rax                        ; rax = saved CR3
     test rax, rax

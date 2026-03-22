@@ -220,7 +220,26 @@ sched_block(void)
     while (s_current->state != TASK_RUNNING)
         s_current = s_current->next;
 
+    /* Update TSS RSP0 and g_kernel_rsp for the incoming task before
+     * ctx_switch so the next syscall from this task uses its own kernel
+     * stack, not the stack of whatever task ran last. */
+    arch_set_kernel_stack(s_current->kernel_stack_top);
+
+    /* Set FS.base for the incoming task before ctx_switch. */
+    if (s_current->is_user)
+        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+
     ctx_switch(old, s_current);
+
+    /* Restore FS.base for the incoming user task after ctx_switch returns.
+     * sched_tick does this in its path; sched_block must mirror it.
+     * Without this, a user task that was blocked while another user task
+     * ran and set a different FS_BASE would resume with the wrong FS_BASE,
+     * corrupting TLS access (__errno_location, stack canary, etc.). */
+    if (s_current->is_user) {
+        aegis_process_t *p = (aegis_process_t *)s_current;
+        arch_set_fs_base(p->fs_base);
+    }
 }
 
 void
@@ -244,7 +263,23 @@ sched_yield_to_next(void)
     do {
         s_current = s_current->next;
     } while (s_current->state != TASK_RUNNING);
+    arch_set_kernel_stack(s_current->kernel_stack_top);
+
+    /* Set FS.base for the incoming task before ctx_switch. */
+    if (s_current->is_user)
+        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+
     ctx_switch(old, s_current);
+
+    /* Restore FS.base for the incoming user task after ctx_switch returns.
+     * sched_tick does this in its path; sched_yield_to_next must mirror it.
+     * Without this, a user task that was blocked while another user task
+     * ran and set a different FS_BASE would resume with the wrong FS_BASE,
+     * corrupting TLS access (__errno_location, stack canary, etc.). */
+    if (s_current->is_user) {
+        aegis_process_t *p = (aegis_process_t *)s_current;
+        arch_set_fs_base(p->fs_base);
+    }
 }
 
 void
@@ -304,6 +339,13 @@ sched_tick(void)
     } while (s_current->state != TASK_RUNNING);
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
+
+    /* Set FS.base for the incoming task before ctx_switch so that the task
+     * enters user space (or resumes) with the correct TLS pointer.
+     * Must be paired with the arch_set_fs_base after ctx_switch (for the
+     * outgoing task's subsequent resume). */
+    if (s_current->is_user)
+        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
 
     /*
      * CR3 switch policy in sched_tick (Phase 5):

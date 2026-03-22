@@ -6,14 +6,20 @@
 static int
 kbd_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 {
-	(void)priv; (void)off;	/* stream device — offset ignored */
-	uint64_t i;
+	(void)priv; (void)off;
+	if (len == 0) return 0;
 	char *kbuf = (char *)buf;
-	/* kbd_read() blocks until a key is available. buf is a kernel buffer
-	 * (sys_read's stack); sys_read copies to user space via copy_to_user. */
-	for (i = 0; i < len; i++)
-		kbuf[i] = kbd_read();
-	return (int)len;
+	/*
+	 * Return exactly 1 byte per call regardless of len.
+	 *
+	 * POSIX allows read() to return fewer bytes than requested.  Callers
+	 * (musl fgets, read loop) must tolerate partial reads.  If we looped
+	 * to fill 'len' bytes, musl's fully-buffered stdin would ask for 4096
+	 * bytes and block until 4096 keystrokes arrived — making the shell
+	 * unusable.  One-byte-at-a-time matches standard Unix tty semantics.
+	 */
+	kbuf[0] = kbd_read();
+	return 1;
 }
 
 static int

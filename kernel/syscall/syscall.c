@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-extern void fork_child_return(void);
+extern void isr_post_dispatch(void);
 
 /*
  * sys_write — syscall 1
@@ -76,8 +76,9 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
     if (cap_check(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0) {
         return (uint64_t)-(int64_t)ENOCAP;
+    }
 
     if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops ||
         !proc->fds[arg1].ops->write)
@@ -152,11 +153,26 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         return (uint64_t)-(int64_t)ENOCAP;
 
     (void)arg2; (void)arg3;   /* flags and mode ignored in Phase 10 */
-    if (!user_ptr_valid(arg1, 256))
+    if (!user_ptr_valid(arg1, 1))
         return (uint64_t)-14;  /* EFAULT */
+    /* Copy byte-by-byte until null terminator — never read past the string.
+     * A bulk 256-byte copy can cross a page boundary if the path string is
+     * placed near the end of the mapped user stack (e.g. argv[1] from execve
+     * is placed within 256 bytes of USER_STACK_TOP), causing a kernel #PF.
+     * Stopping at the null avoids reading into the unmapped page above the stack. */
     char kpath[256];
-    copy_from_user(kpath, (const void *)(uintptr_t)arg1, 256);
-    kpath[255] = '\0';
+    {
+        uint64_t i;
+        for (i = 0; i < 255; i++) {
+            if (!user_ptr_valid(arg1 + i, 1))
+                return (uint64_t)-14;  /* EFAULT */
+            char c;
+            copy_from_user(&c, (const void *)(uintptr_t)(arg1 + i), 1);
+            kpath[i] = c;
+            if (c == '\0') break;
+        }
+        kpath[255] = '\0';
+    }
     uint64_t fd;
     for (fd = 0; fd < PROC_MAX_FDS; fd++)
         if (!proc->fds[fd].ops) break;
@@ -194,18 +210,18 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (!user_ptr_valid(arg2, arg3))
         return (uint64_t)-14;  /* EFAULT */
 
+    /* Single read call — return whatever the VFS gives us.
+     * This matches Unix semantics: read() returns ≤ n bytes, callers loop.
+     * Do NOT loop here: character devices (kbd) always return 1 byte and
+     * never return 0, so a loop would block until arg3 bytes are read. */
     char kbuf[256];
-    uint64_t total = 0;
-    while (total < arg3) {
-        uint64_t n = arg3 - total;
-        if (n > sizeof(kbuf)) n = sizeof(kbuf);
-        int got = f->ops->read(f->priv, kbuf, f->offset, n);
-        if (got <= 0) break;
-        copy_to_user((void *)(uintptr_t)(arg2 + total), kbuf, (uint64_t)got);
-        f->offset += (uint64_t)got;
-        total     += (uint64_t)got;
-    }
-    return total;
+    uint64_t n = arg3;
+    if (n > sizeof(kbuf)) n = sizeof(kbuf);
+    int got = f->ops->read(f->priv, kbuf, f->offset, n);
+    if (got <= 0) return 0;
+    copy_to_user((void *)(uintptr_t)arg2, kbuf, (uint64_t)got);
+    f->offset += (uint64_t)got;
+    return (uint64_t)got;
 }
 
 /*
@@ -529,8 +545,10 @@ sys_getdents64(uint64_t fd_num, uint64_t dirp, uint64_t count)
  * arg2 = buffer size in bytes
  *
  * Copies proc->cwd (including null terminator) into the user buffer.
- * Returns the buffer pointer on success (Linux getcwd ABI), -ERANGE if the
- * buffer is too small, -EFAULT if the pointer is invalid.
+ * Returns the byte count (including null terminator) on success — Linux
+ * sys_getcwd ABI (the libc wrapper returns the pointer, the raw syscall
+ * returns the length).  -ERANGE if the buffer is too small, -EFAULT if
+ * the pointer is invalid.
  */
 static uint64_t
 sys_getcwd(uint64_t buf_ptr, uint64_t size)
@@ -542,7 +560,7 @@ sys_getcwd(uint64_t buf_ptr, uint64_t size)
     if (size < len) return (uint64_t)-(int64_t)ERANGE;
     if (!user_ptr_valid(buf_ptr, len)) return (uint64_t)-(int64_t)14; /* EFAULT */
     copy_to_user((void *)(uintptr_t)buf_ptr, proc->cwd, len);
-    return buf_ptr;  /* Linux getcwd returns the buffer pointer */
+    return len;  /* raw syscall returns byte count, not pointer */
 }
 
 /*
@@ -637,9 +655,11 @@ sys_fork(syscall_frame_t *frame)
     aegis_task_t    *parent_task = sched_current();
     aegis_process_t *parent      = (aegis_process_t *)parent_task;
 
+
     /* 1. Allocate child PCB */
     aegis_process_t *child = kva_alloc_pages(1);
-    if (!child) return (uint64_t)-(int64_t)12;   /* -ENOMEM */
+    if (!child)
+        return (uint64_t)-(int64_t)12;   /* -ENOMEM */
 
     /* 2. Copy parent fields */
     uint32_t ci;
@@ -679,32 +699,70 @@ sys_fork(syscall_frame_t *frame)
 
     /* 6. Build child initial kernel stack frame.
      *
-     * Layout from low to high address (stack grows down):
-     *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0]  <- ctx_switch callee-saves
-     *   [fork_child_return]                           <- ret addr for ctx_switch
-     *   [r10 = frame->r10]     <- syscall_frame_t +0
-     *   [r9  = frame->r9]      <- syscall_frame_t +8
-     *   [r8  = frame->r8]      <- syscall_frame_t +16
-     *   [rflags = frame->rflags] <- syscall_frame_t +24
-     *   [rip    = frame->rip]  <- syscall_frame_t +32
-     *   [user_rsp = frame->user_rsp] <- syscall_frame_t +40
+     * We build a complete fake isr_common_stub post-dispatch frame so the
+     * child's first scheduling is identical to every subsequent one: ctx_switch
+     * pops callee-saves, rets to isr_post_dispatch, pops GPRs from the
+     * cpu_state_t, restores CR3 (child's PML4), and iretqs to user space.
+     * This avoids the SYSRET path entirely, eliminating the stale-frame
+     * register corruption that caused r12=0 / ss=0x18 crashes.
      *
-     * Push order: highest address first (sp decrements then we write).
+     * Stack layout (low→high, child->task.rsp = lowest address):
+     *
+     *   -- ctx_switch callee-save frame (7 slots) --
+     *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0]
+     *   [isr_post_dispatch]      <- ret addr; ctx_switch rets here
+     *
+     *   -- fake isr_common_stub frame --
+     *   [CR3 = child->pml4_phys] <- isr_post_dispatch pops → restores PML4
+     *   [r15=0][r14=0][r13=0][r12=0][r11=rflags][r10][r9][r8]
+     *   [rbp=0][rdi=0][rsi=0][rdx=0][rcx=rip][rbx=0][rax=0]  <- fork ret 0
+     *   [vector=0][error_code=0]
+     *   [rip][cs=0x23][rflags][user_rsp][ss=0x1B]  <- CPU ring-3 frame
+     *
+     * isr_post_dispatch: pop CR3 → mov cr3 → pop r15..rax → add rsp,16 → iretq
      */
     uint64_t *sp = (uint64_t *)(kstack + 4096);
-    *--sp = frame->user_rsp;
-    *--sp = frame->rip;
-    *--sp = frame->rflags;
-    *--sp = frame->r8;
-    *--sp = frame->r9;
-    *--sp = frame->r10;
-    *--sp = (uint64_t)(uintptr_t)fork_child_return;
-    *--sp = 0;  /* rbx */
-    *--sp = 0;  /* rbp */
-    *--sp = 0;  /* r12 */
-    *--sp = 0;  /* r13 */
-    *--sp = 0;  /* r14 */
-    *--sp = 0;  /* r15 <- task.rsp points here */
+
+    /* CPU ring-3 interrupt frame (ss = highest address) */
+    *--sp = 0x1B;                   /* ss = user data selector              */
+    *--sp = frame->user_rsp;        /* user RSP                             */
+    *--sp = frame->rflags;          /* RFLAGS                               */
+    *--sp = 0x23;                   /* cs = user code selector              */
+    *--sp = frame->rip;             /* RIP = resume point after fork()      */
+
+    /* ISR stub: ISR_NOERR pushes error_code(0) then vector(0) */
+    *--sp = 0;                      /* error_code                           */
+    *--sp = 0;                      /* vector                               */
+
+    /* GPRs: isr_common_stub pushes rax first (high) → r15 last (low).
+     * We build in reverse: r15 first (*--sp) → rax last. */
+    *--sp = 0;                      /* rax = 0  (fork returns 0 in child)   */
+    *--sp = 0;                      /* rbx                                  */
+    *--sp = frame->rip;             /* rcx = return RIP (SYSCALL semantics) */
+    *--sp = 0;                      /* rdx                                  */
+    *--sp = 0;                      /* rsi                                  */
+    *--sp = 0;                      /* rdi                                  */
+    *--sp = 0;                      /* rbp                                  */
+    *--sp = frame->r8;              /* r8                                   */
+    *--sp = frame->r9;              /* r9                                   */
+    *--sp = frame->r10;             /* r10                                  */
+    *--sp = frame->rflags;          /* r11 = RFLAGS (SYSCALL semantics)     */
+    *--sp = 0;                      /* r12                                  */
+    *--sp = 0;                      /* r13                                  */
+    *--sp = 0;                      /* r14                                  */
+    *--sp = 0;                      /* r15                                  */
+
+    /* CR3 slot: restored by isr_post_dispatch before iretq */
+    *--sp = (uint64_t)child->pml4_phys;
+
+    /* ctx_switch callee-save frame: ret addr + r15-r12/rbp/rbx */
+    *--sp = (uint64_t)(uintptr_t)isr_post_dispatch; /* ret addr            */
+    *--sp = 0;  /* rbx                                                      */
+    *--sp = 0;  /* rbp                                                      */
+    *--sp = 0;  /* r12                                                      */
+    *--sp = 0;  /* r13                                                      */
+    *--sp = 0;  /* r14                                                      */
+    *--sp = 0;  /* r15  <- child->task.rsp points here                      */
 
     child->task.rsp              = (uint64_t)(uintptr_t)sp;
     child->task.stack_base       = kstack;
@@ -818,11 +876,28 @@ retry:;
  *        AT_NULL  / 0
  *
  * Alignment: RSP % 16 == 8 on entry to _start, per SysV ABI.
+ *
+ * argv_bufs lives in a kva-allocated buffer (not on the kernel stack)
+ * because argv_bufs[64][256] = 16 KB exceeds the per-process kernel stack.
  */
 
 #define USER_STACK_TOP_EXEC   0x7FFFFFFF000ULL
 #define USER_STACK_NPAGES     4ULL
 #define USER_STACK_BASE_EXEC  (USER_STACK_TOP_EXEC - USER_STACK_NPAGES * 4096ULL)
+
+/* execve_argbuf_t — argv working storage allocated from kva.
+ *
+ * argv_bufs[64][256] alone is 16 KB — larger than a child process's
+ * 4-page kernel stack.  Allocating from kva avoids the overflow.
+ * Size: 64*256 + 65*8 + 64*8 = 17416 bytes → 5 kva pages.
+ */
+typedef struct {
+    char     argv_bufs[64][256];
+    char    *argv_ptrs[65];
+    uint64_t str_ptrs[64];
+} execve_argbuf_t;
+
+#define EXECVE_ARGBUF_PAGES 5   /* ceil(17416 / 4096) */
 
 static uint64_t
 sys_execve(syscall_frame_t *frame,
@@ -832,15 +907,21 @@ sys_execve(syscall_frame_t *frame,
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
+    /* Allocate argv working area from kva — too large for kernel stack. */
+    execve_argbuf_t *abuf = kva_alloc_pages(EXECVE_ARGBUF_PAGES);
+    if (!abuf)
+        return (uint64_t)-(int64_t)12;  /* ENOMEM */
+
+    uint64_t ret = 0;  /* overwritten on error; 0 = success */
+
     /* 1. Copy path from user (<=255 bytes) */
-    if (!user_ptr_valid(path_uptr, 1))
-        return (uint64_t)-(int64_t)14;   /* EFAULT */
     char path[256];
+    if (!user_ptr_valid(path_uptr, 1)) { ret = (uint64_t)-(int64_t)14; goto done; }
     {
         uint64_t i;
         for (i = 0; i < sizeof(path) - 1; i++) {
             if (!user_ptr_valid(path_uptr + i, 1))
-                return (uint64_t)-(int64_t)14;
+                { ret = (uint64_t)-(int64_t)14; goto done; }
             char c;
             copy_from_user(&c, (const void *)(uintptr_t)(path_uptr + i), 1);
             path[i] = c;
@@ -850,14 +931,12 @@ sys_execve(syscall_frame_t *frame,
     }
 
     /* 2. Copy argv from user (<=64 entries, each <=255 bytes) */
-    char  argv_bufs[64][256];
-    char *argv_ptrs[65];
-    int   argc = 0;
     {
+        int argc = 0;
         uint64_t ptr_addr = argv_uptr;
         while (argc < 64) {
             if (!user_ptr_valid(ptr_addr, 8))
-                return (uint64_t)-(int64_t)14;
+                { ret = (uint64_t)-(int64_t)14; goto done; }
             uint64_t str_ptr;
             copy_from_user(&str_ptr,
                            (const void *)(uintptr_t)ptr_addr, 8);
@@ -866,26 +945,28 @@ sys_execve(syscall_frame_t *frame,
                 uint64_t i;
                 for (i = 0; i < 255; i++) {
                     if (!user_ptr_valid(str_ptr + i, 1))
-                        return (uint64_t)-(int64_t)14;
+                        { ret = (uint64_t)-(int64_t)14; goto done; }
                     char c;
                     copy_from_user(&c,
                         (const void *)(uintptr_t)(str_ptr + i), 1);
-                    argv_bufs[argc][i] = c;
+                    abuf->argv_bufs[argc][i] = c;
                     if (c == '\0') break;
                 }
             }
-            argv_bufs[argc][255] = '\0';
-            argv_ptrs[argc] = argv_bufs[argc];
+            abuf->argv_bufs[argc][255] = '\0';
+            abuf->argv_ptrs[argc] = abuf->argv_bufs[argc];
             argc++;
             ptr_addr += 8;
         }
-        argv_ptrs[argc] = (char *)0;
-    }
+        abuf->argv_ptrs[argc] = (char *)0;
+        /* argc is now a block-local — capture it for the rest of the function */
+        {
+    int argc2 = argc;
 
     /* 3. Look up path in initrd */
     vfs_file_t f;
     if (initrd_open(path, &f) != 0)
-        return (uint64_t)-(int64_t)2;    /* ENOENT */
+        { ret = (uint64_t)-(int64_t)2; goto done; }  /* ENOENT */
 
     /* 4. Free all user leaf pages; reuse PML4 and page-table structure */
     vmm_free_user_pages(proc->pml4_phys);
@@ -901,7 +982,7 @@ sys_execve(syscall_frame_t *frame,
     if (elf_load(proc->pml4_phys,
                  (const uint8_t *)initrd_get_data(&f),
                  (size_t)initrd_get_size(&f), &er) != 0)
-        return (uint64_t)-(int64_t)8;    /* ENOEXEC */
+        { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
     proc->brk = er.brk;
 
     /* 7. Allocate + map 4 user stack pages (16 KB) */
@@ -909,7 +990,7 @@ sys_execve(syscall_frame_t *frame,
         uint64_t pn;
         for (pn = 0; pn < USER_STACK_NPAGES; pn++) {
             uint64_t phys = pmm_alloc_page();
-            if (!phys) return (uint64_t)-(int64_t)12;  /* ENOMEM */
+            if (!phys) { ret = (uint64_t)-(int64_t)12; goto done; }  /* ENOMEM */
             vmm_zero_page(phys);
             vmm_map_user_page(proc->pml4_phys,
                               USER_STACK_BASE_EXEC + pn * 4096ULL, phys,
@@ -927,20 +1008,19 @@ sys_execve(syscall_frame_t *frame,
     uint64_t sp_va = USER_STACK_TOP_EXEC;
 
     /* 8a. Write argv strings onto the stack, recording their VAs */
-    uint64_t str_ptrs[64];
     {
         int i;
-        for (i = argc - 1; i >= 0; i--) {
+        for (i = argc2 - 1; i >= 0; i--) {
             uint64_t slen = 0;
-            while (argv_ptrs[i][slen]) slen++;
+            while (abuf->argv_ptrs[i][slen]) slen++;
             slen++;  /* include null terminator */
             if (sp_va - slen < USER_STACK_BASE_EXEC)
-                return (uint64_t)-(int64_t)7;   /* E2BIG */
+                { ret = (uint64_t)-(int64_t)7; goto done; }  /* E2BIG */
             sp_va -= slen;
             if (vmm_write_user_bytes(proc->pml4_phys, sp_va,
-                                     argv_ptrs[i], slen) != 0)
-                return (uint64_t)-(int64_t)14;  /* EFAULT */
-            str_ptrs[i] = sp_va;
+                                     abuf->argv_ptrs[i], slen) != 0)
+                { ret = (uint64_t)-(int64_t)14; goto done; }  /* EFAULT */
+            abuf->str_ptrs[i] = sp_va;
         }
     }
 
@@ -955,7 +1035,8 @@ sys_execve(syscall_frame_t *frame,
      * + 10 (5 auxv key/value pairs)
      * = argc + 13 qwords
      */
-    uint64_t table_qwords = (uint64_t)(argc + 13);
+    {
+    uint64_t table_qwords = (uint64_t)(argc2 + 13);
     uint64_t table_bytes  = table_qwords * 8ULL;
 
     /* Ensure RSP % 16 == 8 on entry to _start */
@@ -963,7 +1044,7 @@ sys_execve(syscall_frame_t *frame,
     if ((sp_va % 16) != 8)
         sp_va -= 8;
     if (sp_va < USER_STACK_BASE_EXEC)
-        return (uint64_t)-(int64_t)7;   /* E2BIG */
+        { ret = (uint64_t)-(int64_t)7; goto done; }  /* E2BIG */
 
     /* 8b. Write the pointer table */
     {
@@ -971,73 +1052,79 @@ sys_execve(syscall_frame_t *frame,
         uint64_t wp = sp_va;
 
         if (vmm_write_user_u64(proc->pml4_phys, wp,
-                               (uint64_t)argc) != 0)
-            return (uint64_t)-(int64_t)14;
+                               (uint64_t)argc2) != 0)
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
-        for (i = 0; i < argc; i++) {
+        for (i = 0; i < argc2; i++) {
             if (vmm_write_user_u64(proc->pml4_phys, wp,
-                                   str_ptrs[i]) != 0)
-                return (uint64_t)-(int64_t)14;
+                                   abuf->str_ptrs[i]) != 0)
+                { ret = (uint64_t)-(int64_t)14; goto done; }
             wp += 8;
         }
 
         /* argv NULL terminator */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
         /* envp NULL (empty environment) */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
         /* auxv: AT_PHDR */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 3ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, er.phdr_va) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
         /* auxv: AT_PHNUM */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 5ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp,
                                (uint64_t)er.phdr_count) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
         /* auxv: AT_PAGESZ */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 6ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, 4096ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
         /* auxv: AT_ENTRY */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 9ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, er.entry) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
         /* auxv: AT_NULL (end sentinel) */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            return (uint64_t)-(int64_t)14;
+            { ret = (uint64_t)-(int64_t)14; goto done; }
     }
+    } /* table_qwords/table_bytes scope */
 
     /* 9. Redirect SYSRET to new ELF entry point */
     frame->rip      = er.entry;
     frame->user_rsp = sp_va;
+    /* ret = 0 (success) */
+        } /* argc2 scope */
+    } /* argc scope */
 
-    return 0;
+done:
+    kva_free_pages(abuf, EXECVE_ARGBUF_PAGES);
+    return ret;
 }
 
 uint64_t

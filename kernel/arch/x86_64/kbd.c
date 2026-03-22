@@ -92,8 +92,23 @@ char
 kbd_read(void)
 {
     char c;
+    /*
+     * Re-enable interrupts while waiting for a keystroke.
+     *
+     * SYSCALL entry clears IF via SFMASK.  Without sti here, PS/2 IRQ1
+     * is permanently held pending and kbd_handler never fires — keyboard
+     * input is impossible.
+     *
+     * Pattern: sti → hlt (sleep until next IRQ) → cli when done.
+     * hlt is atomic with respect to pending interrupts: if an IRQ arrives
+     * between the poll and hlt, the CPU wakes immediately, so there is no
+     * lost-wakeup race.  cli restores the IF=0 invariant for the remainder
+     * of the syscall.
+     */
+    __asm__ volatile("sti");
     while (!kbd_poll(&c))
-        ;   /* spin — task_kbd yields on next timer tick */
+        __asm__ volatile("hlt");
+    __asm__ volatile("cli");
     return c;
 }
 

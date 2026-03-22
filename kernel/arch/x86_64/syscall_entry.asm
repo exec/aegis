@@ -117,27 +117,7 @@ proc_enter_user:
     mov  cr3, rax     ; switch to user PML4 — safe, on KSTACK_VA (shared)
     iretq
 
-; fork_child_return — SYSRET path for a newly-created child process.
-;
-; The child's kernel stack is built by sys_fork to exactly mirror the
-; syscall_frame_t layout at the top, with callee-saves below.  When
-; ctx_switch returns here via `ret`, the stack looks like:
-;   [rsp+0]  = saved r10  (frame->r10)
-;   [rsp+8]  = saved r9   (frame->r9)
-;   [rsp+16] = saved r8   (frame->r8)
-;   [rsp+24] = RFLAGS     (frame->rflags)
-;   [rsp+32] = user RIP   (frame->rip)
-;   [rsp+40] = user RSP   (frame->user_rsp)
-;
-; We restore r10/r9/r8 and RFLAGS/RIP/RSP exactly as the normal sysret
-; tail does, then force RAX=0 (child's return value from fork()).
-global fork_child_return
-fork_child_return:
-    pop  r10          ; restore user r10
-    pop  r9           ; restore user r9
-    pop  r8           ; restore user r8
-    pop  r11          ; RFLAGS → r11 (sysretq reads r11)
-    pop  rcx          ; user RIP → rcx (sysretq reads rcx)
-    mov  rax, 0       ; child returns 0 from fork()
-    pop  rsp          ; user RSP
-    o64 sysret
+; fork_child_return was removed in Phase 15 fix.
+; The child now enters user space via isr_post_dispatch (iretq path)
+; using a complete fake isr_common_stub frame built by sys_fork.
+; See kernel/arch/x86_64/isr.asm:isr_post_dispatch.
