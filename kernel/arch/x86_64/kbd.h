@@ -32,4 +32,9 @@ uint32_t kbd_get_foreground_pid(void);
  * is pending for the current process. Returns the character otherwise. */
 char kbd_read_interruptible(int *interrupted);
 
+/* Inject an ASCII character from USB HID into the keyboard ring buffer.
+ * Called from usb_hid_process_report() in interrupt context (PIT ISR path).
+ * Shares the PS/2 ring buffer; zero bytes are silently dropped. */
+void kbd_usb_inject(uint8_t ascii);
+
 #endif /* AEGIS_KBD_H */

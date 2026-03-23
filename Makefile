@@ -93,7 +93,9 @@ ARCH_ASMS = \
 SCHED_SRCS = kernel/sched/sched.c
 
 DRIVER_SRCS = \
-    kernel/drivers/nvme.c
+    kernel/drivers/nvme.c \
+    kernel/drivers/xhci.c \
+    kernel/drivers/usb_hid.c
 
 FS_SRCS = \
     kernel/fs/vfs.c \
@@ -333,6 +335,7 @@ run: iso
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial stdio -vga std -no-reboot -m 128M \
 	    $(NVME_FLAGS) \
+	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 shell:

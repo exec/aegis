@@ -140,6 +140,22 @@ kbd_poll(char *out)
     return 1;
 }
 
+/* kbd_usb_inject — inject an ASCII character from USB HID into the keyboard
+ * ring buffer.  Called from usb_hid_process_report() in interrupt context
+ * (PIT ISR → xhci_poll → usb_hid_process_report → here).
+ *
+ * Shares the same ring buffer as the PS/2 kbd_handler so that USB and PS/2
+ * keystrokes are delivered identically to kbd_read() / kbd_poll() callers.
+ * No separate unblock needed: kbd_read() spins on hlt and will wake on the
+ * next interrupt after buf_push() has placed the character. */
+void
+kbd_usb_inject(uint8_t ascii)
+{
+    if (ascii == 0)
+        return;
+    buf_push((char)ascii);
+}
+
 void
 kbd_set_foreground_pid(uint32_t pid)
 {
