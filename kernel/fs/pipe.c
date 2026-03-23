@@ -1,6 +1,8 @@
 #include "pipe.h"
 #include "vfs.h"
 #include "sched.h"
+#include "proc.h"
+#include "signal.h"
 #include "kva.h"
 #include "uaccess.h"
 #include <stdint.h>
@@ -110,8 +112,17 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
     char staging[PIPE_BUF_SIZE];
 
     for (;;) {
-        if (p->read_refs == 0)
+        if (p->read_refs == 0) {
+            /* Deliver SIGPIPE to the writer before returning -EPIPE.
+             * If the process has SIGPIPE masked or SIG_IGN, it handles
+             * -EPIPE via errno. SIGPIPE = 13 per POSIX. */
+            aegis_task_t *t = sched_current();
+            if (t && t->is_user) {
+                aegis_process_t *p_cur = (aegis_process_t *)t;
+                signal_send_pid(p_cur->pid, SIGPIPE);
+            }
             return -32;   /* EPIPE: all readers gone */
+        }
         if (p->count == PIPE_BUF_SIZE) {
             /* Block until a reader drains some data. */
             p->writer_waiting = sched_current();
