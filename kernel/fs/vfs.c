@@ -30,6 +30,7 @@ typedef struct {
     uint32_t ino;           /* ext2 inode number */
     uint32_t write_offset;  /* current sequential write position */
     uint32_t in_use;        /* 1 if slot is occupied */
+    uint32_t ref_count;     /* number of open fds sharing this slot */
 } ext2_fd_priv_t;
 
 #define EXT2_FD_POOL 32
@@ -44,6 +45,7 @@ ext2_pool_alloc(uint32_t ino)
             s_ext2_pool[i].ino          = ino;
             s_ext2_pool[i].write_offset = 0;
             s_ext2_pool[i].in_use       = 1;
+            s_ext2_pool[i].ref_count    = 1;
             return &s_ext2_pool[i];
         }
     }
@@ -53,7 +55,10 @@ ext2_pool_alloc(uint32_t ino)
 static void
 ext2_pool_free(ext2_fd_priv_t *p)
 {
-    if (p)
+    if (!p) return;
+    if (p->ref_count > 0)
+        p->ref_count--;
+    if (p->ref_count == 0)
         p->in_use = 0;
 }
 
@@ -120,11 +125,9 @@ ext2_vfs_close_fn(void *priv)
 static void
 ext2_vfs_dup_fn(void *priv)
 {
-    /* dup shares the same priv pointer. Closing either fd frees the shared
-     * pool slot; subsequent access via the remaining fd will use a freed priv
-     * pointer (use-after-free). Safe only when ext2 fds are never dup'd, which
-     * holds for Phase 21 shell workloads. */
-    (void)priv;
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
+    if (p)
+        p->ref_count++;
 }
 
 static int
