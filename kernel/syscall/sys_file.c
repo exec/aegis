@@ -413,8 +413,11 @@ sys_lseek(uint64_t arg1, uint64_t arg2, uint64_t arg3)
             return (uint64_t)-(int64_t)22;   /* EINVAL */
         new_off = (int64_t)f->offset + off;
     } else if (arg3 == 2) { /* SEEK_END */
-        /* Guard against signed overflow: f->size is uint64_t, off is int64_t */
-        if (off > 0 && (int64_t)f->size > (int64_t)0x7FFFFFFFFFFFFFFFLL - off)
+        /* Guard against signed overflow: f->size is uint64_t.
+         * Reject if f->size itself exceeds INT64_MAX, or if adding a positive
+         * off would push the result past INT64_MAX. */
+        if (f->size > (uint64_t)0x7FFFFFFFFFFFFFFFLL ||
+            (off > 0 && (int64_t)f->size > (int64_t)0x7FFFFFFFFFFFFFFFLL - off))
             return (uint64_t)-(int64_t)22;   /* EINVAL */
         new_off = (int64_t)f->size + off;
     } else
