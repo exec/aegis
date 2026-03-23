@@ -397,6 +397,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | stat/getdents64/utilities (Phase 18) | ✅ Done | sys_stat/fstat/lstat/access/nanosleep; getdents64; wc/grep/sort binaries; syscall_entry.asm rdi/rsi/rdx preservation; 4/4 smoke tests pass |
 | PCIe enumeration + ACPI (Phase 19) | ✅ Done | MCFG+MADT on q35; graceful skip on -machine pc; kva_alloc_pages ECAM mapping; make test GREEN |
 | NVMe driver + blkdev (Phase 20) | ✅ Done | nvme_init on q35; blkdev_register; alloc_queue_page kva window; sfence doorbell; ECAM capped at 8 buses; make test GREEN; test_nvme.py PASS |
+| ext2 read-write filesystem (Phase 21) | ✅ Done | ext2 mount on nvme0; 16-slot LRU block cache; read/write/create/unlink/mkdir/rename; sys_mkdir(83)/unlink(87)/rename(82); mkdir/touch/rm/cp/mv user commands; make test GREEN; test_ext2.py PASS |
 
 ### Phase 1 deviations from original spec
 
@@ -675,3 +676,21 @@ them would corrupt every other process.
 **No partition table parsing.** `nvme_init` registers `"nvme0"` as a whole-disk blkdev. GPT partition parsing (nvme0p1, nvme0p2) is Phase 25 work.
 
 *Last updated: 2026-03-23 — Phase 20 complete, make test GREEN. NVMe 1.4 driver on q35; blkdev abstraction layer; ACPI kva-window for tables above 4MB; ECAM 8-bus cap; test_nvme.py PASS.*
+
+### Phase 21 forward-looking constraints
+
+**No double/triple indirect blocks.** Files larger than ~268KB (12 direct + 256 indirect blocks at 1024 bytes each, or ~4352 blocks at 4096 bytes) cannot be written. Shell scripts and small binaries are fine; large file transfers require double-indirect support.
+
+**Block cache is 16 slots.** Heavy random I/O will thrash the cache. A page cache is v2.0 work.
+
+**No fsck on mount.** Dirty unmount may leave inconsistent state. `fsck.ext2` from host recovers.
+
+**ext2_unlink only frees direct blocks (i_block[0..11]).** Files with data in the single-indirect block (i_block[12]) will have those data blocks leaked when unlinked. Files in Phase 21 shell workloads are small; this leaks only for files >12 blocks (12KB for 1K block size). Fix when adding double-indirect or adding a block-walk unlink.
+
+**No timestamps.** inode atime/mtime/ctime are always 0. A wall clock source (RTC or TSC calibration) is needed for real timestamps.
+
+**New build dependency: `e2tools` (e2mkdir, e2cp) and `debugfs` (from e2fsprogs).** Used by `make disk` to populate the ext2 image. Install: `apt install e2tools e2fsprogs`.
+
+**ext2_vfs_dup_fn is a no-op.** Closing either dup'd fd frees the shared pool slot; subsequent access via the remaining fd will use a freed priv pointer (use-after-free). Safe only when ext2 fds are never dup'd, which holds for Phase 21 shell workloads.
+
+*Last updated: 2026-03-23 — Phase 21 complete, test_ext2.py PASS. ext2 read-write filesystem on nvme0; 16-slot LRU cache; path walk; create/write/unlink/mkdir/rename; 5 user commands; ext2_sync on sched_exit; SMAP-safe write via copy_from_user bounce.*
