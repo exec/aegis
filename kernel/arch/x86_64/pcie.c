@@ -14,6 +14,7 @@
 #include "vmm.h"
 #include "kva.h"
 #include <stdint.h>
+#include <stddef.h>
 
 /* SAFETY: s_ecam_base is a kernel VA pointing to MMIO config space.
  * Mapped via kva_alloc_pages + vmm_map_page in pcie_init().

@@ -15,6 +15,8 @@
 [SMAP] OK: supervisor access prevention active
 [VFS] OK: initialized
 [INITRD] OK: 13 files registered
+[ACPI] OK: MADT parsed, no MCFG (legacy machine)
+[PCIE] OK: skipped (no ECAM)
 [CAP] OK: 3 capabilities granted to init
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 2 tasks

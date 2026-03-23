@@ -67,7 +67,9 @@ ARCH_SRCS = \
     kernel/arch/x86_64/gdt.c \
     kernel/arch/x86_64/tss.c \
     kernel/arch/x86_64/arch_syscall.c \
-    kernel/arch/x86_64/arch_smap.c
+    kernel/arch/x86_64/arch_smap.c \
+    kernel/arch/x86_64/acpi.c \
+    kernel/arch/x86_64/pcie.c
 
 CORE_SRCS = \
     kernel/core/main.c \
@@ -267,6 +269,7 @@ iso: $(BUILD)/aegis.iso
 
 run: iso
 	qemu-system-x86_64 \
+	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial stdio -vga std -no-reboot -m 128M \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04

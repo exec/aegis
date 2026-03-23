@@ -8,6 +8,8 @@
 #include "../proc/proc.h"
 #include "vfs.h"
 #include "console.h"
+#include "acpi.h"
+#include "pcie.h"
 #include <stdint.h>
 
 /*
@@ -55,6 +57,8 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_sse_init();        /* enable SSE for user mode (CR0/CR4 bits)       */
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
+    acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
+    pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */
