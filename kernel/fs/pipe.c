@@ -56,6 +56,16 @@ pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
     pipe_t *p = (pipe_t *)priv;
     (void)off;
 
+    /*
+     * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
+     * Reset to 0 rather than panic — index corruption is a kernel bug, not
+     * user-visible input, and a silent reset is safer than an undiagnosable
+     * halt. The ring invariant (read_pos < PIPE_BUF_SIZE) is restored before
+     * any arithmetic that could wrap or overflow.
+     */
+    if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
+    if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
+
     for (;;) {
         if (p->count == 0 && p->write_refs == 0)
             return 0;   /* EOF: all writers gone */
@@ -110,6 +120,14 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
 {
     pipe_t *p = (pipe_t *)priv;
     char staging[PIPE_BUF_SIZE];
+
+    /*
+     * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
+     * Same rationale as pipe_read_fn: silent reset preferred over panic for
+     * kernel-internal corruption. Restores invariant before any wrap arithmetic.
+     */
+    if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
+    if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
 
     for (;;) {
         if (p->read_refs == 0) {

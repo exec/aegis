@@ -16,6 +16,9 @@ pub struct CapSlot {
 
 const ENOCAP: u32 = 130;
 
+/* Must match CAP_TABLE_SIZE in kernel/cap/cap.h */
+const CAP_TABLE_SIZE: u32 = 8;
+
 /// Initialize the capability subsystem.
 ///
 /// Phase 11: prints status line, returns immediately.
@@ -49,6 +52,9 @@ pub extern "C" fn cap_grant(
     kind: u32,
     rights: u32,
 ) -> i32 {
+    /* Clamp n to CAP_TABLE_SIZE so from_raw_parts_mut never reads past the
+     * statically-allocated caps[] array, even if the caller passes a wrong value. */
+    let n = n.min(CAP_TABLE_SIZE);
     // SAFETY: `table` points to `n` CapSlot entries in the caller's PCB.
     // Called only from proc_spawn with proc->caps and CAP_TABLE_SIZE.
     // The PCB lives for the duration of the process; no concurrent mutation
@@ -56,6 +62,7 @@ pub extern "C" fn cap_grant(
     // The `caps` array is at a 4-byte-aligned offset within the page-aligned
     // PCB allocation (`kva_alloc_pages(1)` returns a page-aligned VA), so the
     // pointer meets the alignment requirement for `CapSlot` (align = 4).
+    // `n` is clamped to CAP_TABLE_SIZE above, so the slice length is bounded.
     let slots = unsafe { core::slice::from_raw_parts_mut(table, n as usize) };
     for (i, slot) in slots.iter_mut().enumerate() {
         if slot.kind == 0 {
@@ -76,10 +83,14 @@ pub extern "C" fn cap_check(
     kind: u32,
     rights: u32,
 ) -> i32 {
+    /* Clamp n to CAP_TABLE_SIZE so from_raw_parts never reads past the
+     * statically-allocated caps[] array, even if the caller passes a wrong value. */
+    let n = n.min(CAP_TABLE_SIZE);
     // SAFETY: `table` points to `n` CapSlot entries in the caller's PCB.
     // Called from syscall handlers with proc->caps and CAP_TABLE_SIZE.
     // The PCB is valid for the lifetime of the process; syscalls run on the
     // process's kernel stack with the process's PCB pointer from s_current.
+    // `n` is clamped to CAP_TABLE_SIZE above, so the slice length is bounded.
     let slots = unsafe { core::slice::from_raw_parts(table, n as usize) };
     for slot in slots {
         if slot.kind == kind && (slot.rights & rights) == rights {
