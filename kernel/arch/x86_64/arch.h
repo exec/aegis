@@ -79,6 +79,10 @@ const aegis_mem_region_t  *arch_mm_get_regions(void);
 uint32_t                   arch_mm_reserved_region_count(void);
 const aegis_mem_region_t  *arch_mm_get_reserved_regions(void);
 
+/* ACPI RSDP physical address — saved during multiboot2 tag scan.
+ * Returns 0 if no ACPI tag was found (e.g. -machine pc with SeaBIOS). */
+uint64_t arch_get_rsdp_phys(void);
+
 /* Physical base address of the kernel image (arch-defined load address).
  * pmm_init() uses this to reserve the kernel image pages. */
 #define ARCH_KERNEL_PHYS_BASE 0x100000UL
