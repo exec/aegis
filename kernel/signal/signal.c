@@ -6,6 +6,7 @@
 #include "printk.h"
 #include "idt.h"        /* for cpu_state_t */
 #include "syscall.h"    /* for syscall_frame_t */
+#include "vmm.h"        /* for vmm_switch_to, vmm_get_master_pml4 */
 #include <stdint.h>
 
 /*
@@ -77,7 +78,17 @@ signal_deliver(cpu_state_t *s)
     if (!user_ptr_valid(new_rsp, sizeof(sf))) {
         sched_exit();  /* never returns */
     }
+
+    /* signal_deliver is called while CR3 = master PML4 (isr_common_stub
+     * switches CR3 before calling isr_dispatch and this function).
+     * The user stack pages are only mapped in the process's user PML4.
+     * Switch to the user PML4 for copy_to_user, then back to master so
+     * the rest of the kernel (isr_post_dispatch, printk, etc.) can access
+     * kva-mapped objects.  isr_post_dispatch will restore the saved CR3
+     * from the stack slot after this function returns. */
+    vmm_switch_to(proc->pml4_phys);
     copy_to_user((void *)new_rsp, &sf, sizeof(sf));
+    vmm_switch_to(vmm_get_master_pml4());
 
     /* Redirect iretq to handler */
     s->rip    = (uint64_t)sa->sa_handler;
@@ -146,6 +157,7 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
     if (!user_ptr_valid(new_rsp, sizeof(sf))) {
         sched_exit();  /* never returns */
     }
+
     copy_to_user((void *)new_rsp, &sf, sizeof(sf));
 
     /* Patch sysret frame: return to handler instead of original RIP */

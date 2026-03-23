@@ -3,6 +3,7 @@
 #include "kbd.h"
 #include "proc.h"
 #include "sched.h"
+#include "printk.h"
 #include <stdint.h>
 
 static int
@@ -13,7 +14,9 @@ kbd_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 	char *kbuf = (char *)buf;
 	int   interrupted;
 	char  c = kbd_read_interruptible(&interrupted);
-	if (interrupted) return -4; /* EINTR */
+	if (interrupted) {
+		return -4; /* EINTR */
+	}
 	kbuf[0] = c;
 	return 1;
 }

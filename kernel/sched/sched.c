@@ -222,18 +222,23 @@ void
 sched_block(void)
 {
     aegis_task_t *old = s_current;
-    aegis_task_t *prev;
 
     old->state = TASK_BLOCKED;
 
-    /* Unlink old from the circular run queue.
-     * Walk to find the node whose next == old. */
-    prev = old;
-    while (prev->next != old)
-        prev = prev->next;
-    prev->next = old->next;  /* splice out old */
+    /* Leave old in the circular run queue with state=TASK_BLOCKED.
+     *
+     * Rationale: sched_exit's zombie-wakeup scan traverses the run queue
+     * looking for blocked parents (state==TASK_BLOCKED).  If sched_block
+     * removed the task from the queue, the scan could never find it and the
+     * parent would never be woken — the shell would stay blocked forever
+     * after the child exited.
+     *
+     * sched_tick and sched_yield_to_next already skip non-RUNNING tasks,
+     * so leaving BLOCKED tasks in the queue is safe.  sched_wake() simply
+     * transitions state back to TASK_RUNNING; no re-insertion is needed.
+     */
 
-    /* Advance s_current past the unlinked task; skip non-RUNNING tasks.
+    /* Advance s_current past the blocked task; skip non-RUNNING tasks.
      * task_idle guarantees the loop terminates. */
     s_current = old->next;
     while (s_current->state != TASK_RUNNING)
@@ -250,6 +255,15 @@ sched_block(void)
 
     ctx_switch(old, s_current);
 
+    /* Restore CR3 for the incoming user task after ctx_switch returns.
+     * sched_exit switches to master PML4 before context-switching to this
+     * task (via sched_yield_to_next).  Without this restore, a user task
+     * that was unblocked by sched_exit would resume with master PML4 loaded,
+     * causing any copy_to_user call (e.g. sys_waitpid wstatus write) to #PF
+     * because user stack pages are only mapped in the process's user PML4. */
+    if (s_current->is_user)
+        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+
     /* Restore FS.base for the incoming user task after ctx_switch returns.
      * sched_tick does this in its path; sched_block must mirror it.
      * Without this, a user task that was blocked while another user task
@@ -264,15 +278,10 @@ sched_block(void)
 void
 sched_wake(aegis_task_t *task)
 {
-    aegis_task_t *prev;
-
+    /* The task remains in the circular run queue (sched_block no longer
+     * removes it).  Simply transition state back to TASK_RUNNING so the
+     * scheduler's next pass will pick it up.  No list insertion needed. */
     task->state = TASK_RUNNING;
-    /* Insert before s_current: find the node whose next == s_current */
-    prev = s_current;
-    while (prev->next != s_current)
-        prev = prev->next;
-    task->next = s_current;
-    prev->next = task;
 }
 
 void
@@ -289,6 +298,15 @@ sched_yield_to_next(void)
         arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
 
     ctx_switch(old, s_current);
+
+    /* Restore CR3 for the incoming user task after ctx_switch returns.
+     * sched_exit calls vmm_switch_to(master_pml4) at its top, then calls
+     * sched_yield_to_next to switch away from the dying task.  The task
+     * that resumes here would have master PML4 loaded; any subsequent
+     * copy_to_user (e.g. sys_waitpid wstatus write) would #PF because the
+     * user stack pages are only mapped in the process's user PML4. */
+    if (s_current->is_user)
+        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
     /* Restore FS.base for the incoming user task after ctx_switch returns.
      * sched_tick does this in its path; sched_yield_to_next must mirror it.
