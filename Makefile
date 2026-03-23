@@ -108,6 +108,11 @@ FS_SRCS = \
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
+    kernel/syscall/sys_io.c \
+    kernel/syscall/sys_memory.c \
+    kernel/syscall/sys_process.c \
+    kernel/syscall/sys_file.c \
+    kernel/syscall/sys_signal.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
     $(INIT_BIN_C)
