@@ -20,4 +20,9 @@ const void *initrd_get_data(const vfs_file_t *f);
  * initrd_open.  Returns 0 if f->priv is NULL. */
 uint32_t initrd_get_size(const vfs_file_t *f);
 
+/* initrd_stat_entry — fill *out with stat for the initrd file at path.
+ * Returns 0 if found, -2 (ENOENT) if not found.
+ * Used by vfs_stat_path to avoid re-opening the file. */
+int initrd_stat_entry(const char *path, k_stat_t *out);
+
 #endif /* INITRD_H */

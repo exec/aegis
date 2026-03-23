@@ -93,12 +93,51 @@ initrd_close_fn(void *priv)
     (void)priv; /* static data, nothing to free */
 }
 
+static int
+initrd_stat_fn(void *priv, k_stat_t *st)
+{
+    const initrd_entry_t *e = (const initrd_entry_t *)priv;
+    uint32_t sz = entry_size(e);
+
+    /* Compute index of this entry in s_files for a synthetic inode */
+    uint64_t ino = 1;
+    {
+        uint32_t i;
+        for (i = 0; s_files[i].name != (const char *)0; i++) {
+            if (&s_files[i] == e) { ino = (uint64_t)(i + 2); break; }
+        }
+    }
+
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_dev     = 1;
+    st->st_ino     = ino;
+    st->st_nlink   = 1;
+    st->st_mode    = S_IFREG | 0444;
+    st->st_size    = (int64_t)sz;
+    st->st_blksize = 512;
+    st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+    return 0;
+}
+
+static int
+dir_stat_fn(void *priv, k_stat_t *st)
+{
+    (void)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_dev   = 1;
+    st->st_ino   = 1;  /* root dir inode */
+    st->st_nlink = 2;
+    st->st_mode  = S_IFDIR | 0555;
+    return 0;
+}
+
 static const vfs_ops_t initrd_ops = {
     .read    = initrd_read_fn,
     .write   = (void *)0,
     .close   = initrd_close_fn,
     .readdir = (void *)0,
     .dup     = (void *)0,
+    .stat    = initrd_stat_fn,
 };
 
 /* ── Directory entry type and static directory listings ────────────────── */
@@ -151,6 +190,7 @@ static const vfs_ops_t dir_ops = {
     .close   = dir_close_fn,
     .readdir = dir_readdir_fn,
     .dup     = (void *)0,
+    .stat    = dir_stat_fn,
 };
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
@@ -212,4 +252,23 @@ initrd_get_size(const vfs_file_t *f)
 {
     if (!f->priv) return 0;
     return entry_size((const initrd_entry_t *)f->priv);
+}
+
+/*
+ * initrd_stat_entry — fill *out with stat for the initrd file at path.
+ * Returns 0 if found, -2 (ENOENT) if not found.
+ * Used by vfs_stat_path to avoid re-opening the file.
+ */
+int
+initrd_stat_entry(const char *path, k_stat_t *out)
+{
+    uint32_t i;
+    for (i = 0; s_files[i].name != (const char *)0; i++) {
+        const char *a = path, *b = s_files[i].name;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == *b) {
+            return initrd_stat_fn((void *)&s_files[i], out);
+        }
+    }
+    return -2; /* ENOENT */
 }

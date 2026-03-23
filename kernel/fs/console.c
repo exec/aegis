@@ -45,12 +45,26 @@ console_close_fn(void *priv)
     (void)priv; /* stateless singleton — nothing to free */
 }
 
+static int
+console_stat_fn(void *priv, k_stat_t *st)
+{
+    (void)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_mode  = S_IFCHR | 0600;
+    st->st_ino   = 2;
+    st->st_rdev  = makedev(5, 1);  /* /dev/console: major=5 minor=1 */
+    st->st_dev   = 1;
+    st->st_nlink = 1;
+    return 0;
+}
+
 static const vfs_ops_t s_console_ops = {
     .read    = console_read_fn,
     .write   = console_write_fn,
     .close   = console_close_fn,
     .readdir = (void *)0,
     .dup     = (void *)0,
+    .stat    = console_stat_fn,
 };
 
 static vfs_file_t s_console_file = {

@@ -16,6 +16,7 @@ static void pipe_read_close_fn(void *priv);
 static void pipe_write_close_fn(void *priv);
 static void pipe_dup_read_fn(void *priv);
 static void pipe_dup_write_fn(void *priv);
+static int  pipe_stat_fn(void *priv, k_stat_t *st);
 
 const vfs_ops_t g_pipe_read_ops = {
     .read    = pipe_read_fn,
@@ -23,6 +24,7 @@ const vfs_ops_t g_pipe_read_ops = {
     .close   = pipe_read_close_fn,
     .readdir = (void *)0,
     .dup     = pipe_dup_read_fn,
+    .stat    = pipe_stat_fn,
 };
 
 const vfs_ops_t g_pipe_write_ops = {
@@ -31,6 +33,7 @@ const vfs_ops_t g_pipe_write_ops = {
     .close   = pipe_write_close_fn,
     .readdir = (void *)0,
     .dup     = pipe_dup_write_fn,
+    .stat    = pipe_stat_fn,
 };
 
 /*
@@ -193,4 +196,15 @@ static void
 pipe_dup_write_fn(void *priv)
 {
     ((pipe_t *)priv)->write_refs++;
+}
+
+static int
+pipe_stat_fn(void *priv, k_stat_t *st)
+{
+    pipe_t *p = (pipe_t *)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_mode = S_IFIFO | 0600;
+    st->st_ino  = 0;    /* anonymous pipe: no inode */
+    st->st_size = (int64_t)p->count;
+    return 0;
 }
