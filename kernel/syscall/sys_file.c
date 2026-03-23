@@ -51,7 +51,7 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     /* Store open flags in the fd slot for F_GETFL */
     proc->fds[fd].flags = (uint32_t)arg2;
     /* Propagate O_CLOEXEC from open flags to fd flags */
-    if (arg2 & 0x80000U)  /* O_CLOEXEC = 0x80000 on Linux x86-64 */
+    if (arg2 & VFS_O_CLOEXEC)
         proc->fds[fd].flags |= VFS_FD_CLOEXEC;
     return fd;
 }
@@ -417,8 +417,12 @@ sys_lseek(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (arg3 == 0)        /* SEEK_SET */
         new_off = off;
     else if (arg3 == 1) { /* SEEK_CUR */
-        /* Guard against signed overflow */
+        /* Guard against signed overflow in both directions.
+         * Positive: f->offset + off > INT64_MAX.
+         * Negative: f->offset + off < INT64_MIN (undefined behavior before check). */
         if (off > 0 && (int64_t)f->offset > (int64_t)0x7FFFFFFFFFFFFFFFLL - off)
+            return (uint64_t)-(int64_t)22;   /* EINVAL */
+        if (off < 0 && (int64_t)f->offset < (int64_t)0x8000000000000000LL - off)
             return (uint64_t)-(int64_t)22;   /* EINVAL */
         new_off = (int64_t)f->offset + off;
     } else if (arg3 == 2) { /* SEEK_END */
@@ -442,7 +446,7 @@ sys_lseek(uint64_t arg1, uint64_t arg2, uint64_t arg3)
  * sys_pipe2 — syscall 293
  *
  * arg1 = user pointer to int[2] — receives [read_fd, write_fd]
- * arg2 = flags (O_CLOEXEC etc.) — accepted, ignored (O_CLOEXEC deferred)
+ * arg2 = flags (O_CLOEXEC = 0x80000 supported; stored in fd flags via VFS_FD_CLOEXEC)
  *
  * Allocates a pipe_t from kva, installs read and write ends into two free
  * fd slots, writes the fd numbers to user pipefd.
@@ -491,7 +495,7 @@ sys_pipe2(uint64_t arg1, uint64_t arg2)
     proc->fds[wfd].flags  = 0;
 
     /* Propagate O_CLOEXEC to both pipe ends */
-    if (pipe_flags & 0x80000U) {  /* O_CLOEXEC */
+    if (pipe_flags & VFS_O_CLOEXEC) {
         proc->fds[rfd].flags |= VFS_FD_CLOEXEC;
         proc->fds[wfd].flags |= VFS_FD_CLOEXEC;
     }

@@ -399,6 +399,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | NVMe driver + blkdev (Phase 20) | ✅ Done | nvme_init on q35; blkdev_register; alloc_queue_page kva window; sfence doorbell; ECAM capped at 8 buses; make test GREEN; test_nvme.py PASS |
 | ext2 read-write filesystem (Phase 21) | ✅ Done | ext2 mount on nvme0; 16-slot LRU block cache; read/write/create/unlink/mkdir/rename; sys_mkdir(83)/unlink(87)/rename(82); mkdir/touch/rm/cp/mv user commands; make test GREEN; test_ext2.py PASS |
 | xHCI + USB HID keyboard (Phase 22) | ✅ Done | xHCI init on q35+qemu-xhci; USB HID boot protocol; kbd_usb_inject into PS/2 ring buffer; test_xhci.py PASS (init + shell prompt verified) |
+| Security audit (post-Phase 22) | ✅ Done | SMEP enabled; sa_handler validation; lseek overflow guards (SEEK_CUR + SEEK_END); ext2 dup ref counting; O_CLOEXEC full lifecycle; SIGPIPE delivery; pipe ring buffer guards; Rust CAP bounds clamp; all tests GREEN |
 
 ### Phase 1 deviations from original spec
 
@@ -510,9 +511,9 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 
 ### Phase 16 forward-looking constraints
 
-**`O_CLOEXEC` deferred.** `sys_pipe2` accepts but ignores the `O_CLOEXEC` flag. Pipe fds are inherited by `execve`. A server that forks workers while holding pipe fds will leak them into workers. Implement `O_CLOEXEC` alongside Phase 17 signal work.
+**`O_CLOEXEC` implemented** (security audit post-Phase 22). `sys_open`, `sys_pipe2` propagate the flag; `sys_dup`/`sys_dup2` clear it on the new fd (POSIX); `sys_execve` closes all CLOEXEC fds with full slot zero before loading the new image; `sys_fcntl` F_GETFD/F_SETFD are live.
 
-**`SIGPIPE` deferred.** Writers to a closed-read pipe get `-EPIPE` (errno), not a signal. musl handles `-EPIPE` gracefully. Full `SIGPIPE` delivery requires Phase 17 signal infrastructure.
+**`SIGPIPE` implemented** (security audit post-Phase 22). `pipe_write_fn` calls `signal_send_pid(pid, SIGPIPE)` before returning `-EPIPE` when the read end is closed. Kernel tasks with `is_user == 0` receive `-EPIPE` only (no signal).
 
 **Single waiter per pipe end.** `pipe_t` holds one `reader_waiting` and one `writer_waiting`. Multiple concurrent readers or writers on the same pipe end are not supported — the second waiter is never woken. Not a concern for Phase 16 shell pipelines.
 
@@ -713,3 +714,9 @@ them would corrupt every other process.
 **Transfer ring memory is never freed.** Each device slot's transfer ring is allocated permanently. USB device disconnect does not reclaim resources.
 
 **QEMU usb-kbd Enable Slot timing.** In Phase 22 testing with QEMU's `usb-kbd`, the Enable Slot command may time out during boot (the USB device appears after the kernel scans ports). Razer BlackWidow V3 real hardware testing is deferred — VFIO passthrough via `-device vfio-pci,host=12:00.4` is documented in project memory.
+
+### Security audit forward-looking constraints (post-Phase 22)
+
+**`sys_lseek` SEEK_CUR negative overflow is now guarded.** The audit initially only added the positive overflow guard; the code review identified the missing negative direction. Both guards are now present: `off > 0 && f->offset > INT64_MAX - off` and `off < 0 && f->offset < INT64_MIN - off`. The downstream `new_off < 0` check provides a second defense but relies on UB arithmetic — both guards are required.
+
+**`VFS_O_CLOEXEC` constant replaces bare `0x80000U` literals.** Defined in `vfs.h` alongside `VFS_FD_CLOEXEC`. Both are `0x80000U` by design — same Linux x86-64 value, no shift needed at fd install time. Do not change one without changing the other.

@@ -94,8 +94,13 @@ void vfs_init(void);
 /* Linux O_CREAT flag value (used by vfs_open for ext2 file creation) */
 #define VFS_O_CREAT 0x40U
 
+/* VFS_O_CLOEXEC — Linux O_CLOEXEC flag value, as passed in open/pipe2 flags arg.
+ * Must match VFS_FD_CLOEXEC so that `flags & VFS_O_CLOEXEC` maps to the fd bit. */
+#define VFS_O_CLOEXEC 0x80000U
+
 /* FD_CLOEXEC — close-on-exec flag stored in vfs_file_t.flags.
- * Set when O_CLOEXEC is passed to open/pipe2; cleared on dup/dup2 (POSIX). */
+ * Set when O_CLOEXEC is passed to open/pipe2; cleared on dup/dup2 (POSIX).
+ * Same bit value as VFS_O_CLOEXEC by design — no shift needed at install time. */
 #define VFS_FD_CLOEXEC 0x80000U
 
 /* vfs_open — find a file by path across all registered drivers.

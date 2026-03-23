@@ -133,7 +133,9 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
         if (p->read_refs == 0) {
             /* Deliver SIGPIPE to the writer before returning -EPIPE.
              * If the process has SIGPIPE masked or SIG_IGN, it handles
-             * -EPIPE via errno. SIGPIPE = 13 per POSIX. */
+             * -EPIPE via errno. SIGPIPE = 13 per POSIX.
+             * Kernel tasks (is_user == 0) have no sigactions and must not
+             * receive signals; they get -EPIPE only and must check it. */
             aegis_task_t *t = sched_current();
             if (t && t->is_user) {
                 aegis_process_t *p_cur = (aegis_process_t *)t;
