@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase 16 pipe smoke tests. Boots the shell ISO and sends pipe commands."""
-import subprocess, time, sys, os, socket, select, tempfile
+import subprocess, time, sys, os, socket, select, tempfile, fcntl
 
 QEMU         = "qemu-system-x86_64"
 ISO          = "build/aegis.iso"
@@ -79,28 +79,35 @@ def _type_string(mon_sock, text):
 
 
 def _read_until_prompt(proc, deadline):
-    """Read serial bytes from proc.stdout until '\\n# ' is seen or deadline.
+    """Read serial bytes from proc.stdout until '\\n#' is seen or deadline.
 
-    The shell prompt is always written as '# ' on a fresh line, so we match
-    '\\n# ' rather than bare '# '.  This prevents a false-early return when
-    the prompt arrives before command output (e.g. on a slow machine where the
-    boot timeout expired and the keystroke was pre-buffered in the PS/2 ring):
-    in that case serial output is 'ready\\n# hello\\n# ' and bare '# ' would
-    trigger at 'ready\\n# ' before 'hello' is seen.
+    Uses os.read() on the raw fd with O_NONBLOCK to bypass Python's
+    BufferedReader.  Python's buffered read(1) drains the entire OS pipe into
+    an internal buffer on the first select() fire, leaving the fd empty so
+    subsequent select() calls never trigger — the buffered bytes are then
+    never consumed.  os.read() reads directly from the OS pipe, keeping
+    select() and reads consistent.
 
-    For the very first call (boot wait) the boot text also ends with '\\n# ',
-    so detection works the same way.
+    Matches '\\n#' (without requiring the trailing space) because the shell
+    prompt '# ' may arrive partially: the '#' and ' ' can land in different
+    QEMU serial-to-stdio write batches.
     """
+    fd = proc.stdout.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
     buf = b""
     while time.time() < deadline:
         ready, _, _ = select.select([proc.stdout], [], [], 0.1)
         if not ready:
             continue
-        chunk = proc.stdout.read(1)
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            continue
         if not chunk:
             break
         buf += chunk
-        if b"\n# " in buf:
+        if b"\n#" in buf:
             return buf.decode(errors="replace")
     return buf.decode(errors="replace")
 

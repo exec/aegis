@@ -282,6 +282,25 @@ If any of these fail, stop and tell the user before writing code.
 
 ---
 
+## QEMU Boot Time — Non-Negotiable Invariant
+
+**QEMU must boot to the shell/init prompt in under 30 seconds on this machine.**
+
+If a QEMU session takes more than 30 seconds to reach the first shell prompt,
+something is wrong — investigate and fix it before running any tests. Do not
+accept, work around, or paper over slow boots.
+
+When a test fails, the debug cycle is: **one failure → diagnose → fix → one retry**.
+Do NOT loop retrying the same failing test more than 2 times without changing
+something. If a test keeps failing, stop, read the output carefully, use
+`make gdb` or serial output to understand why, then fix the root cause.
+
+The `BOOT_TIMEOUT=900` in test scripts is a safety net for loaded CI machines,
+not a target. Normal boots are 10–20 seconds. If you see a test waiting more than
+60 seconds for a boot prompt, kill QEMU and check what is wrong.
+
+---
+
 ## Debug Tooling (added Phase 15 post-fix)
 
 These tools exist to shorten debugging sessions. Use them whenever there
@@ -373,6 +392,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | musl port (Phase 14) | ✅ Done | musl-gcc static binary; sys_mmap anon bump; sys_arch_prctl TLS; sys_writev; SSE init; r8/r9/r10 preserved |
 | musl port + shell (Phase 15) | ✅ Done | fork/execve/waitpid; interactive shell; 8 companion programs in initrd |
 | Pipes + I/O redirection (Phase 16) | ✅ Done | sys_pipe2/dup/dup2; pipe.c ring buffer; shell pipeline parser; 5/5 smoke tests pass |
+| Signals (Phase 17) | ✅ Done | sigaction/sigprocmask/sigreturn/kill/setfg; Ctrl-C kills foreground; iretq+sysret delivery paths; 1/1 smoke test pass |
 
 ### Phase 1 deviations from original spec
 
@@ -473,6 +493,14 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 **`signal_deliver` is called on every interrupt including ring-0.** The cs check (`s->cs != 0x23`) guards against delivering to kernel context, but the call itself has a small overhead on every PIT tick and keyboard interrupt. If interrupt rate becomes a concern, guard the call in `isr.asm` with a ring-3 check in assembly before the `call signal_deliver`.
 
 **`proc_spawn` kernel stack (4KB) is safe for signal delivery.** Maximum depth at `signal_deliver` entry from RSP0: ~750 bytes (cpu_state_t + signal_deliver frame + 560-byte `rt_sigframe_t` local). 4KB minus 750 bytes leaves ~3350 bytes of headroom, which is adequate.
+
+**Partial GPR restore via sysret sigreturn.** Only rip/rflags/rsp/r8/r9/r10 are in `syscall_frame_t` and restored by `sys_rt_sigreturn`. rbx/rbp/r12-r15/rax/rcx/rdx/rsi/rdi are not restored (they survive through the C call chain for callee-saved regs per SysV ABI). A future phase may add full cpu_state_t on the syscall path.
+
+**No SIGPIPE.** Pipe write with no readers returns -EPIPE (errno) but does not deliver SIGPIPE signal. musl handles -EPIPE gracefully. Add SIGPIPE delivery in Phase 19+.
+
+**No process groups / setpgid.** Ctrl-C delivers to a single foreground PID only (sys_setfg). pgid field deferred to when setpgid/getpgid syscalls are implemented.
+
+**Right Ctrl does not track as Ctrl.** Scancode 0xE0 prefix (right Ctrl, right Alt, etc.) is filtered by `if (sc == 0xE0) return` in kbd_handler. Only left Ctrl (0x1D) is tracked.
 
 ### Phase 16 forward-looking constraints
 
@@ -599,3 +627,5 @@ them would corrupt every other process.
 *Last updated: 2026-03-21 — Phase 15 post-fix: three bugs resolved, test_shell.py all 9 commands clean. (1) fork_child_return SYSRET path replaced with isr_post_dispatch iretq path — child's first scheduling now uses complete fake isr_common_stub frame, eliminating r12=0 #PF. (2) arch_set_fs_base now set BEFORE ctx_switch for incoming task in sched_tick/block/yield_to_next. (3) sys_open 256-byte bulk copy replaced with byte-by-byte null-terminated copy — prevents #PF when argv string is within 256 bytes of USER_STACK_TOP (0x7fffffff000). console_write_fn capped to current page boundary.*
 
 *Last updated: 2026-03-21 — Phase 16 complete, test_pipe.py 5/5 GREEN. sys_pipe2/dup/dup2; kernel/fs/pipe.c ring buffer; shell pipeline parser; I/O redirection (<, >, 2>&1). Root cause of test_redirect_stdin flakiness: boot takes 600+ s on loaded host; BOOT_TIMEOUT raised to 900 s and separated from CMD_TIMEOUT (120 s). sys_read gains page-boundary cap matching console_write_fn. test_pipe.py wired into run_tests.sh.*
+
+*Last updated: 2026-03-22 — Phase 17 complete, test_signal.py 1/1 GREEN. sigaction/sigprocmask/sigreturn/kill/setfg; iretq and sysret signal delivery paths; Ctrl-C kills foreground process via kbd_handler→signal_send_pid→signal_deliver. Three scheduler/CR3 bugs fixed: sched_block now leaves tasks in run queue so sched_exit can find blocked parents; CR3 restored to user PML4 after ctx_switch returns in sched_block/sched_yield_to_next; signal_deliver temporarily switches to user PML4 for copy_to_user.*
