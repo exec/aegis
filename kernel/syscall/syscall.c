@@ -206,7 +206,7 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (fd == PROC_MAX_FDS)
         return (uint64_t)-24;  /* EMFILE */
 
-    int r = vfs_open(kpath, &proc->fds[fd]);
+    int r = vfs_open(kpath, (int)arg2, &proc->fds[fd]);
     if (r < 0)
         return (uint64_t)(int64_t)r;
     /* Store open flags in the fd slot for F_GETFL */

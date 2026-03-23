@@ -91,10 +91,14 @@ _Static_assert(sizeof(vfs_file_t) == 40, "vfs_file_t must be 40 bytes");
  * Called from kernel_main before sched_init. */
 void vfs_init(void);
 
+/* Linux O_CREAT flag value (used by vfs_open for ext2 file creation) */
+#define VFS_O_CREAT 0x40U
+
 /* vfs_open — find a file by path across all registered drivers.
+ * flags: open flags (e.g. VFS_O_CREAT to create the file if missing on ext2).
  * Populates *out on success; returns 0 on success, -2 (ENOENT) if not found.
  * Called by sys_open to resolve path to a vfs_file_t. */
-int vfs_open(const char *path, vfs_file_t *out);
+int vfs_open(const char *path, int flags, vfs_file_t *out);
 
 /* vfs_stat_path — stat a file by path.
  * Handles initrd files, directory paths (/,/etc,/bin), and /dev/ specials.

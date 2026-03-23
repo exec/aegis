@@ -11,6 +11,7 @@
 #include "acpi.h"
 #include "pcie.h"
 #include "nvme.h"
+#include "../fs/ext2.h"
 #include <stdint.h>
 
 /*
@@ -61,6 +62,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
+    ext2_mount("nvme0");    /* mount ext2 root — [EXT2] OK or silent (-1)   */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */

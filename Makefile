@@ -282,6 +282,13 @@ $(DISK):
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(DISK) bs=1M count=64 2>/dev/null
 	mke2fs -t ext2 -F -L aegis-root $(DISK)
+	e2mkdir $(DISK):/bin
+	e2mkdir $(DISK):/etc
+	e2mkdir $(DISK):/tmp
+	e2mkdir $(DISK):/home
+	e2cp $(BUILD)/shell.elf $(DISK):/bin/sh
+	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
+	e2cp /tmp/aegis-motd $(DISK):/etc/motd
 	@echo "Disk image created: $(DISK)"
 
 comma := ,

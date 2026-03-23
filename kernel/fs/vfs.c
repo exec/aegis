@@ -1,6 +1,8 @@
 #include "vfs.h"
 #include "initrd.h"
+#include "ext2.h"
 #include "printk.h"
+#include <stdint.h>
 
 void
 vfs_init(void)
@@ -9,11 +11,169 @@ vfs_init(void)
     initrd_register();
 }
 
-int
-vfs_open(const char *path, vfs_file_t *out)
+/* ── ext2 fd private state ────────────────────────────────────────────── */
+
+/*
+ * ext2_fd_priv_t — per-open-file state for ext2 fds.
+ *
+ * We need a struct rather than a raw inode pointer because:
+ *   - ops->write(priv, buf, len) does not receive the current offset.
+ *   - We must track write_offset ourselves so sequential writes work.
+ *   - sys_read passes f->offset (maintained by sys_read), so reads are
+ *     offset-driven from the fd; we just forward to ext2_read().
+ *   - sys_write does NOT maintain f->offset, so write position is private.
+ *
+ * Allocated from s_ext2_pool[] (32 slots); freed on close.
+ */
+typedef struct {
+    uint32_t ino;           /* ext2 inode number */
+    uint32_t write_offset;  /* current sequential write position */
+    uint32_t in_use;        /* 1 if slot is occupied */
+} ext2_fd_priv_t;
+
+#define EXT2_FD_POOL 32
+static ext2_fd_priv_t s_ext2_pool[EXT2_FD_POOL];
+
+static ext2_fd_priv_t *
+ext2_pool_alloc(uint32_t ino)
 {
-    return initrd_open(path, out);
+    uint32_t i;
+    for (i = 0; i < EXT2_FD_POOL; i++) {
+        if (!s_ext2_pool[i].in_use) {
+            s_ext2_pool[i].ino          = ino;
+            s_ext2_pool[i].write_offset = 0;
+            s_ext2_pool[i].in_use       = 1;
+            return &s_ext2_pool[i];
+        }
+    }
+    return (ext2_fd_priv_t *)0;
 }
+
+static void
+ext2_pool_free(ext2_fd_priv_t *p)
+{
+    if (p)
+        p->in_use = 0;
+}
+
+/* ── ext2 vfs_ops_t implementations ──────────────────────────────────── */
+
+static int
+ext2_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
+{
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
+    /* sys_read passes f->offset as off; forward directly. */
+    return ext2_read(p->ino, buf, (uint32_t)off, (uint32_t)len);
+}
+
+static int
+ext2_vfs_write_fn(void *priv, const void *buf, uint64_t len)
+{
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
+    /* sys_write does not pass a file offset, so we maintain write_offset
+     * in the priv struct for sequential writes.  This is correct for:
+     *   - shell redirection (O_WRONLY|O_CREAT|O_TRUNC): write from 0.
+     *   - append writes: each call advances write_offset by bytes written.
+     * Concurrent writes to the same fd are not supported (single-process). */
+    int n = ext2_write(p->ino, buf, p->write_offset, (uint32_t)len);
+    if (n > 0)
+        p->write_offset += (uint32_t)n;
+    return n;
+}
+
+static void
+ext2_vfs_close_fn(void *priv)
+{
+    ext2_pool_free((ext2_fd_priv_t *)priv);
+}
+
+static void
+ext2_vfs_dup_fn(void *priv)
+{
+    /* dup shares the same priv pointer.  The first close frees the pool
+     * slot; any further access via the dup'd fd is undefined.
+     * Acceptable for Phase 21 scope: no concurrent dup+write on ext2 fds. */
+    (void)priv;
+}
+
+static int
+ext2_vfs_stat_fn(void *priv, k_stat_t *st)
+{
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
+    int sz = ext2_file_size(p->ino);
+    if (sz < 0) return -1;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_dev     = 2;           /* device 2 = nvme0 */
+    st->st_ino     = (uint64_t)p->ino;
+    st->st_nlink   = 1;
+    st->st_mode    = S_IFREG | 0644;
+    st->st_size    = (int64_t)sz;
+    st->st_blksize = 4096;
+    st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+    return 0;
+}
+
+static const vfs_ops_t s_ext2_ops = {
+    .read    = ext2_vfs_read_fn,
+    .write   = ext2_vfs_write_fn,
+    .close   = ext2_vfs_close_fn,
+    .readdir = (void *)0,
+    .dup     = ext2_vfs_dup_fn,
+    .stat    = ext2_vfs_stat_fn,
+};
+
+/* ── vfs_open ─────────────────────────────────────────────────────────── */
+
+/*
+ * vfs_open — resolve path to a vfs_file_t across all registered backends.
+ *
+ * Priority order:
+ *   1. initrd (static in-kernel filesystem: /bin, /etc/motd, /dev)
+ *   2. ext2 on nvme0 (if mounted)
+ *
+ * flags: open flags forwarded from sys_open.  VFS_O_CREAT causes vfs_open
+ *        to call ext2_create() if the file is not found on ext2.
+ *
+ * Returns 0 on success, -2 (ENOENT) if not found, -12 (ENOMEM) if the
+ * ext2 fd pool is exhausted.
+ */
+int
+vfs_open(const char *path, int flags, vfs_file_t *out)
+{
+    /* Try initrd first — handles /bin, /etc/motd, /dev/console, /dev/kbd */
+    if (initrd_open(path, out) == 0)
+        return 0;
+
+    /* Fall through to ext2.  ext2_open() returns -1 if not mounted or
+     * the file does not exist. */
+    uint32_t ino = 0;
+    if (ext2_open(path, &ino) < 0) {
+        /* If O_CREAT is set, create the file and try again. */
+        if ((flags & (int)VFS_O_CREAT) && ext2_create(path, 0644) == 0) {
+            if (ext2_open(path, &ino) < 0)
+                return -2;  /* ENOENT — create succeeded but open failed */
+        } else {
+            return -2;  /* ENOENT */
+        }
+    }
+
+    ext2_fd_priv_t *p = ext2_pool_alloc(ino);
+    if (!p)
+        return -12;  /* ENOMEM — fd pool exhausted */
+
+    int sz = ext2_file_size(ino);
+    if (sz < 0) sz = 0;
+
+    out->ops    = &s_ext2_ops;
+    out->priv   = (void *)p;
+    out->offset = 0;
+    out->size   = (uint64_t)sz;
+    out->flags  = 0;
+    out->_pad   = 0;
+    return 0;
+}
+
+/* ── helpers ──────────────────────────────────────────────────────────── */
 
 static int
 streq(const char *a, const char *b)
@@ -34,6 +194,7 @@ streq(const char *a, const char *b)
  *   /dev/console, /dev/tty, /dev/stdin, /dev/stdout, /dev/stderr
  *               → console chardev (mode=S_IFCHR|0600)
  *   /dev/null   → chardev (mode=S_IFCHR|0666, rdev=makedev(1,3))
+ *   everything else → ext2 lookup (if mounted)
  *
  * Returns 0 on success, -2 (ENOENT) if not found.
  */
@@ -76,5 +237,26 @@ vfs_stat_path(const char *path, k_stat_t *out)
     }
 
     /* Initrd file lookup */
-    return initrd_stat_entry(path, out);
+    if (initrd_stat_entry(path, out) == 0)
+        return 0;
+
+    /* ext2 fallback */
+    {
+        uint32_t ino = 0;
+        if (ext2_open(path, &ino) == 0) {
+            int sz = ext2_file_size(ino);
+            if (sz < 0) sz = 0;
+            __builtin_memset(out, 0, sizeof(*out));
+            out->st_dev     = 2;
+            out->st_ino     = (uint64_t)ino;
+            out->st_nlink   = 1;
+            out->st_mode    = S_IFREG | 0644;
+            out->st_size    = (int64_t)sz;
+            out->st_blksize = 4096;
+            out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+            return 0;
+        }
+    }
+
+    return -2;
 }
