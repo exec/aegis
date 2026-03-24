@@ -54,6 +54,11 @@ int ext2_mount(const char *devname)
     if (s_sb.s_magic != EXT2_MAGIC)
         return -1;
 
+    if (s_sb.s_log_block_size > 6) {   /* ext2 max block size is 64KB (2^6 * 1024) */
+        printk("[EXT2] FAIL: invalid log_block_size %u\n",
+               (unsigned)s_sb.s_log_block_size);
+        return -1;
+    }
     s_block_size = 1024u << s_sb.s_log_block_size;
     if (s_sb.s_rev_level >= 1 && (s_sb.s_inode_size < 128 || s_sb.s_inode_size > 4096)) {
         return -1;
@@ -90,6 +95,7 @@ int ext2_mount(const char *devname)
 
 int ext2_read_inode(uint32_t ino, ext2_inode_t *out)
 {
+    if (ino == 0) return -EIO;   /* inode 0 is reserved/invalid in ext2 */
     uint32_t group       = (ino - 1) / s_sb.s_inodes_per_group;
     uint32_t index       = (ino - 1) % s_sb.s_inodes_per_group;
     if (group >= s_num_groups || group >= 32) {
@@ -214,6 +220,12 @@ int ext2_open(const char *path, uint32_t *inode_out)
         /* Skip trailing slashes between components */
         while (*path == '/')
             path++;
+
+        /* Prevent directory escape via ".." — clamp to filesystem root. */
+        if (component[0] == '.' && component[1] == '.' && component[2] == '\0') {
+            current_ino = EXT2_ROOT_INODE;
+            continue;
+        }
 
         /* Read current directory inode */
         ext2_inode_t inode;
@@ -437,6 +449,7 @@ int ext2_write(uint32_t inode_num, const void *buf,
 
     const uint8_t *src = (const uint8_t *)buf;
     uint32_t bytes_written = 0;
+    uint32_t orig_size = inode.i_size;   /* save before write loop */
 
     while (bytes_written < len) {
         uint32_t cur_offset = offset + bytes_written;
@@ -451,8 +464,14 @@ int ext2_write(uint32_t inode_num, const void *buf,
             /* allocate a new direct block (indirect not yet supported) */
             if (file_block < 12) {
                 blk = ext2_alloc_block(0);
-                if (blk == 0)
-                    break;
+                if (blk == 0) {
+                    /* Partial write: commit what was written so far */
+                    uint32_t actual_end = offset + bytes_written;
+                    inode.i_size = (actual_end > orig_size) ? actual_end : orig_size;
+                    inode.i_blocks = (inode.i_size + 511u) / 512u;
+                    ext2_write_inode(inode_num, &inode);
+                    return (bytes_written > 0) ? (int)bytes_written : -EIO;
+                }
                 inode.i_block[file_block] = blk;
                 /* zero the new block */
                 uint8_t *newdata = cache_get_slot(blk);

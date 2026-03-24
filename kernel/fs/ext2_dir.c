@@ -46,9 +46,11 @@ int ext2_dir_add_entry(uint32_t dir_ino, uint32_t child_ino,
     if (ext2_read_inode(dir_ino, &dir) != 0)
         return -1;
 
-    uint8_t name_len = 0;
-    while (name[name_len])
-        name_len++;
+    uint32_t name_len32 = 0;
+    while (name[name_len32])
+        name_len32++;
+    if (name_len32 == 0 || name_len32 > 255) return -ENAMETOOLONG;
+    uint8_t name_len = (uint8_t)name_len32;
     uint16_t needed = (uint16_t)(8u + name_len);
     /* round up to 4-byte boundary */
     needed = (uint16_t)((needed + 3u) & ~3u);

@@ -43,7 +43,13 @@ int cache_evict(void)
     if (s_cache[best].dirty && s_cache[best].block_num != 0) {
         uint64_t lba = (uint64_t)s_cache[best].block_num *
                        (s_block_size / 512);
-        s_dev->write(s_dev, lba, s_block_size / 512, s_cache[best].data);
+        int wr = s_dev->write(s_dev, lba, s_block_size / 512,
+                              s_cache[best].data);
+        if (wr != 0) {
+            printk("[EXT2] WARN: cache flush failed for block %u\n",
+                   s_cache[best].block_num);
+            /* Clear dirty anyway to avoid infinite eviction loop */
+        }
         s_cache[best].dirty = 0;
     }
 

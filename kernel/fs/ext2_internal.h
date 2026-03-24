@@ -6,6 +6,15 @@
 #include "blkdev.h"
 #include "../core/printk.h"
 
+/* Errno codes used within the ext2 subsystem.
+ * The kernel does not include <errno.h>; define what we need here. */
+#ifndef EIO
+#define EIO          5
+#endif
+#ifndef ENAMETOOLONG
+#define ENAMETOOLONG 36
+#endif
+
 /* ── Shared state — defined in ext2.c ──────────────────────────────────── */
 extern blkdev_t *s_dev;
 extern ext2_superblock_t s_sb;
