@@ -229,8 +229,8 @@ int gpt_scan(const char *devname)
         s_devs[idx].name[ni]   = '\0';
 
         if (blkdev_register(&s_devs[idx]) < 0) {
-            printk("[GPT] WARN: blkdev table full, %d partition(s) registered\n",
-                   part_num - 1);
+            printk("[GPT] WARN: blkdev table full, %u partition(s) registered\n",
+                   (unsigned)(part_num - 1));
             break;
         }
         part_num++;
@@ -242,6 +242,6 @@ int gpt_scan(const char *devname)
         return 0;
     }
 
-    printk("[GPT] OK: %d partition(s) found on %s\n", count, devname);
+    printk("[GPT] OK: %u partition(s) found on %s\n", (unsigned)count, devname);
     return count;
 }

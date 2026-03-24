@@ -9,7 +9,7 @@
 /* /etc/motd content — starts with '[' so it survives the make test ANSI filter.
  * The filter keeps only lines starting with '['; content not matching is
  * silently dropped from the serial diff. */
-static const char s_motd[] = "[MOTD] Hello from initrd!\n";
+static const char s_motd[] = "[MOTD] Welcome to Aegis\n";
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
  * These symbols are resolved at link time; their lengths are not

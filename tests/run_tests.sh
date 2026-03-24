@@ -89,3 +89,8 @@ python3 tests/test_ext2.py
 # verifies [XHCI] OK: in serial output and that the shell prompt appears.
 echo "--- test_xhci ---"
 python3 tests/test_xhci.py
+
+# Phase 23 GPT partition parsing test — boots on q35 with GPT-partitioned
+# NVMe disk image; verifies [GPT] OK, [EXT2] nvme0p1, shell prompt, /bin, /etc/motd.
+echo "--- test_gpt ---"
+python3 tests/test_gpt.py

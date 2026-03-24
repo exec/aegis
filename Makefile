@@ -320,16 +320,40 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
 iso: $(BUILD)/aegis.iso
 
 DISK = $(BUILD)/disk.img
+SGDISK     = /usr/sbin/sgdisk
+# nvme0p1: sgdisk aligns start to LBA 2048, end 122879 = 120832 sectors = ~59 MB
+P1_SECTORS = 120832
+
+# All user ELFs required before disk can be populated.
+# debugfs silently skips `write` commands whose source file is missing,
+# producing a disk with an empty /bin and no build error — so we list
+# them all as prerequisites here.
+DISK_USER_BINS = \
+	user/shell/shell.elf user/ls/ls.elf user/cat/cat.elf \
+	user/echo/echo.elf user/pwd/pwd.elf user/uname/uname.elf \
+	user/clear/clear.elf user/true/true.elf user/false/false.elf \
+	user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
+	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
+	user/mkdir/mkdir.elf user/touch/touch.elf
 
 disk: $(DISK)
 
-$(DISK): user/shell/shell.elf
+$(DISK): $(DISK_USER_BINS)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(DISK) bs=1M count=64 2>/dev/null
-	/sbin/mke2fs -t ext2 -F -L aegis-root $(DISK)
-	echo "mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home" | /sbin/debugfs -w $(DISK)
+	$(SGDISK) \
+	    --new=1:34:122879   --typecode=1:8300 --change-name=1:aegis-root \
+	    --new=2:122880:0    --typecode=2:8200 --change-name=2:aegis-swap \
+	    $(DISK)
+	dd if=/dev/zero of=/tmp/aegis-p1.img bs=512 count=$(P1_SECTORS) 2>/dev/null
+	/sbin/mke2fs -t ext2 -F -L aegis-root /tmp/aegis-p1.img
+	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
-	echo "write user/shell/shell.elf /bin/sh\nwrite /tmp/aegis-motd /etc/motd" | /sbin/debugfs -w $(DISK)
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite /tmp/aegis-motd /etc/motd\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
+	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"
 
 comma := ,
