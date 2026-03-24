@@ -9,6 +9,20 @@
 #define VMM_FLAG_PRESENT  (1UL << 0)
 #define VMM_FLAG_WRITABLE (1UL << 1)
 #define VMM_FLAG_USER     (1UL << 2)
+/* Cache type bits — only valid after arch_pat_init() has run.
+ *
+ * With IA32_PAT[1]=WC (set by arch_pat_init):
+ *   VMM_FLAG_WC      = PWT bit → PAT entry 1 → Write-Combining
+ *   VMM_FLAG_UCMINUS = PCD bit → PAT entry 2 → UC- (weak uncacheable)
+ *
+ * NOTE: UC- (PA2) is NOT the same as strong-UC (PA3 = PWT|PCD = 0x18, used
+ * for PCIe ECAM). Use VMM_FLAG_UCMINUS only where MTRR override is acceptable.
+ *
+ * These map to x86 PTE bits 3 (PWT) and 4 (PCD).
+ * vmm_map_page ORs flags into the PTE without masking, so these pass
+ * through as-is to hardware. */
+#define VMM_FLAG_WC       (1UL << 3)   /* Write-Combining  (PWT=1, PCD=0) → PA1 */
+#define VMM_FLAG_UCMINUS  (1UL << 4)   /* UC-weak          (PWT=0, PCD=1) → PA2 */
 #define VMM_FLAG_NX       (1UL << 63)
 
 /* vmm_init — build the initial higher-half page tables and activate them.

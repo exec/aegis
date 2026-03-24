@@ -47,6 +47,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     (void)mb_magic;
 
     arch_init();            /* serial_init + vga_init                        */
+    arch_pat_init();        /* PAT MSR: PA1=WC for framebuffer mapping       */
     arch_mm_init(mb_info);  /* parse multiboot2 memory map                   */
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */

@@ -14,3 +14,44 @@ void arch_init(void)
     serial_init();
     vga_init();
 }
+
+/* arch_pat_init — enable Write-Combining in PAT entry 1.
+ *
+ * Default IA32_PAT layout (Intel/AMD):
+ *   PA0=WB(06), PA1=WT(04), PA2=UC-(07), PA3=UC(00), PA4-PA7 repeat.
+ *
+ * After this call:
+ *   PA0=WB(06), PA1=WC(01), PA2=UC-(07), PA3=UC(00) — PA4-PA7 same.
+ *
+ * This allows VMM_FLAG_WC (PWT=1, PCD=0) to select WC for framebuffer pages.
+ * The existing ECAM mapping (PWT=1, PCD=1 = bits 3+4 = 0x18) selects PA3=UC —
+ * that entry is unchanged, so no existing mappings are affected.
+ */
+void arch_pat_init(void)
+{
+    uint32_t cpuid_edx;
+
+    /* Check CPUID.1:EDX[16] — PAT support bit. */
+    __asm__ volatile (
+        "cpuid"
+        : "=d"(cpuid_edx)
+        : "a"(1u)
+        : "ebx", "ecx"
+    );
+    if (!(cpuid_edx & (1u << 16)))
+        return;   /* CPU lacks PAT — VMM_FLAG_WC falls back to WT; acceptable */
+
+    /* New PAT value:
+     *   PA0=WB(06), PA1=WC(01), PA2=UC-(07), PA3=UC(00),
+     *   PA4=WB(06), PA5=WC(01), PA6=UC-(07), PA7=UC(00) */
+    const uint64_t pat_val = 0x0007010600070106ULL;
+
+    /* wrmsr IA32_PAT (0x277) */
+    __asm__ volatile (
+        "wrmsr"
+        :
+        : "c"(0x277u),
+          "a"((uint32_t)(pat_val & 0xFFFFFFFFU)),
+          "d"((uint32_t)(pat_val >> 32))
+    );
+}

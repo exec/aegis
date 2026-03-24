@@ -20,6 +20,12 @@
  * Must be the first call in kernel_main. */
 void arch_init(void);
 
+/* arch_pat_init — program IA32_PAT MSR to set PA1 = Write-Combining.
+ * Must be called before vmm_init() so that any subsequent vmm_map_page
+ * calls using VMM_FLAG_WC produce the correct caching type.
+ * No-op if CPU does not advertise PAT support (CPUID bit). */
+void arch_pat_init(void);
+
 /* Signal QEMU isa-debug-exit device. QEMU exits with code (value << 1) | 1.
  * Writing 0x01 → QEMU exit code 3. No-op if device is absent. */
 void arch_debug_exit(unsigned char value);
