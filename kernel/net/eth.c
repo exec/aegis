@@ -172,29 +172,47 @@ int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
         return 0;
     }
 
-    /* Not cached — send ARP REQUEST and busy-poll with interrupts disabled.
-     * cli prevents the PIT ISR from calling virtio_net_poll() concurrently
-     * and advancing rx_last_used while we are doing the same here, which
-     * would cause frames to be consumed twice or silently dropped. */
+    /* Not cached — send ARP REQUEST and poll using sti+hlt+cli.
+     *
+     * net_init() is called before sched_start(), so interrupts are disabled
+     * (IF=0) and arch_get_ticks() never advances.  We must NOT use a
+     * tick-based timeout.
+     *
+     * On TCG (no KVM) QEMU, the guest vCPU and QEMU's SLIRP/virtio backend
+     * share a single host thread.  To let SLIRP generate the ARP reply we
+     * must give QEMU real CPU time.  The pattern "sti; hlt; cli" achieves
+     * this: sti unmasks the PIT IRQ, hlt yields until the next PIT interrupt
+     * (10 ms), the PIT ISR runs (and calls netdev_poll_all() → virtio_net_poll
+     * → delivers any pending RX frames including the ARP reply), then cli
+     * re-masks interrupts for the table check.
+     *
+     * Concurrency: the PIT ISR may deliver the ARP reply via netdev_poll_all()
+     * before we call arp_find() here.  That is fine — arp_insert() is
+     * idempotent and arp_find() will see the cached entry on the next check.
+     *
+     * Timeout: 500 iterations × 10 ms/tick ≈ 5 seconds.  More than enough
+     * for SLIRP on any host.
+     */
     arp_send_request(dev, ip);
 
-    /* arch_get_ticks() cannot advance while cli is active (PIT IRQ blocked).
-     * Use a raw iteration count instead: 300000 polls is ample for SLIRP to
-     * respond to an ARP REQUEST (typically <1 ms on a KVM host). */
-    __asm__ volatile("cli");
     {
         uint32_t n;
-        for (n = 0; n < 300000u; n++) {
+        for (n = 0; n < 500u; n++) {
+            /* Yield to QEMU/SLIRP: enable interrupts, halt until PIT fires,
+             * re-disable.  The PIT ISR calls netdev_poll_all() which drains
+             * the virtio RX ring and delivers any pending frames. */
+            __asm__ volatile("sti; hlt; cli");
+            /* Also poll directly in case PIT ISR didn't run yet. */
             if (dev->poll)
                 dev->poll(dev);
             e = arp_find(ip);
             if (e) {
-                __asm__ volatile("sti");
+                __asm__ volatile("sti"); /* restore interrupts */
                 *mac_out = e->mac;
                 return 0;
             }
         }
     }
-    __asm__ volatile("sti");
+    __asm__ volatile("sti"); /* restore interrupts on timeout path */
     return -1; /* timeout — caller returns EHOSTUNREACH */
 }

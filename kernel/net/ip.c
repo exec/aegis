@@ -127,6 +127,8 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
 /* ---- ICMP -------------------------------------------------------------- */
 
 static uint8_t s_icmp_buf[1480];
+/* Set to 1 by icmp_rx when an echo reply arrives; polled by net_init. */
+static volatile int s_icmp_reply_received;
 
 static void icmp_rx(netdev_t *dev, ip4_addr_t src_ip,
                     const icmp_hdr_t *icmp, uint16_t len)
@@ -137,6 +139,7 @@ static void icmp_rx(netdev_t *dev, ip4_addr_t src_ip,
         uint32_t s = ntohl(src_ip);
         printk("[NET] ICMP: echo reply from %u.%u.%u.%u\n",
                (s>>24)&0xff, (s>>16)&0xff, (s>>8)&0xff, s&0xff);
+        s_icmp_reply_received = 1;
         return;
     }
 
@@ -237,12 +240,29 @@ void net_init(void)
     req->checksum = net_checksum_finish(
                         net_checksum(s_ping_buf, sizeof(icmp_hdr_t)));
 
-    ip_send(dev, htonl(0x0a000202), IP_PROTO_ICMP,
-            s_ping_buf, sizeof(icmp_hdr_t));
-
-    /* Poll for the reply for up to 1000 ticks (~1 second). */
-    uint32_t deadline = (uint32_t)arch_get_ticks() + 1000;
-    while ((uint32_t)arch_get_ticks() < deadline) {
-        netdev_poll_all();
+    int send_result = ip_send(dev, htonl(0x0a000202), IP_PROTO_ICMP,
+                              s_ping_buf, sizeof(icmp_hdr_t));
+    if (send_result != 0) {
+        printk("[NET] WARN: ICMP send failed (ARP timeout?)\n");
+        return;
     }
+    printk("[NET] ICMP: echo request sent\n");
+
+    /* Poll for the reply using sti+hlt+cli (same reason as arp_resolve).
+     * net_init() runs before sched_start() with interrupts disabled, so
+     * arch_get_ticks() never advances.  Yield to QEMU via sti+hlt+cli each
+     * iteration; the PIT ISR calls netdev_poll_all() → icmp_rx() which
+     * prints "[NET] ICMP: echo reply from ..." when the reply arrives.
+     * 500 iterations × 10 ms/tick ≈ 5 seconds total timeout. */
+    s_icmp_reply_received = 0;
+    {
+        uint32_t n;
+        for (n = 0; n < 500u; n++) {
+            __asm__ volatile("sti; hlt; cli");
+            netdev_poll_all(); /* drain in case PIT ISR hasn't run yet */
+            if (s_icmp_reply_received)
+                break;
+        }
+    }
+    __asm__ volatile("sti"); /* restore interrupts */
 }

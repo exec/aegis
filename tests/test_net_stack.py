@@ -89,10 +89,13 @@ def main():
                     output += text
                     for line in text.splitlines():
                         print(line)
-                        if "[NET] configured:" in line:
-                            found_configured = True
-                        if "[NET] ICMP: echo reply from 10.0.2.2" in line:
-                            found_icmp_reply = True
+                    # Search accumulated output for target strings (chunks may
+                    # arrive fragmented, so a single chunk's splitlines() may
+                    # not contain a complete line).
+                    if "[NET] configured:" in output:
+                        found_configured = True
+                    if "[NET] ICMP: echo reply from 10.0.2.2" in output:
+                        found_icmp_reply = True
                     if found_icmp_reply:
                         break
             if proc.poll() is not None:

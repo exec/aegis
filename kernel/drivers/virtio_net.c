@@ -346,6 +346,14 @@ virtio_net_init(void)
                                    VIRTIO_STATUS_FEATURES_OK |
                                    VIRTIO_STATUS_DRIVER_OK);
 
+    /* Re-kick RX queue after DRIVER_OK.
+     * The RX kick in the queue setup loop above fires before DRIVER_OK is set.
+     * QEMU may defer processing available buffers until the device is fully
+     * activated.  Kick again now that DRIVER_OK is set so the device picks up
+     * the 256 pre-filled descriptors and starts delivering received frames. */
+    __asm__ volatile("sfence" ::: "memory");
+    s_priv.notify_base[s_priv.rx_notify_off * s_priv.notify_off_mult / 4u] = 0u;
+
     /* Step 8: register netdev. */
     s_dev.name[0]='e'; s_dev.name[1]='t'; s_dev.name[2]='h';
     s_dev.name[3]='0'; s_dev.name[4]='\0';
@@ -366,8 +374,8 @@ virtio_net_init(void)
  * Transmit one Ethernet frame (pkt, len bytes) via virtqueue 1.
  *
  * TX bounce buffer layout:
- *   [0..9]   = virtio_net_hdr_t (10 bytes, all zero = no offload)
- *   [10..10+len-1] = Ethernet frame
+ *   [0..11]  = virtio_net_hdr_t (12 bytes, all zero = no offload)
+ *   [12..12+len-1] = Ethernet frame
  *
  * Protocol (virtio spec §2.6.13):
  *   1. Fill bounce buffer.
@@ -383,12 +391,12 @@ virtio_net_send(netdev_t *dev, const void *pkt, uint16_t len)
 {
     virtio_priv_t *p = (virtio_priv_t *)dev->priv;
     uint16_t slot    = p->tx_head & (uint16_t)(VIRTQ_SIZE - 1);
-    uint16_t total   = (uint16_t)(10u + len);
+    uint16_t total   = (uint16_t)(VIRTIO_NET_HDR_SIZE + len);
 
-    /* 1. Zero virtio_net_hdr, copy frame. */
+    /* 1. Zero virtio_net_hdr (12 bytes for virtio 1.0 modern), copy frame. */
     uint8_t *buf = p->tx_virt[slot];
-    _memset(buf, 0, 10);
-    _memcpy(buf + 10, pkt, len);
+    _memset(buf, 0, VIRTIO_NET_HDR_SIZE);
+    _memcpy(buf + VIRTIO_NET_HDR_SIZE, pkt, len);
 
     /* 2. Set descriptor. flags=0: device reads (not write), single segment. */
     p->tx_desc[slot].len   = total;
@@ -446,7 +454,6 @@ static void
 virtio_net_poll(netdev_t *dev)
 {
     virtio_priv_t *p = (virtio_priv_t *)dev->priv;
-    uint16_t start_last_used = p->rx_last_used;
 
     while (p->rx_last_used != p->rx_used->idx) {
         __asm__ volatile("" ::: "memory");
@@ -459,12 +466,13 @@ virtio_net_poll(netdev_t *dev)
             continue;
         }
 
-        /* Skip the 10-byte virtio_net_hdr at the start of the receive buffer.
-         * Without VIRTIO_NET_F_MRG_RXBUF the header is always 10 bytes. */
-        if (rlen > 10u) {
+        /* Skip the 12-byte virtio_net_hdr at the start of the receive buffer.
+         * Virtio 1.0 modern always uses a 12-byte header (including num_buffers)
+         * regardless of VIRTIO_NET_F_MRG_RXBUF. */
+        if (rlen > VIRTIO_NET_HDR_SIZE) {
             void *buf = p->rx_virt[id];
-            netdev_rx_deliver(dev, (uint8_t *)buf + 10u,
-                              (uint16_t)(rlen - 10u));
+            netdev_rx_deliver(dev, (uint8_t *)buf + VIRTIO_NET_HDR_SIZE,
+                              (uint16_t)(rlen - VIRTIO_NET_HDR_SIZE));
         }
 
         /* Return descriptor to available ring. */
@@ -476,10 +484,20 @@ virtio_net_poll(netdev_t *dev)
         p->rx_last_used++;
     }
 
-    /* Kick RX queue if we returned any descriptors.
-     * virtio spec §2.7.13: driver SHOULD notify after adding available bufs. */
-    if (p->rx_last_used != start_last_used) {
-        __asm__ volatile("sfence" ::: "memory");
-        p->notify_base[p->rx_notify_off * p->notify_off_mult / 4u] = 0u;
-    }
+    /* Always write to the RX notify doorbell (even if we received no frames).
+     *
+     * In TCG mode (no KVM), the guest vCPU and QEMU's virtio/SLIRP backend
+     * run on the same host thread.  QEMU can only inject RX frames when the
+     * guest causes a VM-exit (MMIO access, port I/O, etc.).  If we only kick
+     * when descriptors were returned, the ARP busy-poll loop never writes to
+     * MMIO and QEMU never gets the CPU — the ARP reply is never delivered.
+     *
+     * Writing queue index 0 here forces a VM-exit every poll() call, giving
+     * QEMU time to process SLIRP events and inject pending RX frames.
+     * The write also re-notifies the device that RX buffers are available,
+     * which is correct per virtio spec §2.7.13 regardless of whether we
+     * returned any buffers in this call.
+     */
+    __asm__ volatile("sfence" ::: "memory");
+    p->notify_base[p->rx_notify_off * p->notify_off_mult / 4u] = 0u;
 }

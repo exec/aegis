@@ -35,8 +35,15 @@
 /* ── Feature bits (virtio-net, §5.1.3) ───────────────────────────────────── */
 #define VIRTIO_NET_F_MAC           (1u << 5)   /* device has MAC address */
 
-/* ── virtio_net_hdr (§5.1.6, without VIRTIO_NET_F_MRG_RXBUF) ─────────────── */
-/* 10 bytes prepended to every TX frame; 10 bytes at start of every RX buffer */
+/* ── virtio_net_hdr (§5.1.6, virtio 1.0 modern path) ─────────────────────── */
+/* 12 bytes prepended to every TX frame; 12 bytes at start of every RX buffer.
+ *
+ * Virtio 1.0 (VIRTIO_F_VERSION_1 negotiated) always uses the extended header
+ * with num_buffers, even without VIRTIO_NET_F_MRG_RXBUF.  The legacy
+ * (pre-1.0) header was 10 bytes; the modern 1.0 header is 12 bytes.
+ * Skipping only 10 bytes on RX would read 2 bytes of header data as Ethernet
+ * frame bytes, silently corrupting every received frame. */
+#define VIRTIO_NET_HDR_SIZE 12u
 typedef struct __attribute__((packed)) {
     uint8_t  flags;
     uint8_t  gso_type;
@@ -44,6 +51,7 @@ typedef struct __attribute__((packed)) {
     uint16_t gso_size;
     uint16_t csum_start;
     uint16_t csum_offset;
+    uint16_t num_buffers;  /* always 1 without VIRTIO_NET_F_MRG_RXBUF */
 } virtio_net_hdr_t;
 
 /* ── Common configuration structure (§4.1.4.3) ───────────────────────────── */
