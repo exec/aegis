@@ -30,6 +30,18 @@ multiboot_header_start:
     ; Checksum: magic + arch + length + checksum must sum to 0 (mod 2^32)
     dd -(MULTIBOOT2_MAGIC + MULTIBOOT2_ARCH + \
          (multiboot_header_end - multiboot_header_start))
+    ; Framebuffer request tag (type=5) — ask GRUB for a linear framebuffer.
+    ; GRUB will honour this together with grub.cfg's gfxpayload=keep.
+    ; Size is 20: 8 bytes header (type+flags+size) + 12 bytes payload.
+    align 8
+    dw 5        ; type = MULTIBOOT_HEADER_TAG_FRAMEBUFFER
+    dw 0        ; flags = 0 (required, not optional)
+    dd 20       ; tag size in bytes
+    dd 1024     ; preferred width  (0 = any)
+    dd 768      ; preferred height (0 = any)
+    dd 32       ; preferred depth  (0 = any)
+
+    align 8
     ; End tag (type=0, flags=0, size=8)
     dw 0
     dw 0
