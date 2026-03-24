@@ -44,6 +44,18 @@ signal_deliver(cpu_state_t *s)
 
     if (sa->sa_handler == SIG_IGN) return;
 
+    /* Validate handler and restorer are user-space addresses.
+     * A kernel-VA handler would execute kernel code at ring-3 privilege.
+     * user_ptr_valid checks address is canonical and below 0x800000000000. */
+    if (!user_ptr_valid((uint64_t)sa->sa_handler, 1)) {
+        sched_exit();  /* terminate process — bad handler address */
+        return;
+    }
+    if (sa->sa_restorer && !user_ptr_valid((uint64_t)sa->sa_restorer, 1)) {
+        sched_exit();  /* terminate process — bad restorer address */
+        return;
+    }
+
     /* User handler: build rt_sigframe_t on user stack, redirect iretq to handler */
     uint64_t user_rsp = s->rsp;  /* user RSP from the iretq frame */
     uint64_t new_rsp  = ((user_rsp - sizeof(rt_sigframe_t)) & ~15ULL) - 8;
@@ -138,6 +150,18 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
     }
 
     if (sa->sa_handler == SIG_IGN) return 0;
+
+    /* Validate handler and restorer are user-space addresses.
+     * A kernel-VA handler would execute kernel code at ring-3 privilege.
+     * user_ptr_valid checks address is canonical and below 0x800000000000. */
+    if (!user_ptr_valid((uint64_t)sa->sa_handler, 1)) {
+        sched_exit();  /* terminate process — bad handler address */
+        return 0;
+    }
+    if (sa->sa_restorer && !user_ptr_valid((uint64_t)sa->sa_restorer, 1)) {
+        sched_exit();  /* terminate process — bad restorer address */
+        return 0;
+    }
 
     /* User handler: build rt_sigframe_t on user stack */
     uint64_t user_rsp = frame->user_rsp;
