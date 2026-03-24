@@ -3,6 +3,7 @@
 #include "pit.h"
 #include "kbd.h"
 #include "printk.h"
+#include "arch.h"
 
 /* 48 entries: vectors 0x00-0x1F (CPU exceptions) + 0x20-0x2F (IRQs) */
 static aegis_idt_gate_t s_idt[48];
@@ -36,6 +37,12 @@ idt_init(void)
 
     for (int i = 0; i < 48; i++)
         idt_gate_set((uint8_t)i, isr_stubs[i]);
+
+    /* #DF (double fault, vector 8) uses IST1 — dedicated stack prevents
+     * triple fault when #DF occurs due to stack overflow or RSP corruption.
+     * IST field value 1 in the gate maps to tss.ist[0] (Intel 1-indexed,
+     * C array 0-indexed). */
+    s_idt[8].ist = 1;
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
     printk("[IDT] OK: 48 vectors installed\n");
@@ -103,7 +110,20 @@ isr_dispatch(cpu_state_t *s)
          * switch away before EOI, the outgoing task carries the EOI
          * obligation and IRQ0 goes dark until that task is rescheduled. */
         uint8_t irq = (uint8_t)(s->vector - 0x20);
-        pic_send_eoi(irq);
+
+        /* Guard against spurious IRQ7 (PIC1) and IRQ15 (PIC2 cascade).
+         * Per 8259A spec: do NOT send EOI for spurious interrupts — doing
+         * so clears the ISR bit of a real in-service interrupt.
+         * For spurious IRQ15 (PIC2), PIC1 still received the cascade
+         * interrupt on IRQ2, so we must EOI PIC1 only. */
+        if ((irq == 7 || irq == 15) && !pic_irq_is_real(irq)) {
+            if (irq == 15)
+                outb(0x20, 0x20);   /* spurious IRQ15: EOI to PIC1 only */
+            /* No EOI to PIC2 for spurious IRQ15; no EOI at all for spurious IRQ7. */
+        } else {
+            pic_send_eoi(irq);
+        }
+
         if      (s->vector == 0x20) { pit_handler(); }
         else if (s->vector == 0x21) { kbd_handler(); }
 

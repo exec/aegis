@@ -12,6 +12,11 @@ void pic_init(void);
  * For IRQ >= 8, sends EOI to both slave and master. */
 void pic_send_eoi(uint8_t irq);
 
+/* Read the PIC In-Service Register to check if the IRQ is real.
+ * Per 8259A spec, a spurious IRQ7/IRQ15 must NOT receive EOI.
+ * Returns 1 if the IRQ is real (in-service), 0 if spurious. */
+int pic_irq_is_real(uint8_t irq);
+
 /* Unmask (enable) a single IRQ line (0-15). */
 void pic_unmask(uint8_t irq);
 

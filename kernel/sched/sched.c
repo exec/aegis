@@ -1,6 +1,7 @@
 #include "sched.h"
 #include "arch.h"
 #include "kva.h"
+#include "pmm.h"
 #include "printk.h"
 #include "vmm.h"
 #include "proc.h"
@@ -33,9 +34,16 @@ sched_spawn(void (*fn)(void))
     /* Allocate TCB (one kva page — higher-half VA, no identity-map dependency). */
     aegis_task_t *task = kva_alloc_pages(1);
 
-    /* Allocate stack (STACK_PAGES kva pages — consecutive VAs, no contiguity
-     * assumption on physical addresses). */
-    uint8_t *stack = kva_alloc_pages(STACK_PAGES);
+    /* Allocate stack: STACK_PAGES usable pages plus one unmapped guard page
+     * at the bottom.  Stack grows downward; the guard page causes a #PF on
+     * overflow instead of silently corrupting adjacent KVA allocations.
+     * The guard VA is permanently abandoned (bump allocator does not rewind). */
+    uint8_t *stack_region = kva_alloc_pages(STACK_PAGES + 1);
+    uint64_t guard_phys   = kva_page_phys(stack_region);
+    vmm_unmap_page((uint64_t)(uintptr_t)stack_region);
+    pmm_free_page(guard_phys);
+    /* Usable stack starts one page above the (now-unmapped) guard page. */
+    uint8_t *stack = stack_region + 4096UL;
 
     /* Set up the stack to look like ctx_switch already ran.
      *

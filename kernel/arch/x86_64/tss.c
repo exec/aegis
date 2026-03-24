@@ -7,6 +7,14 @@ _Static_assert(sizeof(aegis_tss_t) == 104, "TSS must be 104 bytes");
 /* Static TSS — zeroed by GRUB ELF loader (BSS). */
 static aegis_tss_t s_tss;
 
+/* 4KB stack for the double-fault (#DF) IST handler.
+ * Must be 16-byte aligned. CPU switches to this stack when #DF fires
+ * regardless of the current RSP value, preventing triple fault on stack
+ * overflow or RSP corruption.  IST1 in TSS (s_tss.ist[0], 0-indexed C
+ * array) corresponds to IST field value 1 in the IDT gate descriptor
+ * (Intel spec uses 1-based numbering). */
+static uint8_t s_df_stack[4096] __attribute__((aligned(16)));
+
 /*
  * g_kernel_rsp — kernel stack RSP for SYSCALL entry stub.
  * Updated by arch_set_kernel_stack() alongside tss.rsp0.
@@ -37,6 +45,9 @@ void
 arch_tss_init(void)
 {
 	s_tss.iomap_base = 104;   /* offset past end of TSS → I/O bitmap disabled */
+	/* IST1 (s_tss.ist[0] in 0-indexed C array) — used by the #DF gate.
+	 * Store the TOP of the stack (stack grows downward). */
+	s_tss.ist[0] = (uint64_t)&s_df_stack[sizeof(s_df_stack)];
 	printk("[TSS] OK: RSP0 initialized\n");
 }
 
