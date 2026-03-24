@@ -112,6 +112,7 @@ uint64_t
 sys_fork(syscall_frame_t *frame)
 {
     aegis_task_t    *parent_task = sched_current();
+    if (!parent_task || !parent_task->is_user) return (uint64_t)-(int64_t)1; /* EPERM */
     aegis_process_t *parent      = (aegis_process_t *)parent_task;
 
 
@@ -156,9 +157,14 @@ sys_fork(syscall_frame_t *frame)
 
     /* 3. Create child PML4 */
     child->pml4_phys = vmm_create_user_pml4();
+    if (!child->pml4_phys) {
+        kva_free_pages(child, 1);
+        return (uint64_t)-(int64_t)12;           /* -ENOMEM */
+    }
 
     /* 4. Copy parent user pages into child PML4 */
     if (vmm_copy_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
+        vmm_free_user_pml4(child->pml4_phys);
         kva_free_pages(child, 1);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
@@ -447,7 +453,12 @@ sys_execve(syscall_frame_t *frame,
         uint64_t pn;
         for (pn = 0; pn < USER_STACK_NPAGES; pn++) {
             uint64_t phys = pmm_alloc_page();
-            if (!phys) { ret = (uint64_t)-(int64_t)12; goto done; }  /* ENOMEM */
+            if (!phys) {
+                /* Free all user pages already mapped (ELF + partial stack) */
+                vmm_free_user_pages(proc->pml4_phys);
+                ret = (uint64_t)-(int64_t)12;
+                goto done;  /* ENOMEM */
+            }
             vmm_zero_page(phys);
             vmm_map_user_page(proc->pml4_phys,
                               USER_STACK_BASE_EXEC + pn * 4096ULL, phys,
