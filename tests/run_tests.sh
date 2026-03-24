@@ -99,3 +99,8 @@ python3 tests/test_gpt.py
 # (modern transport, SLIRP user networking); verifies [NET] OK in serial output.
 echo "--- test_virtio_net ---"
 python3 tests/test_virtio_net.py
+
+# Phase 25 network protocol stack test — boots on q35 with virtio-net + SLIRP;
+# verifies [NET] configured: and [NET] ICMP: echo reply from 10.0.2.2.
+echo "--- test_net_stack.py ---"
+python3 tests/test_net_stack.py || exit 1
