@@ -100,7 +100,11 @@ DRIVER_SRCS = \
     kernel/drivers/virtio_net.c
 
 NET_SRCS = \
-    kernel/net/netdev.c
+    kernel/net/netdev.c \
+    kernel/net/eth.c \
+    kernel/net/ip.c \
+    kernel/net/udp.c \
+    kernel/net/tcp.c
 
 FS_SRCS = \
     kernel/fs/vfs.c \

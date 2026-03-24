@@ -1,10 +1,10 @@
 /* netdev.c — Network device registry
  *
  * Static table of up to NETDEV_MAX registered network devices.
- * netdev_rx_deliver() is a stub in Phase 24 — silently discards frames.
- * Phase 25 replaces the stub with eth_rx() dispatch.
+ * netdev_rx_deliver() dispatches received frames to the Ethernet layer.
  */
 #include "netdev.h"
+#include "eth.h"
 #include <stddef.h>
 
 static netdev_t *s_devices[NETDEV_MAX];
@@ -43,12 +43,8 @@ netdev_poll_all(void)
     }
 }
 
-/* Phase 24 stub: silently discard. No printk — SLIRP sends ARPs/mDNS
- * constantly and logging would spam the console at 100 Hz. */
 void
 netdev_rx_deliver(netdev_t *dev, const void *frame, uint16_t len)
 {
-    (void)dev;
-    (void)frame;
-    (void)len;
+    eth_rx(dev, frame, len);
 }
