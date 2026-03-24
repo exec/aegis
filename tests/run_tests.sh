@@ -44,7 +44,7 @@ timeout 10s qemu-system-x86_64 \
 #
 #   \x1b\[[?0-9;]*[A-Za-z]  — strip ESC [ ... letter  (CSI sequences)
 #   \x1bc                   — strip ESC c              (terminal reset)
-sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g' "$RAW" \
+sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g; s/\r//g' "$RAW" \
     | grep '^\[' \
     > "$ACTUAL" || true
 # || true: grep exits 1 if no lines match (empty kernel output)

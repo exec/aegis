@@ -103,6 +103,9 @@ void vfs_init(void);
  * Same bit value as VFS_O_CLOEXEC by design — no shift needed at install time. */
 #define VFS_FD_CLOEXEC 0x80000U
 
+_Static_assert(VFS_O_CLOEXEC == VFS_FD_CLOEXEC,
+    "VFS_O_CLOEXEC and VFS_FD_CLOEXEC must be the same bit value");
+
 /* vfs_open — find a file by path across all registered drivers.
  * flags: open flags (e.g. VFS_O_CREAT to create the file if missing on ext2).
  * Populates *out on success; returns 0 on success, -2 (ENOENT) if not found.

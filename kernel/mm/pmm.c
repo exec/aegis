@@ -144,6 +144,7 @@ uint64_t pmm_alloc_page(void)
             }
         }
     }
+    printk("[PMM] WARN: out of physical memory\n");
     return 0;   /* OOM — 0 is always reserved, unambiguous sentinel */
 }
 

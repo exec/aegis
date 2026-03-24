@@ -4,6 +4,7 @@
 #include "printk.h"
 #include "arch.h"
 #include <stdint.h>
+#include <stddef.h>
 
 /* KVA_BASE: pd_hi[4] range — 0x800000 bytes above ARCH_KERNEL_VIRT_BASE.
  * pd_hi[0..1] = kernel image huge pages
@@ -24,6 +25,7 @@ kva_init(void)
 void *
 kva_alloc_pages(uint64_t n)
 {
+    if (n == 0) return NULL;   /* caller passed 0 — no pages to allocate */
     uint64_t base = s_kva_next;
     uint64_t i;
     for (i = 0; i < n; i++) {
