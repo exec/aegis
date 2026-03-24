@@ -69,6 +69,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
+    fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
     gpt_scan("nvme0");      /* GPT partitions — [GPT] OK or silent (no NVMe) */
     ext2_mount("nvme0p1");  /* mount partition 1 — [EXT2] OK or silent (-1)  */

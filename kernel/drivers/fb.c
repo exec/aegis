@@ -7,10 +7,12 @@
  * White is colour-order-agnostic (all channels 0xFF), so it works
  * regardless of whether the framebuffer is BGR or RGB.
  */
+#include <stddef.h>
 #include <stdint.h>
 #include "fb.h"
 #include "../arch/x86_64/arch.h"
 #include "../arch/x86_64/serial.h"
+#include "../arch/x86_64/pcie.h"
 #include "../mm/vmm.h"
 #include "../mm/kva.h"
 #include "../mm/pmm.h"
@@ -349,7 +351,7 @@ fb_init(void)
         pmm_free_page(old_pa);
         vmm_map_page(va,
                      info.addr + (uint64_t)i * 0x1000u,
-                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
+                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_WC);
     }
 
     s_fb_va    = (volatile uint32_t *)region;
@@ -402,4 +404,22 @@ fb_write_string(const char *s)
 {
     while (*s)
         fb_putchar(*s++);
+}
+
+void
+fb_check_amd(void)
+{
+    const pcie_device_t *amd;
+
+    if (fb_available)
+        return;   /* framebuffer already working — nothing to report */
+
+    /* pcie_find_device wildcard: class=0x03 (Display), subclass/progif=0xFF */
+    amd = pcie_find_device(0x03u, 0xFFu, 0xFFu);
+    if (amd == NULL || amd->vendor_id != 0x1002u)
+        return;   /* no AMD display device — silent */
+
+    printk("[FB] WARN: AMD GPU 0x%x found but no UEFI framebuffer tag\n",
+           (uint32_t)amd->device_id);
+    printk("[FB] WARN: boot Aegis in UEFI mode for AMD iGPU display\n");
 }

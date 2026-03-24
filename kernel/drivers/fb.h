@@ -21,6 +21,12 @@ void fb_putchar(char c);
 /* fb_write_string — render a NUL-terminated string. */
 void fb_write_string(const char *s);
 
+/* fb_check_amd — log a diagnostic if an AMD iGPU is present but
+ * fb_available == 0 (no UEFI GOP framebuffer was provided by GRUB).
+ * Must be called AFTER pcie_init() so the device table is populated.
+ * No-op if fb_available == 1 (framebuffer already working) or no AMD GPU. */
+void fb_check_amd(void);
+
 /* fb_available — set to 1 by fb_init() on success; 0 otherwise.
  * Checked by printk() before calling fb_write_string(). */
 extern int fb_available;
