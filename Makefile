@@ -104,6 +104,7 @@ FS_SRCS = \
     kernel/fs/kbd_vfs.c \
     kernel/fs/pipe.c \
     kernel/fs/blkdev.c \
+    kernel/fs/gpt.c \
     kernel/fs/ext2.c \
     kernel/fs/ext2_cache.c \
     kernel/fs/ext2_dir.c

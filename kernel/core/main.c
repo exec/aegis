@@ -12,6 +12,7 @@
 #include "pcie.h"
 #include "nvme.h"
 #include "../fs/ext2.h"
+#include "../fs/gpt.h"
 #include "../drivers/xhci.h"
 #include <stdint.h>
 
@@ -64,7 +65,8 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
-    ext2_mount("nvme0");    /* mount ext2 root — [EXT2] OK or silent (-1)   */
+    gpt_scan("nvme0");      /* GPT partitions — [GPT] OK or silent (no NVMe) */
+    ext2_mount("nvme0p1");  /* mount partition 1 — [EXT2] OK or silent (-1)  */
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
