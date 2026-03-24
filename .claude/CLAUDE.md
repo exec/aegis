@@ -403,6 +403,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | xHCI + USB HID keyboard (Phase 22) | ✅ Done | xHCI init on q35+qemu-xhci; USB HID boot protocol; kbd_usb_inject into PS/2 ring buffer; test_xhci.py PASS (init + shell prompt verified) |
 | Security audit (post-Phase 22) | ✅ Done | SMEP enabled; sa_handler validation; lseek overflow guards (SEEK_CUR + SEEK_END); ext2 dup ref counting; O_CLOEXEC full lifecycle; SIGPIPE delivery; pipe ring buffer guards; Rust CAP bounds clamp; all tests GREEN |
 | GPT partition parsing (Phase 23) | ✅ Done | gpt.c CRC32 + header validation; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; test_gpt.py PASS |
+| virtio-net driver + netdev_t (Phase 24) | ✅ Done | netdev_t registry; virtio-net eth0; PCI cap walk; KVA BAR map; VIRTIO_F_VERSION_1; 256-slot RX prefill + kick; sfence TX; test_virtio_net.py PASS |
 
 ### Phase 1 deviations from original spec
 
@@ -704,6 +705,8 @@ them would corrupt every other process.
 
 *Last updated: 2026-03-23 — Phase 23 complete, test_gpt.py PASS. GPT partition parsing; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; make disk rewritten for GPT layout with sgdisk; make test GREEN.*
 
+*Last updated: 2026-03-23 — Phase 24 complete, test_virtio_net.py PASS. netdev_t abstraction; virtio-net eth0 on q35+SLIRP; VIRTIO_F_VERSION_1 negotiated; 256-slot RX prefill; sfence+doorbell TX; make test GREEN (boot oracle unchanged).*
+
 ### Phase 22 forward-looking constraints
 
 **Polling-only at 100Hz.** USB HID reports are polled from the PIT tick handler. This adds ~1-2us per tick when no events are pending. MSI-X driven completion is v2.0 work.
@@ -748,6 +751,41 @@ slot for the parent disk. Raise both constants together if more partitions are n
 lists all user ELFs as prerequisites. A change to any binary triggers a full disk
 rebuild including running `sgdisk`. This is correct but slow. A future optimization
 could separate partition table creation (once) from filesystem population (on change).
+
+### Phase 24 forward-looking constraints
+
+**`netdev_rx_deliver()` is a stub.** Received frames are silently discarded.
+Phase 25 replaces this with `eth_rx()` which dispatches based on EtherType
+(ARP = 0x0806, IPv4 = 0x0800). Do not add any printk to `netdev_rx_deliver()`
+in Phase 24 — SLIRP sends ARP probes and mDNS at boot, which would spam serial.
+
+**Single TX bounce buffer per slot, synchronous poll.** TX is serialized —
+one frame in flight at a time, polled to completion before returning. Concurrent
+sends from multiple processes share the same `tx_head` counter with no locking.
+Correct at Phase 24 (single-threaded kernel). Phase 25+ with a socket layer will
+need either a per-process TX lock or a true TX ring with atomic head/tail.
+
+**RX buffer is never freed.** All 256 RX PMM pages (+ 256 TX bounce pages) are
+allocated at `virtio_net_init()` and held permanently. `kva_free_pages` is not
+called on device reset. Negligible at Phase 24 scale.
+
+**No interrupt-driven RX.** Polling at 100 Hz adds ~1–2µs per tick when no
+frames are pending. MSI-X driven RX requires IOAPIC + vector allocation — Phase
+25+ or v2.0 work.
+
+**`notify_off_mult = 0` edge case.** Some virtio implementations set
+`notify_off_multiplier = 0` to indicate all queues share a single doorbell.
+In that case `p->tx_notify_off * 0 / 4 = 0` and the TX doorbell write lands at
+`notify_base[0]`, which is the single shared doorbell — correct. QEMU virtio-net
+sets the multiplier to 4 (one 32-bit doorbell per queue at offset 0 and 4).
+
+**PCI Enable Bus Master not set.** DMA from the NIC requires PCI command
+register bit 2 (Bus Master Enable) to be set. QEMU's firmware (SeaBIOS) sets
+this for all devices at boot, so Phase 24 works. On bare metal with UEFI that
+does not configure PCIe devices, this bit must be set explicitly via
+`pcie_write32(d->bus, d->dev, d->fn, 0x04, pcie_read32(..., 0x04) | 0x06u)`
+(Bus Master + Memory Space Enable). Add this to `virtio_net_init()` before
+Phase 27 (RTL8125 bare-metal work).
 
 ---
 
