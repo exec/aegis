@@ -15,8 +15,9 @@
  *   VMM_FLAG_WC      = PWT bit → PAT entry 1 → Write-Combining
  *   VMM_FLAG_UCMINUS = PCD bit → PAT entry 2 → UC- (weak uncacheable)
  *
- * NOTE: UC- (PA2) is NOT the same as strong-UC (PA3 = PWT|PCD = 0x18, used
- * for PCIe ECAM). Use VMM_FLAG_UCMINUS only where MTRR override is acceptable.
+ * NOTE: UC- (PA2) is NOT the same as strong-UC (PA3). The PCIe ECAM driver uses
+ * PWT=1, PCD=1 (full PTE flags 0x1B = Present|Write|PWT|PCD) → PA3=UC (strong).
+ * Use VMM_FLAG_UCMINUS only where MTRR override is acceptable.
  *
  * These map to x86 PTE bits 3 (PWT) and 4 (PCD).
  * vmm_map_page ORs flags into the PTE without masking, so these pass

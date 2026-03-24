@@ -18,14 +18,14 @@ void arch_init(void)
 /* arch_pat_init — enable Write-Combining in PAT entry 1.
  *
  * Default IA32_PAT layout (Intel/AMD):
- *   PA0=WB(06), PA1=WT(04), PA2=UC-(07), PA3=UC(00), PA4-PA7 repeat.
+ *   PA0=WB(06), PA1=WT(04), PA2=UC-(07), PA3=UC(00), PA4-PA7 mirror PA0-PA3.
  *
  * After this call:
- *   PA0=WB(06), PA1=WC(01), PA2=UC-(07), PA3=UC(00) — PA4-PA7 same.
+ *   PA0=WB(06), PA1=WC(01), PA2=UC-(07), PA3=UC(00) — PA4-PA7 mirror PA0-PA3.
+ *   (PA5 also changes from WT to WC; bits [39:32] of the MSR. The PAT bit in
+ *   4KB PTEs is never set by this kernel, so PA4-PA7 are unused in practice.)
  *
  * This allows VMM_FLAG_WC (PWT=1, PCD=0) to select WC for framebuffer pages.
- * The existing ECAM mapping (PWT=1, PCD=1 = bits 3+4 = 0x18) selects PA3=UC —
- * that entry is unchanged, so no existing mappings are affected.
  */
 void arch_pat_init(void)
 {
