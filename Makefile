@@ -166,7 +166,7 @@ PROG_BIN_OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(PROG_BIN_SRCS))
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
            $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
 
-.PHONY: all iso disk run shell test clean
+.PHONY: all iso disk run run-fb shell test clean
 
 all: $(BUILD)/aegis.elf
 
@@ -377,6 +377,20 @@ run: iso
 	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial stdio -vga std -no-reboot -m 128M \
+	    $(NVME_FLAGS) \
+	    -device qemu-xhci -device usb-kbd \
+	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
+
+# run-fb: boot with virtio-vga display (framebuffer) instead of legacy VGA.
+# Uses USB keyboard (-device usb-kbd) because virtio-vga replaces the legacy
+# VGA device that normally coexists with the i8042 PS/2 controller; the USB
+# HID path (xHCI → usb-kbd → kbd_usb_inject) is always reliable here.
+# Do NOT combine with -vga std: two VGA adapters confuse GRUB's video init.
+run-fb: iso
+	qemu-system-x86_64 \
+	    -machine q35 \
+	    -cdrom $(BUILD)/aegis.iso -boot order=d \
+	    -serial stdio -vga none -device virtio-vga -no-reboot -m 128M \
 	    $(NVME_FLAGS) \
 	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
