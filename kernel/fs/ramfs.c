@@ -2,6 +2,8 @@
 #include "ramfs.h"
 #include "kva.h"
 #include "printk.h"
+#include "uaccess.h"
+#include "syscall_util.h"
 #include <stdint.h>
 
 #define RAMFS_MAX_FILES   16
@@ -82,17 +84,33 @@ static int
 ramfs_write_fn(void *priv, const void *buf, uint64_t len)
 {
     ramfs_file_t *f = (ramfs_file_t *)priv;
+    /* Validate user pointer before copy_from_user.
+     * sys_write already calls user_ptr_valid at the syscall layer, but we
+     * guard here too because ramfs_write_fn may be called from other paths
+     * (e.g. future in-kernel writers) that bypass that check. */
+    if (!user_ptr_valid((uintptr_t)buf, len)) return -14;  /* EFAULT */
     if (len > RAMFS_MAX_SIZE) len = RAMFS_MAX_SIZE;
     /* Allocate backing page on first write */
     if (!f->data) {
         f->data = (uint8_t *)kva_alloc_pages(1);
         if (!f->data) return -12;  /* ENOMEM */
     }
-    /* O_TRUNC semantics: always write from offset 0; append not supported */
-    uint64_t i;
-    const uint8_t *src = (const uint8_t *)buf;
-    for (i = 0; i < len; i++)
-        f->data[i] = src[i];
+    /* O_TRUNC semantics: always write from offset 0; append not supported.
+     * buf is a user-space pointer (SMAP is active).  Copy via copy_from_user
+     * in page-bounded chunks to avoid crossing an unmapped page boundary. */
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t chunk = len - done;
+        /* Cap to current page boundary */
+        {
+            uint64_t page_off = (uint64_t)(uintptr_t)((const uint8_t *)buf + done) & 0xFFFULL;
+            uint64_t to_end   = 0x1000ULL - page_off;
+            if (chunk > to_end)
+                chunk = to_end;
+        }
+        copy_from_user(f->data + done, (const uint8_t *)buf + done, chunk);
+        done += chunk;
+    }
     f->size = (uint32_t)len;
     return (int)len;
 }

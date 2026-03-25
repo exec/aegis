@@ -1,6 +1,7 @@
 #include "vfs.h"
 #include "initrd.h"
 #include "ext2.h"
+#include "ramfs.h"
 #include "printk.h"
 #include "uaccess.h"
 #include <stdint.h>
@@ -8,6 +9,7 @@
 void
 vfs_init(void)
 {
+    ramfs_init();
     printk("[VFS] OK: initialized\n");
     initrd_register();
 }
@@ -189,6 +191,15 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
     if (initrd_open(path, out) == 0)
         return 0;
 
+    /* Route /run/ paths to ramfs */
+    {
+        const char *p = path;
+        /* /run/ file routing: p[4] is '\0' for bare "/run" so that case
+         * falls through to the streq directory check above */
+        if (p[0]=='/' && p[1]=='r' && p[2]=='u' && p[3]=='n' && p[4]=='/')
+            return ramfs_open(path + 5, flags, out);
+    }
+
     /* Fall through to ext2.  ext2_open() returns -1 if not mounted or
      * the file does not exist. */
     uint32_t ino = 0;
@@ -249,7 +260,8 @@ vfs_stat_path(const char *path, k_stat_t *out)
     if (!path || !out) return -2;
 
     /* Directory paths */
-    if (streq(path, "/") || streq(path, "/etc") || streq(path, "/bin")) {
+    if (streq(path, "/")    || streq(path, "/etc")  || streq(path, "/bin") ||
+        streq(path, "/dev") || streq(path, "/root") || streq(path, "/run")) {
         __builtin_memset(out, 0, sizeof(*out));
         out->st_dev   = 1;
         out->st_ino   = 1;
@@ -279,6 +291,15 @@ vfs_stat_path(const char *path, k_stat_t *out)
         out->st_dev   = 1;
         out->st_nlink = 1;
         return 0;
+    }
+
+    /* ramfs lookup for /run/ paths — pass short name without /run/ prefix */
+    {
+        const char *p = path;
+        /* /run/ file routing: p[4] is '\0' for bare "/run" so that case
+         * falls through to the streq directory check above */
+        if (p[0]=='/' && p[1]=='r' && p[2]=='u' && p[3]=='n' && p[4]=='/')
+            return ramfs_stat_path(path + 5, out);
     }
 
     /* Initrd file lookup */
