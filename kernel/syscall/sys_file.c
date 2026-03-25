@@ -237,24 +237,36 @@ sys_getcwd(uint64_t buf_ptr, uint64_t size)
  *
  * arg1 = user pointer to null-terminated path
  *
- * Sets proc->cwd to the provided path (up to 255 bytes + null).
- * Returns 0 on success, -EFAULT if the pointer is invalid.
- * Note: no filesystem validation in Phase 15; shell is responsible for
- * passing valid paths.
+ * Copies path to kernel buffer, validates it exists and is a directory
+ * via vfs_stat_path, then updates proc->cwd.
+ * Returns 0 on success, -EFAULT if pointer invalid, -ENOENT if not found,
+ * -ENOTDIR if path exists but is not a directory.
  */
 uint64_t
 sys_chdir(uint64_t path_ptr)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     if (!user_ptr_valid(path_ptr, 1)) return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    char kpath[256];
     uint64_t i;
     for (i = 0; i < 255; i++) {
         char c;
         copy_from_user(&c, (const void *)(uintptr_t)(path_ptr + i), 1);
-        proc->cwd[i] = c;
+        kpath[i] = c;
         if (c == '\0') break;
     }
-    proc->cwd[255] = '\0';
+    kpath[255] = '\0';
+
+    /* Validate path exists and is a directory */
+    k_stat_t st;
+    if (vfs_stat_path(kpath, &st) != 0) return (uint64_t)-(int64_t)2;  /* ENOENT */
+    if ((st.st_mode & S_IFMT) != S_IFDIR) return (uint64_t)-(int64_t)20; /* ENOTDIR */
+
+    for (i = 0; i < 256; i++) {
+        proc->cwd[i] = kpath[i];
+        if (kpath[i] == '\0') break;
+    }
     return 0;
 }
 
