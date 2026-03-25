@@ -408,11 +408,16 @@ fb_init(void)
         /* FB_BG == 0x00000000; memset-zero clears to black.
          * Cast away volatile for batched write-combined writes. */
         __builtin_memset((uint32_t *)s_fb_va, 0, total_px * sizeof(uint32_t));
-        /* Shadow does not need explicit zeroing: every shadow pixel is written
-         * by _fb_draw_char before _fb_scroll can read it back (the terminal
-         * always fills cells before the first scroll).  Skipping the memset
-         * avoids any risk of overwriting freshly-allocated PMM pages that may
-         * happen to coincide with the multiboot2 RSDP. */
+        /* Zero the shadow too.  Without this, gutter pixels (right of the last
+         * character column, between s_cols*8 and s_pitch_px) are PMM garbage.
+         * On the first _fb_scroll those garbage pixels are blitted to the FB,
+         * causing "TV static" on the right side of the screen.
+         *
+         * SAFETY: the multiboot2 info structure is reserved in PMM via
+         * arch_mm.c x86_reserved[1] (set at arch_mm_init time), so
+         * kva_alloc_pages cannot return a page that overlaps the RSDP. */
+        if (s_shadow)
+            __builtin_memset(s_shadow, 0, total_px * sizeof(uint32_t));
     }
 
     fb_available = 1;
