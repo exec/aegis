@@ -50,6 +50,8 @@ ifeq ($(INIT),shell)
 INIT_ELF_SRC = user/shell/shell.elf
 else ifeq ($(INIT),oksh)
 INIT_ELF_SRC = user/oksh/oksh.elf
+else ifeq ($(INIT),login)
+INIT_ELF_SRC = user/login/login.elf
 else
 INIT_ELF_SRC = user/hello/hello.elf
 endif
@@ -153,7 +155,8 @@ PROG_BIN_SRCS = \
     kernel/cp_bin.c \
     kernel/mv_bin.c \
     kernel/whoami_bin.c \
-    kernel/oksh_bin.c
+    kernel/oksh_bin.c \
+    kernel/login_bin.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -171,7 +174,7 @@ PROG_BIN_OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(PROG_BIN_SRCS))
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
            $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
 
-.PHONY: all iso disk run run-fb shell oksh test clean
+.PHONY: all iso disk run run-fb shell oksh login test clean
 
 all: $(BUILD)/aegis.elf
 
@@ -271,6 +274,9 @@ user/whoami/whoami.elf:
 user/oksh/oksh.elf:
 	$(MAKE) -C user/oksh
 
+user/login/login.elf:
+	$(MAKE) -C user/login
+
 # ── Program binary C arrays ───────────────────────────────────────────────────
 kernel/shell_bin.c: user/shell/shell.elf
 	cd user/shell && xxd -i shell.elf > ../../kernel/shell_bin.c
@@ -335,6 +341,9 @@ kernel/whoami_bin.c: user/whoami/whoami.elf
 
 kernel/oksh_bin.c: user/oksh/oksh.elf
 	cd user/oksh && xxd -i oksh.elf > ../../kernel/oksh_bin.c
+
+kernel/login_bin.c: user/login/login.elf
+	cd user/login && xxd -i login.elf > ../../kernel/login_bin.c
 
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
@@ -427,6 +436,9 @@ shell:
 oksh:
 	$(MAKE) INIT=oksh run
 
+login:
+	$(MAKE) INIT=login run
+
 # ── Debug targets ─────────────────────────────────────────────────────────────
 # make gdb      — boot kernel frozen at first instruction; attach GDB.
 #                 Serial output captured to build/debug.log.
@@ -459,7 +471,7 @@ clean:
 	rm -f kernel/wc_bin.c kernel/grep_bin.c kernel/sort_bin.c
 	rm -f kernel/mkdir_bin.c kernel/touch_bin.c kernel/rm_bin.c
 	rm -f kernel/cp_bin.c kernel/mv_bin.c
-	rm -f kernel/whoami_bin.c kernel/oksh_bin.c
+	rm -f kernel/whoami_bin.c kernel/oksh_bin.c kernel/login_bin.c
 	rm -f .init_stamp_*
 	$(MAKE) -C user/init clean 2>/dev/null; true
 	$(MAKE) -C user/hello clean
@@ -482,4 +494,5 @@ clean:
 	$(MAKE) -C user/mv clean
 	$(MAKE) -C user/whoami clean 2>/dev/null; true
 	$(MAKE) -C user/oksh clean 2>/dev/null; true
+	$(MAKE) -C user/login clean 2>/dev/null; true
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml

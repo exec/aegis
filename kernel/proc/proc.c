@@ -236,6 +236,27 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         for (;;) {}
     }
 
+    /* Grant auth capability — login needs CAP_KIND_AUTH to open /etc/shadow. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_AUTH, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant AUTH returned -ENOCAP\n");
+        for (;;) {}
+    }
+
+    /* Grant cap-delegation capability (reserved for future use). */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_CAP_GRANT, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant CAP_GRANT returned -ENOCAP\n");
+        for (;;) {}
+    }
+
+    /* Grant setuid capability — login calls sys_setuid/setgid after auth. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) < 0) {
+        printk("[CAP] FAIL: cap_grant SETUID returned -ENOCAP\n");
+        for (;;) {}
+    }
+
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
     proc->fds[1] = *console_open();
@@ -261,7 +282,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * pgid and sends itself SIGTTIN repeatedly. */
     kbd_set_tty_pgrp(proc->pgid);
 
-    printk("[CAP] OK: 3 capabilities granted to init\n");
+    printk("[CAP] OK: 6 capabilities granted to init\n");
 
     sched_add(&proc->task);
 }
