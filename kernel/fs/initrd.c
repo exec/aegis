@@ -12,6 +12,9 @@
  * silently dropped from the serial diff. */
 static const char s_motd[] = "[MOTD] Welcome to Aegis\n";
 static const char s_passwd[] = "root:x:0:0:root:/root:/bin/oksh\n";
+static const char s_shadow[] =
+    "root:$6$5a3b9c1d2e4f6789$fvwyIjdmyvB59hifGMRFrcwhBb4cH0.3nRy2j2LpCk."
+    "aNIFNyvYQJ36Bsl94miFbD/JHICz8O1dXoegZ0OmOg.:19000:0:99999:7:::\n";
 static const char s_profile[] =
     "PS1='root@aegis:${PWD:-/}# '\n"
     "export PS1\n"
@@ -21,6 +24,7 @@ static const char s_profile[] =
 /* Compile-time size constants for static string entries. */
 static const uint32_t     s_motd_size    = sizeof(s_motd)    - 1;
 static const unsigned int s_passwd_size  = sizeof(s_passwd)  - 1;
+static const unsigned int s_shadow_size  = sizeof(s_shadow)  - 1;
 static const unsigned int s_profile_size = sizeof(s_profile) - 1;
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
@@ -102,11 +106,12 @@ static const initrd_entry_t s_files[] = {
     { "/bin/oksh",   (const char *)oksh_elf,     &oksh_elf_len      },
     { "/bin/login",  (const char *)login_elf,    &login_elf_len     },
     { "/etc/passwd",  s_passwd,                   &s_passwd_size  },
+    { "/etc/shadow",  s_shadow,                   &s_shadow_size  },
     { "/etc/profile", s_profile,                  &s_profile_size },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
-static const uint32_t s_nfiles = 23;
+static const uint32_t s_nfiles = 24;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -156,7 +161,7 @@ initrd_stat_fn(void *priv, k_stat_t *st)
     st->st_dev     = 1;
     st->st_ino     = ino;
     st->st_nlink   = 1;
-    st->st_mode    = S_IFREG | 0444;
+    st->st_mode    = S_IFREG | 0555;
     st->st_size    = (int64_t)sz;
     st->st_blksize = 512;
     st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
@@ -195,7 +200,7 @@ static const dir_entry_t s_root_entries[] = {
     { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
-    { "motd", 8 }, { "passwd", 8 }, { "profile", 8 }, { (const char *)0, 0 }
+    { "motd", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_bin_entries[] = {
     { "sh",     8 }, { "ls",     8 }, { "cat",    8 }, { "echo",   8 },
