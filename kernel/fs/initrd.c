@@ -1,4 +1,5 @@
 #include "initrd.h"
+#include "kbd_vfs.h"
 #include "printk.h"
 #include <stdint.h>
 
@@ -10,6 +11,11 @@
  * The filter keeps only lines starting with '['; content not matching is
  * silently dropped from the serial diff. */
 static const char s_motd[] = "[MOTD] Welcome to Aegis\n";
+static const char s_passwd[] = "root:x:0:0:root:/:/bin/oksh\n";
+
+/* Compile-time size constants for static string entries. */
+static const uint32_t     s_motd_size   = sizeof(s_motd)   - 1;
+static const unsigned int s_passwd_size = sizeof(s_passwd) - 1;
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
  * These symbols are resolved at link time; their lengths are not
@@ -50,6 +56,10 @@ extern const unsigned char cp_elf[];
 extern const unsigned int  cp_elf_len;
 extern const unsigned char mv_elf[];
 extern const unsigned int  mv_elf_len;
+extern const unsigned char whoami_elf[];
+extern const unsigned int  whoami_elf_len;
+extern const unsigned char oksh_elf[];
+extern const unsigned int  oksh_elf_len;
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -79,14 +89,14 @@ static const initrd_entry_t s_files[] = {
     { "/bin/touch", (const char *)touch_elf,     &touch_elf_len     },
     { "/bin/rm",    (const char *)rm_elf,        &rm_elf_len        },
     { "/bin/cp",    (const char *)cp_elf,        &cp_elf_len        },
-    { "/bin/mv",    (const char *)mv_elf,        &mv_elf_len        },
+    { "/bin/mv",     (const char *)mv_elf,        &mv_elf_len        },
+    { "/bin/whoami", (const char *)whoami_elf,   &whoami_elf_len    },
+    { "/bin/oksh",   (const char *)oksh_elf,     &oksh_elf_len      },
+    { "/etc/passwd", s_passwd,                   &s_passwd_size     },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
-/* s_motd_size is a compile-time constant separate from the size_ptr scheme. */
-static const uint32_t s_motd_size = sizeof(s_motd) - 1;
-
-static const uint32_t s_nfiles = 18;
+static const uint32_t s_nfiles = 21;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -168,16 +178,21 @@ static const vfs_ops_t initrd_ops = {
 
 typedef struct { const char *name; uint8_t type; } dir_entry_t;
 
+static const dir_entry_t s_dev_entries[] = {
+    { "tty",    8 }, { (const char *)0, 0 }
+};
 static const dir_entry_t s_root_entries[] = {
-    { "etc", 4 }, { "bin", 4 }, { (const char *)0, 0 }
+    { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
-    { "motd", 8 }, { (const char *)0, 0 }
+    { "motd", 8 }, { "passwd", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_bin_entries[] = {
-    { "sh",    8 }, { "ls",    8 }, { "cat",   8 }, { "echo",  8 },
-    { "pwd",   8 }, { "uname", 8 }, { "clear",  8 }, { "true",  8 },
-    { "false", 8 }, { "wc",    8 }, { "grep",  8 }, { "sort",  8 },
+    { "sh",     8 }, { "ls",     8 }, { "cat",    8 }, { "echo",   8 },
+    { "pwd",    8 }, { "uname",  8 }, { "clear",  8 }, { "true",   8 },
+    { "false",  8 }, { "wc",     8 }, { "grep",   8 }, { "sort",   8 },
+    { "mkdir",  8 }, { "touch",  8 }, { "rm",     8 }, { "cp",     8 },
+    { "mv",     8 }, { "whoami", 8 }, { "oksh",   8 },
     { (const char *)0, 0 }
 };
 
@@ -229,14 +244,25 @@ initrd_register(void)
 int
 initrd_open(const char *path, vfs_file_t *out)
 {
+    /* /dev/tty: return the keyboard VFS singleton directly */
+    {
+        const char *a = path, *b = "/dev/tty";
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == *b) {
+            vfs_file_t *tty = kbd_vfs_open();
+            *out = *tty;
+            return 0;
+        }
+    }
+
     /* Check for directory paths first */
     {
-        const char *dirs[3] = { "/", "/etc", "/bin" };
-        const dir_entry_t *dir_tables[3] = {
-            s_root_entries, s_etc_entries, s_bin_entries
+        const char *dirs[4] = { "/", "/etc", "/bin", "/dev" };
+        const dir_entry_t *dir_tables[4] = {
+            s_root_entries, s_etc_entries, s_bin_entries, s_dev_entries
         };
         uint32_t d;
-        for (d = 0; d < 3; d++) {
+        for (d = 0; d < 4; d++) {
             const char *a = path, *b = dirs[d];
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a == *b) {
