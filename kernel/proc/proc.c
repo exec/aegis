@@ -163,6 +163,9 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 
     proc->pid              = proc_alloc_pid();   /* 1 for init */
     proc->ppid             = 0;
+    proc->pgid             = proc->pid;
+    proc->umask            = 022U;
+    proc->stop_signum      = 0;
     proc->cwd[0]           = '/';
     proc->cwd[1]           = '\0';
     proc->exit_status      = 0;

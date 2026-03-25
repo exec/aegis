@@ -144,6 +144,9 @@ sys_fork(syscall_frame_t *frame)
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     child->pid             = proc_alloc_pid();
     child->ppid            = parent->pid;
+    child->pgid            = parent->pgid;
+    child->umask           = parent->umask;
+    child->stop_signum     = 0;
     child->exit_status     = 0;
     /* Signal state: inherit mask and dispositions; clear pending (Linux semantics) */
     child->signal_mask     = parent->signal_mask;

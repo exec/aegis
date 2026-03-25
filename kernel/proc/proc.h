@@ -29,6 +29,9 @@ typedef struct {
     uint64_t      fs_base;                /* FS segment base for TLS; set by arch_prctl */
     uint32_t      pid;          /* unique process ID; 1 = init */
     uint32_t      ppid;         /* parent PID; 0 = no parent   */
+    uint32_t      pgid;         /* process group ID; init = own pid      */
+    uint32_t      umask;        /* file creation mask; init = 022        */
+    uint32_t      stop_signum;  /* signal that caused TASK_STOPPED; 0 = not stopped */
     char          cwd[256];     /* current working directory; init = "/" */
     uint64_t      exit_status;  /* lower 8 bits = exit code; written before zombie */
     /* Phase 17 — signal subsystem */
