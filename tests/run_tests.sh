@@ -104,3 +104,8 @@ python3 tests/test_virtio_net.py
 # verifies [NET] configured: and [NET] ICMP: echo reply from 10.0.2.2.
 echo "--- test_net_stack.py ---"
 python3 tests/test_net_stack.py || exit 1
+
+# Phase 25.7 login integration test — boots INIT=login on q35 + NVMe disk.
+# Skipped automatically if build/disk.img is not present.
+echo "--- test_login ---"
+python3 tests/test_login.py
