@@ -281,10 +281,10 @@ user/oksh/oksh.elf:
 user/login/login.elf:
 	$(MAKE) -C user/login
 
-user/vigil/vigil:
+user/vigil/vigil: user/vigil/main.c
 	$(MAKE) -C user/vigil
 
-user/vigictl/vigictl:
+user/vigictl/vigictl: user/vigictl/main.c
 	$(MAKE) -C user/vigictl
 
 # ── Program binary C arrays ───────────────────────────────────────────────────
