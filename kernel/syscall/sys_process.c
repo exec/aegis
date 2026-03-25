@@ -284,12 +284,33 @@ sys_waitpid(uint64_t pid_arg, uint64_t wstatus_ptr, uint64_t options)
     int32_t          pid    = (int32_t)(uint32_t)pid_arg;
 
 retry:;
-    /* Scan run queue for a zombie child matching the request. */
+    /* Scan run queue for a matching child (stopped or zombie). */
     aegis_task_t *t = sched_current()->next;
     while (t != sched_current()) {
-        if (t->is_user && t->state == TASK_ZOMBIE) {
+        if (t->is_user) {
             aegis_process_t *child = (aegis_process_t *)t;
-            if (child->ppid == caller->pid &&
+
+            /* Check for stopped child (WUNTRACED) */
+            if (t->state == TASK_STOPPED && (options & WUNTRACED) &&
+                child->ppid == caller->pid &&
+                (pid == -1 || (uint32_t)pid == child->pid)) {
+                uint32_t child_pid = child->pid;
+                if (wstatus_ptr) {
+                    if (!user_ptr_valid(wstatus_ptr, 4))
+                        return (uint64_t)-(int64_t)14; /* EFAULT */
+                    /* WIFSTOPPED encoding: (signum << 8) | 0x7f */
+                    uint32_t wstatus_val = (child->stop_signum << 8) | 0x7fU;
+                    copy_to_user((void *)(uintptr_t)wstatus_ptr, &wstatus_val, 4);
+                }
+                /* Clear stop_signum so repeated waitpid doesn't re-report */
+                child->stop_signum = 0;
+                sched_current()->waiting_for = 0;
+                return (uint64_t)child_pid;
+            }
+
+            /* Check for zombie child (normal reap) */
+            if (t->state == TASK_ZOMBIE &&
+                child->ppid == caller->pid &&
                 (pid == -1 || (uint32_t)pid == child->pid)) {
                 /* Found a zombie to reap. */
                 uint32_t child_pid = child->pid;
@@ -608,4 +629,106 @@ sys_execve(syscall_frame_t *frame,
 done:
     kva_free_pages(abuf, EXECVE_ARGBUF_PAGES);
     return ret;
+}
+
+/* sys_setpgid — syscall 109: set pgid of process pid to pgid.
+ * Aegis policy: may only set pgid = pid (form own singleton group).
+ * pid=0 means current process. pgid=0 means use target's pid. */
+uint64_t
+sys_setpgid(uint64_t pid_arg, uint64_t pgid_arg)
+{
+    aegis_process_t *caller = (aegis_process_t *)sched_current();
+    uint32_t pid  = (uint32_t)pid_arg;
+    uint32_t pgid = (uint32_t)pgid_arg;
+
+    aegis_process_t *target = caller;
+    if (pid != 0) {
+        target = (void *)0;
+        aegis_task_t *t = sched_current()->next;
+        while (t != sched_current()) {
+            if (t->is_user) {
+                aegis_process_t *p = (aegis_process_t *)t;
+                if (p->pid == pid) {
+                    target = p;
+                    break;
+                }
+            }
+            t = t->next;
+        }
+        if (!target)
+            return (uint64_t)-(int64_t)3; /* ESRCH */
+    }
+
+    if (pgid == 0)
+        pgid = target->pid;
+
+    /* Aegis policy: may only form own singleton group */
+    if (pgid != target->pid)
+        return (uint64_t)-(int64_t)1; /* EPERM */
+
+    target->pgid = pgid;
+    return 0;
+}
+
+/* sys_getpgrp — syscall 111: return current->pgid */
+uint64_t
+sys_getpgrp(void)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    return (uint64_t)proc->pgid;
+}
+
+/* sys_setsid — syscall 112: set pgid = pid; return pid.
+ * No real session object in Phase 25.5. */
+uint64_t
+sys_setsid(void)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    proc->pgid = proc->pid;
+    return (uint64_t)proc->pid;
+}
+
+/* sys_getpgid — syscall 121: return pgid of process pid (0 = self). */
+uint64_t
+sys_getpgid(uint64_t pid_arg)
+{
+    aegis_process_t *caller = (aegis_process_t *)sched_current();
+    uint32_t pid = (uint32_t)pid_arg;
+    if (pid == 0)
+        return (uint64_t)caller->pgid;
+
+    aegis_task_t *t = sched_current()->next;
+    while (t != sched_current()) {
+        if (t->is_user) {
+            aegis_process_t *p = (aegis_process_t *)t;
+            if (p->pid == pid)
+                return (uint64_t)p->pgid;
+        }
+        t = t->next;
+    }
+    return (uint64_t)-(int64_t)3; /* ESRCH */
+}
+
+/* sys_umask — syscall 95: set file creation mask; return previous value.
+ * Not yet wired to ext2 create (Phase 26). */
+uint64_t
+sys_umask(uint64_t mask)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    uint32_t old = proc->umask;
+    proc->umask  = (uint32_t)(mask & 0777U);
+    return (uint64_t)old;
+}
+
+/* sys_getrlimit — syscall 97: return {RLIM_INFINITY, RLIM_INFINITY}.
+ * struct rlimit = {uint64_t rlim_cur, rlim_max} = 16 bytes. */
+uint64_t
+sys_getrlimit(uint64_t resource, uint64_t rlim_ptr)
+{
+    (void)resource;
+    if (!user_ptr_valid(rlim_ptr, 16))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    uint64_t inf[2] = { ~0ULL, ~0ULL };
+    copy_to_user((void *)(uintptr_t)rlim_ptr, inf, 16);
+    return 0;
 }

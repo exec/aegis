@@ -16,8 +16,9 @@ sys_rt_sigaction(uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
     if (arg4 != 8) return (uint64_t)-(int64_t)22; /* EINVAL */
     int signum = (int)arg1;
     if (signum <= 0 || signum >= 64) return (uint64_t)-(int64_t)22; /* EINVAL */
-    /* SIGKILL and SIGSTOP cannot be caught */
-    if (signum == SIGKILL || signum == SIGSTOP) return (uint64_t)-(int64_t)22;
+    /* SIGKILL, SIGSTOP, and SIGCONT cannot be caught or ignored */
+    if (signum == SIGKILL || signum == SIGSTOP || signum == SIGCONT)
+        return (uint64_t)-(int64_t)22; /* EINVAL */
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
@@ -143,19 +144,29 @@ sys_rt_sigreturn(syscall_frame_t *frame)
  * arg1 = pid (target process ID), arg2 = signum
  *
  * Sends signal signum to process with PID pid.
- * Group/broadcast kills (pid <= 0) not supported in Phase 17 — return ESRCH.
+ * pid < 0: deliver to process group -pid.
+ * pid == 0: deliver to calling process's own group.
+ * pid > 0: deliver to individual process.
  * signal_send_pid internally guards is_user before treating a task as aegis_process_t.
  */
 uint64_t
 sys_kill(uint64_t arg1, uint64_t arg2)
 {
-    int64_t pid    = (int64_t)arg1;
-    int     signum = (int)arg2;
-
-    if (pid <= 0) return (uint64_t)-(int64_t)3; /* ESRCH: group kill not supported */
-    if (signum < 0 || signum >= 64) return (uint64_t)-(int64_t)22; /* EINVAL */
-
-    signal_send_pid((uint32_t)pid, signum);
+    int32_t  pid = (int32_t)(uint32_t)arg1;
+    int      sig = (int)arg2;
+    if (sig <= 0 || sig >= 64) return (uint64_t)-(int64_t)22; /* EINVAL */
+    if (pid < 0) {
+        /* kill(-pgid, sig): deliver to entire process group */
+        signal_send_pgrp((uint32_t)(-pid), sig);
+        return 0;
+    }
+    if (pid == 0) {
+        /* kill(0, sig): deliver to own process group */
+        aegis_process_t *proc = (aegis_process_t *)sched_current();
+        signal_send_pgrp(proc->pgid, sig);
+        return 0;
+    }
+    signal_send_pid((uint32_t)pid, sig);
     return 0;
 }
 

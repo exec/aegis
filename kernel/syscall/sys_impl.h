@@ -36,6 +36,7 @@ extern void isr_post_dispatch(void);
 #endif
 
 #define WNOHANG  1
+#define WUNTRACED 2
 
 #ifndef ARCH_SET_FS
 #define ARCH_SET_FS 0x1002
@@ -148,3 +149,11 @@ uint64_t sys_rt_sigprocmask(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
 uint64_t sys_rt_sigreturn(syscall_frame_t *frame);
 uint64_t sys_kill(uint64_t a1, uint64_t a2);
 uint64_t sys_setfg(uint64_t a1);
+
+/* ── Process group / session / resource syscalls (sys_process.c) ─────────── */
+uint64_t sys_setpgid(uint64_t pid_arg, uint64_t pgid_arg);
+uint64_t sys_getpgrp(void);
+uint64_t sys_setsid(void);
+uint64_t sys_getpgid(uint64_t pid_arg);
+uint64_t sys_umask(uint64_t mask);
+uint64_t sys_getrlimit(uint64_t resource, uint64_t rlim_ptr);
