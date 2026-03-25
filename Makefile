@@ -40,10 +40,11 @@ BUILD   = build
 ISO_DIR = $(BUILD)/isodir
 
 # ── INIT variable ───────────────────────────────────────────────────────────
-# INIT=hello (default): embeds user/hello/hello.elf as init process
-# INIT=shell           : embeds user/shell/shell.elf as init process
-# make shell           : convenience target for INIT=shell run
-INIT ?= hello
+# INIT=oksh (default): embeds user/oksh/oksh.elf as init process
+# INIT=hello          : embeds user/hello/hello.elf as init process
+# INIT=shell          : embeds user/shell/shell.elf as init process
+# make shell          : convenience target for INIT=shell run
+INIT ?= oksh
 
 ifeq ($(INIT),shell)
 INIT_ELF_SRC = user/shell/shell.elf
@@ -210,8 +211,10 @@ user/shell/shell.elf:
 
 $(INIT_BIN_C): $(INIT_STAMP) $(INIT_ELF_SRC)
 	@ELF=$(notdir $(INIT_ELF_SRC)); \
+	 NAME=$$(basename $$ELF .elf); \
 	 cd $(dir $(INIT_ELF_SRC)) && xxd -i $$ELF | \
-	 sed "s/$$(basename $$ELF .elf)_elf/init_elf/g" > ../../$(INIT_BIN_C)
+	 sed "s/$${NAME}_elf/init_elf/g" > ../../$(INIT_BIN_C) && \
+	 echo "const char init_name[] = \"$$NAME\";" >> ../../$(INIT_BIN_C)
 
 # ── Program ELF binaries ──────────────────────────────────────────────────────
 user/ls/ls.elf:
@@ -379,6 +382,13 @@ $(DISK): $(DISK_USER_BINS)
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
 	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	# Auth files for login
+	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
+	printf 'root:$$6$$5a3b9c1d2e4f6789$$fvwyIjdmyvB59hifGMRFrcwhBb4cH0.3nRy2j2LpCk.aNIFNyvYQJ36Bsl94miFbD/JHICz8O1dXoegZ0OmOg.:19000:0:99999:7:::\n' > /tmp/aegis-shadow
+	printf 'root:x:0:root\nwheel:x:999:root\n' > /tmp/aegis-group
+	printf 'write /tmp/aegis-passwd /etc/passwd\nwrite /tmp/aegis-shadow /etc/shadow\nwrite /tmp/aegis-group /etc/group\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	rm -f /tmp/aegis-passwd /tmp/aegis-shadow /tmp/aegis-group
 	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"
