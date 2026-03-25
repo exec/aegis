@@ -17,9 +17,9 @@ static volatile uint32_t s_tail = 0;  /* next read position  */
 /* Shift state */
 static volatile int s_shift = 0;
 
-/* Ctrl state and foreground process PID for Ctrl-C delivery */
-static volatile int      s_ctrl   = 0;
-static volatile uint32_t s_fg_pid = 0;
+/* Ctrl state and foreground process group for signal delivery */
+static volatile int      s_ctrl     = 0;
+static volatile uint32_t s_tty_pgrp = 0;
 
 /* US QWERTY scancode set 1 — unshifted (make codes 0x01–0x39) */
 static const char s_sc_lower[] = {
@@ -94,9 +94,19 @@ kbd_handler(void)
 
     /* Ctrl-C = Ctrl held + scancode 0x2E ('c') */
     if (s_ctrl && sc == 0x2E) {
-        if (s_fg_pid != 0)
-            signal_send_pid(s_fg_pid, SIGINT);
-        return;  /* do not push 'c' to the buffer */
+        if (s_tty_pgrp != 0)
+            signal_send_pgrp(s_tty_pgrp, SIGINT);
+        return;
+    }
+    if (s_ctrl && sc == 0x2C) {
+        if (s_tty_pgrp != 0)
+            signal_send_pgrp(s_tty_pgrp, SIGTSTP);
+        return;
+    }
+    if (s_ctrl && sc == 0x2B) {
+        if (s_tty_pgrp != 0)
+            signal_send_pgrp(s_tty_pgrp, SIGQUIT);
+        return;
     }
 
     if (sc < SC_TABLE_SIZE) {
@@ -153,19 +163,35 @@ kbd_usb_inject(uint8_t ascii)
 {
     if (ascii == 0)
         return;
+    /* Intercept Ctrl-C (ETX=0x03), Ctrl-Z (SUB=0x1A), Ctrl-\ (FS=0x1C) */
+    if (ascii == 0x03) {
+        if (s_tty_pgrp != 0)
+            signal_send_pgrp(s_tty_pgrp, SIGINT);
+        return;
+    }
+    if (ascii == 0x1A) {
+        if (s_tty_pgrp != 0)
+            signal_send_pgrp(s_tty_pgrp, SIGTSTP);
+        return;
+    }
+    if (ascii == 0x1C) {
+        if (s_tty_pgrp != 0)
+            signal_send_pgrp(s_tty_pgrp, SIGQUIT);
+        return;
+    }
     buf_push((char)ascii);
 }
 
 void
-kbd_set_foreground_pid(uint32_t pid)
+kbd_set_tty_pgrp(uint32_t pgid)
 {
-    s_fg_pid = pid;
+    s_tty_pgrp = pgid;
 }
 
 uint32_t
-kbd_get_foreground_pid(void)
+kbd_get_tty_pgrp(void)
 {
-    return s_fg_pid;
+    return s_tty_pgrp;
 }
 
 char

@@ -19,14 +19,14 @@ char kbd_read(void);
  * Returns 0 if the buffer is empty. */
 int kbd_poll(char *out);
 
-/* Register the foreground process PID for Ctrl-C delivery.
+/* Register the foreground process group for signal delivery.
  * Called by the shell via sys_setfg (syscall 360) before waitpid.
- * Call with pid=0 to clear (no foreground process). */
-void kbd_set_foreground_pid(uint32_t pid);
+ * Call with pgid=0 to clear (no foreground process group). */
+void kbd_set_tty_pgrp(uint32_t pgid);
 
-/* Return the current foreground PID (set by kbd_set_foreground_pid).
- * Returns 0 if no foreground process. */
-uint32_t kbd_get_foreground_pid(void);
+/* Return the current foreground process group ID.
+ * Returns 0 if no foreground process group. */
+uint32_t kbd_get_tty_pgrp(void);
 
 /* Like kbd_read() but returns '\0' and sets *interrupted=1 if a signal
  * is pending for the current process. Returns the character otherwise. */

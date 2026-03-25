@@ -364,7 +364,7 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         return 0;
     }
     case 0x540FUL: { /* TIOCGPGRP — return foreground PID */
-        uint32_t pgid = kbd_get_foreground_pid();
+        uint32_t pgid = kbd_get_tty_pgrp();
         if (!user_ptr_valid(arg3, sizeof(pgid)))
             return (uint64_t)-(int64_t)14; /* EFAULT */
         copy_to_user((void *)(uintptr_t)arg3, &pgid, sizeof(pgid));

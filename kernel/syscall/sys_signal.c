@@ -171,6 +171,6 @@ sys_kill(uint64_t arg1, uint64_t arg2)
 uint64_t
 sys_setfg(uint64_t arg1)
 {
-    kbd_set_foreground_pid((uint32_t)arg1);
+    kbd_set_tty_pgrp((uint32_t)arg1);
     return 0;
 }
