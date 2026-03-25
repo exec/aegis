@@ -249,8 +249,10 @@ signal_send_pgrp(uint32_t pgid, int signum)
             if (p->pgid == pgid && p->pid != 1) {
                 p->pending_signals |= (1ULL << (uint32_t)signum);
                 /* Wake stopped/blocked task so it can deliver the signal */
-                if (t->state == TASK_BLOCKED || t->state == TASK_STOPPED)
+                if (t->state == TASK_STOPPED)
                     sched_resume(t);
+                else if (t->state == TASK_BLOCKED)
+                    sched_wake(t);
             }
         }
         t = t->next;
