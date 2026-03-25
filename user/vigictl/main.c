@@ -26,7 +26,10 @@ read_vigil_pid(void)
 {
     char buf[32];
     int fd = open(VIGIL_PID_PATH, O_RDONLY);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        write(2, "vigil: not running (no pid file at /run/vigil.pid)\n", 51);
+        return -1;
+    }
     int n = (int)read(fd, buf, sizeof(buf) - 1);
     close(fd);
     if (n <= 0) return -1;
@@ -57,7 +60,6 @@ main(int argc, char **argv)
 
     pid_t pid = read_vigil_pid();
     if (pid <= 0) {
-        write(2, "vigictl: vigil not running\n", 27);
         return 1;
     }
 
