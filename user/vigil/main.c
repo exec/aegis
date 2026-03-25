@@ -214,6 +214,20 @@ main(void)
 
     scan_services();
 
+    /* Fallback: if no services were loaded (e.g. /etc/vigil/services doesn't
+     * exist on this disk), register a built-in getty that runs login. */
+    if (s_nsvc == 0) {
+        vigil_log("no services, starting getty");
+        service_t *s = &s_svcs[s_nsvc++];
+        memset(s, 0, sizeof(*s));
+        memcpy(s->name, "getty", 5);
+        memcpy(s->run_cmd, "exec /bin/login", 15);
+        s->policy       = POLICY_RESPAWN;
+        s->max_restarts = 5;
+        s->pid          = -1;
+        s->active       = 1;
+    }
+
     int i;
     for (i = 0; i < s_nsvc; i++)
         start_service(&s_svcs[i]);
