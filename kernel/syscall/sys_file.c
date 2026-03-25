@@ -339,11 +339,17 @@ sys_nanosleep(uint64_t arg1, uint64_t arg2)
     return 0;
 }
 
-/* Phase 18: all identity syscalls return 0 (root). */
-uint64_t sys_getuid(void)  { return 0; }
-uint64_t sys_geteuid(void) { return 0; }
-uint64_t sys_getgid(void)  { return 0; }
-uint64_t sys_getegid(void) { return 0; }
+/* Identity syscalls read from PCB. */
+uint64_t sys_getuid(void) {
+    aegis_process_t *p = (aegis_process_t *)sched_current();
+    return p ? (uint64_t)p->uid : 0;
+}
+uint64_t sys_geteuid(void) { return sys_getuid(); }
+uint64_t sys_getgid(void) {
+    aegis_process_t *p = (aegis_process_t *)sched_current();
+    return p ? (uint64_t)p->gid : 0;
+}
+uint64_t sys_getegid(void) { return sys_getgid(); }
 
 /*
  * sys_ioctl — syscall 16
@@ -449,13 +455,16 @@ sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     case 4: /* F_SETFL */
         f->flags = (f->flags & ~0x800U) | ((uint32_t)arg3 & 0x800U);
         return 0;
-    case 0: { /* F_DUPFD — find lowest free fd >= arg3 */
+    case 0:   /* F_DUPFD */
+    case 1030: { /* F_DUPFD_CLOEXEC (0x406) — same as F_DUPFD + set FD_CLOEXEC */
         uint32_t new_fd;
         for (new_fd = (uint32_t)arg3; new_fd < PROC_MAX_FDS; new_fd++) {
             if (!proc->fds[new_fd].ops) break;
         }
         if (new_fd >= PROC_MAX_FDS) return (uint64_t)-(int64_t)24; /* EMFILE */
         proc->fds[new_fd] = *f; /* struct copy */
+        proc->fds[new_fd].flags &= ~VFS_FD_CLOEXEC;   /* clear first */
+        if (arg2 == 1030) proc->fds[new_fd].flags |= VFS_FD_CLOEXEC;
         if (f->ops->dup) f->ops->dup(f->priv);
         return (uint64_t)new_fd;
     }

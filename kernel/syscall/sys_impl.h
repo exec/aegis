@@ -142,6 +142,8 @@ uint64_t sys_getuid(void);
 uint64_t sys_geteuid(void);
 uint64_t sys_getgid(void);
 uint64_t sys_getegid(void);
+uint64_t sys_setuid(uint64_t uid_arg);
+uint64_t sys_setgid(uint64_t gid_arg);
 
 /* ── sys_signal.c ───────────────────────────────────────────────────────── */
 uint64_t sys_rt_sigaction(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
@@ -157,3 +159,4 @@ uint64_t sys_setsid(void);
 uint64_t sys_getpgid(uint64_t pid_arg);
 uint64_t sys_umask(uint64_t mask);
 uint64_t sys_getrlimit(uint64_t resource, uint64_t rlim_ptr);
+uint64_t sys_uname(uint64_t buf_uptr);
