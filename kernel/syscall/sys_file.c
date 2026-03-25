@@ -1,6 +1,14 @@
 /* sys_file.c — File and filesystem syscalls */
 #include "sys_impl.h"
 
+#ifndef TCGETS
+#define TCGETS    0x5401UL
+#define TCSETS    0x5402UL
+#define TCSETSW   0x5403UL
+#define TCSETSF   0x5404UL
+#define TIOCSPGRP 0x5410UL
+#endif
+
 /*
  * sys_open — syscall 2
  *
@@ -379,6 +387,28 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         if (!user_ptr_valid(arg3, sizeof(avail)))
             return (uint64_t)-(int64_t)14; /* EFAULT */
         copy_to_user((void *)(uintptr_t)arg3, &avail, sizeof(avail));
+        return 0;
+    }
+    case TCGETS: {
+        if (!kbd_vfs_is_tty(f))
+            return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)kbd_vfs_tcgets((void *)(uintptr_t)arg3);
+    }
+    case TCSETS:
+    case TCSETSW:  /* drain is a no-op for our in-memory driver */
+    case TCSETSF: { /* flush is a no-op */
+        if (!kbd_vfs_is_tty(f))
+            return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)kbd_vfs_tcsets((const void *)(uintptr_t)arg3);
+    }
+    case TIOCSPGRP: {
+        if (!kbd_vfs_is_tty(f))
+            return (uint64_t)-(int64_t)25; /* ENOTTY */
+        if (!user_ptr_valid(arg3, sizeof(uint32_t)))
+            return (uint64_t)-(int64_t)14; /* EFAULT */
+        uint32_t pgid;
+        copy_from_user(&pgid, (const void *)(uintptr_t)arg3, sizeof(uint32_t));
+        kbd_set_tty_pgrp(pgid);
         return 0;
     }
     default:

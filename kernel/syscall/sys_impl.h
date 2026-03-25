@@ -19,6 +19,7 @@
 #include "printk.h"
 #include "arch.h"
 #include "ext2.h"
+#include "kbd_vfs.h"
 #include <stdint.h>
 #include <stddef.h>
 
