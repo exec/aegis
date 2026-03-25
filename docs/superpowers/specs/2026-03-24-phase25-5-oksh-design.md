@@ -247,10 +247,11 @@ aegis_task_t *t   = cur;
 do {
     if (t->is_user) {
         aegis_process_t *p = (aegis_process_t *)t;
-        if (p->pgid == pgid && p->pid != 1)
+        if (p->pgid == pgid && p->pid != 1) {
             p->pending_signals |= (1ULL << (uint32_t)signum);
             if (t->state == TASK_BLOCKED || t->state == TASK_STOPPED)
                 sched_resume(t);   /* wake so it can deliver the signal */
+        }
     }
     t = t->next;
 } while (t != cur);
