@@ -274,10 +274,39 @@ run_pipeline(cmd_t *cmds, int n)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
     char  line[LINE_SIZE];
     cmd_t cmds[MAX_PIPELINE];
+
+    /* -c <command>: execute a single command string and exit.
+     * Used by vigil start_service: execv("/bin/sh", ["/bin/sh", "-c", cmd, NULL]).
+     * We do NOT print the shell banner in -c mode. */
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        /* Copy command string into mutable buffer for parse_pipeline */
+        strncpy(line, argv[2], sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        int n = parse_pipeline(line, cmds, MAX_PIPELINE);
+        if (n == 0)
+            return 0;
+        /* Handle exec builtin: replace shell with the target program */
+        if (n == 1 && strcmp(cmds[0].argv[0], "exec") == 0 && cmds[0].argv[1]) {
+            char full[256];
+            char *prog = cmds[0].argv[1];
+            /* Shift argv: exec's argv[1..] becomes the new argv[0..] */
+            char **exec_argv = &cmds[0].argv[1];
+            if (prog[0] != '/') {
+                snprintf(full, sizeof(full), "/bin/%s", prog);
+                execve(full, exec_argv, g_envp);
+            } else {
+                execve(prog, exec_argv, g_envp);
+            }
+            perror(prog);
+            return 127;
+        }
+        run_pipeline(cmds, n);
+        return 0;
+    }
 
     printf("[SHELL] Aegis shell ready\n");
 
