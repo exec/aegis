@@ -216,8 +216,12 @@ typedef struct { const char *name; uint8_t type; } dir_entry_t;
 static const dir_entry_t s_dev_entries[] = {
     { "tty",    8 }, { (const char *)0, 0 }
 };
+static const dir_entry_t s_root_dir_entries[] = {
+    { (const char *)0, 0 }   /* /root is empty */
+};
 static const dir_entry_t s_root_entries[] = {
-    { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { (const char *)0, 0 }
+    { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { "root", 4 },
+    { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
     { "motd", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 },
@@ -303,18 +307,20 @@ initrd_open(const char *path, vfs_file_t *out)
 
     /* Check for directory paths first */
     {
-        const char *dirs[8] = {
+        const char *dirs[9] = {
             "/", "/etc", "/bin", "/dev",
             "/etc/vigil", "/etc/vigil/services", "/etc/vigil/services/getty",
+            "/root",
             (const char *)0
         };
-        const dir_entry_t *dir_tables[8] = {
+        const dir_entry_t *dir_tables[9] = {
             s_root_entries, s_etc_entries, s_bin_entries, s_dev_entries,
             s_vigil_entries, s_vigil_services_entries, s_vigil_getty_entries,
+            s_root_dir_entries,
             (const dir_entry_t *)0
         };
         uint32_t d;
-        for (d = 0; d < 7; d++) {
+        for (d = 0; d < 8; d++) {
             const char *a = path, *b = dirs[d];
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a == *b) {
