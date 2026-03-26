@@ -1,6 +1,9 @@
 /* sys_process.c — Process lifecycle syscalls: exit, fork, execve, waitpid */
 #include "sys_impl.h"
 
+#define MAX_PROCESSES 64
+static uint32_t s_fork_count = 1;  /* starts at 1 for init */
+
 /*
  * sys_exit — syscall 60
  *
@@ -122,6 +125,11 @@ sys_fork(syscall_frame_t *frame)
     aegis_task_t    *parent_task = sched_current();
     if (!parent_task || !parent_task->is_user) return (uint64_t)-(int64_t)1; /* EPERM */
     aegis_process_t *parent      = (aegis_process_t *)parent_task;
+
+    /* S10: Prevent fork bombs — cap total process count. */
+    if (s_fork_count >= MAX_PROCESSES)
+        return (uint64_t)(int64_t)-11;  /* -EAGAIN */
+
     /* 1. Allocate child PCB */
     aegis_process_t *child = kva_alloc_pages(1);
     if (!child)
@@ -206,7 +214,7 @@ sys_fork(syscall_frame_t *frame)
      * This avoids the SYSRET path entirely, eliminating the stale-frame
      * register corruption that caused r12=0 / ss=0x18 crashes.
      *
-     * Stack layout (low→high, child->task.rsp = lowest address):
+     * Stack layout (low→high, child->task.sp = lowest address):
      *
      *   -- ctx_switch callee-save frame (7 slots) --
      *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0]
@@ -262,9 +270,9 @@ sys_fork(syscall_frame_t *frame)
     *--sp = 0;  /* r12                                                      */
     *--sp = 0;  /* r13                                                      */
     *--sp = 0;  /* r14                                                      */
-    *--sp = 0;  /* r15  <- child->task.rsp points here                      */
+    *--sp = 0;  /* r15  <- child->task.sp points here                       */
 
-    child->task.rsp              = (uint64_t)(uintptr_t)sp;
+    child->task.sp               = (uint64_t)(uintptr_t)sp;
     child->task.stack_base       = kstack;
     child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4 * 4096);
 
@@ -273,6 +281,7 @@ sys_fork(syscall_frame_t *frame)
 
     /* 7. Add child to run queue */
     sched_add(&child->task);
+    s_fork_count++;
 
     /* Return child PID to parent */
     return (uint64_t)child->pid;

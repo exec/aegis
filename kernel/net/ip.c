@@ -258,11 +258,11 @@ void net_init(void)
     {
         uint32_t n;
         for (n = 0; n < 500u; n++) {
-            __asm__ volatile("sti; hlt; cli");
+            arch_wait_for_irq();
             netdev_poll_all(); /* drain in case PIT ISR hasn't run yet */
             if (s_icmp_reply_received)
                 break;
         }
     }
-    __asm__ volatile("sti"); /* restore interrupts */
+    arch_enable_irq(); /* restore interrupts */
 }

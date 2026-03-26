@@ -3,9 +3,11 @@
 
 #include <stdint.h>
 
-/* Page mapping flags. These are x86-64 PTE bit positions and are passed
- * directly into page table entries by vmm.c. An ARM64 port would need
- * arch_vmm.c to translate these before inserting into hardware PTEs. */
+/* Abstract page-mapping flags. Each architecture translates these to
+ * hardware PTE bits via arch_pte_from_flags() in arch_vmm.h.
+ * On x86-64 the values happen to match the hardware PTE bit positions;
+ * ARM64 provides a real translation. Never OR these directly into a PTE
+ * without calling arch_pte_from_flags() first. */
 #define VMM_FLAG_PRESENT  (1UL << 0)
 #define VMM_FLAG_WRITABLE (1UL << 1)
 #define VMM_FLAG_USER     (1UL << 2)
@@ -19,7 +21,8 @@
  * PWT=1, PCD=1 (full PTE flags 0x1B = Present|Write|PWT|PCD) → PA3=UC (strong).
  * Use VMM_FLAG_UCMINUS only where MTRR override is acceptable.
  *
- * These map to x86 PTE bits 3 (PWT) and 4 (PCD).
+ * On x86-64 these map to PTE bits 3 (PWT) and 4 (PCD). Other architectures
+ * translate via arch_pte_from_flags().
  * vmm_map_page ORs flags into the PTE without masking, so these pass
  * through as-is to hardware. */
 #define VMM_FLAG_WC       (1UL << 3)   /* Write-Combining  (PWT=1, PCD=0) → PA1 */

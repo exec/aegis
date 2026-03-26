@@ -1,5 +1,6 @@
 #include "vmm.h"
 #include "arch.h"     /* arch_vmm_load_pml4, arch_vmm_invlpg */
+#include "arch_vmm.h" /* arch_pte_from_flags, ARCH_PTE_ADDR */
 #include "pmm.h"
 #include "printk.h"
 #include <stdint.h>
@@ -7,7 +8,7 @@
 
 #define VMM_PAGE_SIZE   4096UL
 #define VMM_PAGE_MASK   (~(VMM_PAGE_SIZE - 1))
-#define PTE_ADDR(e)     ((e) & 0x000FFFFFFFFFF000UL)
+/* PTE_ADDR removed — use ARCH_PTE_ADDR from arch_vmm.h instead. */
 
 /* Physical address of the active PML4 table. */
 static uint64_t s_pml4_phys;
@@ -47,7 +48,7 @@ static volatile uint64_t *s_window_pte2;    /* → s_window_pt[1], second window
 static void *
 vmm_window_map(uint64_t phys)
 {
-    *s_window_pte = phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+    *s_window_pte = phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
     arch_vmm_invlpg(VMM_WINDOW_VA);
     return (void *)VMM_WINDOW_VA;
 }
@@ -70,7 +71,7 @@ vmm_window_unmap(void)
 static void *
 vmm_window_map2(uint64_t phys)
 {
-    *s_window_pte2 = phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+    *s_window_pte2 = phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
     arch_vmm_invlpg(VMM_WINDOW_VA + 4096);
     return (void *)(VMM_WINDOW_VA + 4096);
 }
@@ -153,11 +154,11 @@ ensure_table_phys(uint64_t parent_phys, uint64_t idx, uint64_t extra_flags)
     if (!(entry & VMM_FLAG_PRESENT)) {
         uint64_t child = alloc_table();   /* uses window internally */
         parent = vmm_window_map(parent_phys);
-        parent[idx] = child | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | extra_flags;
+        parent[idx] = child | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | extra_flags);
         vmm_window_unmap();
         return child;
     }
-    return PTE_ADDR(entry);
+    return ARCH_PTE_ADDR(entry);
 }
 
 void
@@ -181,18 +182,18 @@ vmm_init(void)
 
     /* Identity map: VA [0..4MB) → PA [0..4MB) via PML4[0].
      * PML4[0] → pdpt_lo[0] → pd_lo with two 2MB huge pages. */
-    pml4[0]    = pdpt_lo_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
-    pdpt_lo[0] = pd_lo_phys   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
-    pd_lo[0]   = 0x000000UL   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | (1UL << 7);
-    pd_lo[1]   = 0x200000UL   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | (1UL << 7);
+    pml4[0]    = pdpt_lo_phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
+    pdpt_lo[0] = pd_lo_phys   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
+    pd_lo[0]   = 0x000000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
+    pd_lo[1]   = 0x200000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
 
     /* Higher-half map: VA [KERN_VMA..KERN_VMA+4MB) → PA [0..4MB).
      * KERN_VMA = 0xFFFFFFFF80000000 → PML4[511], PDPT[510].
      * PML4[511] → pdpt_hi[510] → pd_hi with two 2MB huge pages. */
-    pml4[511]    = pdpt_hi_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
-    pdpt_hi[510] = pd_hi_phys   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
-    pd_hi[0]     = 0x000000UL   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | (1UL << 7);
-    pd_hi[1]     = 0x200000UL   | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | (1UL << 7);
+    pml4[511]    = pdpt_hi_phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
+    pdpt_hi[510] = pd_hi_phys   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
+    pd_hi[0]     = 0x000000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
+    pd_hi[1]     = 0x200000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
 
     /* Install the mapped-window PT into pd_hi[3].
      * pd_hi is a local pointer (identity-cast of pd_hi_phys) in scope here.
@@ -207,7 +208,7 @@ vmm_init(void)
          * where the first section starts, not an additive offset. */
         uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
                             - ARCH_KERNEL_VIRT_BASE;
-        pd_hi[3]      = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+        pd_hi[3]      = win_phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
         s_window_pte  = &s_window_pt[0];
         s_window_pte2 = &s_window_pt[1];
     }
@@ -246,7 +247,7 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
         printk("[VMM] FAIL: vmm_map_page double-map\n");
         for (;;) {}
     }
-    pt[pt_idx] = phys | flags | VMM_FLAG_PRESENT;
+    pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
 }
 
@@ -277,7 +278,7 @@ vmm_unmap_page(uint64_t virt)
         for (;;) {}
     }
 
-    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));  /* overwrites PTE */
+    uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));  /* overwrites PTE */
     uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
@@ -285,7 +286,7 @@ vmm_unmap_page(uint64_t virt)
         for (;;) {}
     }
 
-    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));    /* overwrites PTE */
+    uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));    /* overwrites PTE */
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
@@ -298,7 +299,7 @@ vmm_unmap_page(uint64_t virt)
         for (;;) {}
     }
 
-    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));      /* overwrites PTE */
+    uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));      /* overwrites PTE */
     uint64_t  pte = pt[pt_idx];
     if (!(pte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
@@ -328,7 +329,7 @@ vmm_phys_of(uint64_t virt)
         for (;;) {}
     }
 
-    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));
+    uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
     uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
@@ -336,7 +337,7 @@ vmm_phys_of(uint64_t virt)
         for (;;) {}
     }
 
-    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));
+    uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
@@ -349,7 +350,7 @@ vmm_phys_of(uint64_t virt)
         for (;;) {}
     }
 
-    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
+    uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
     uint64_t  pte = pt[pt_idx];
     vmm_window_unmap();
 
@@ -357,7 +358,7 @@ vmm_phys_of(uint64_t virt)
         printk("[VMM] FAIL: vmm_phys_of not mapped (pt)\n");
         for (;;) {}
     }
-    return PTE_ADDR(pte);
+    return ARCH_PTE_ADDR(pte);
 }
 
 void
@@ -430,7 +431,7 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
         printk("[VMM] FAIL: vmm_map_user_page double-map\n");
         for (;;) {}
     }
-    pt[pt_idx] = phys | flags | VMM_FLAG_PRESENT;
+    pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
 }
 
@@ -515,21 +516,21 @@ vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
     uint64_t  pml4e = pml4[pml4_idx];
     if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return 0; }
 
-    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));
+    uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
     uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return 0; }
 
-    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));
+    uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
         vmm_window_unmap(); return 0;
     }
 
-    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
+    uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
     uint64_t  pte = pt[pt_idx];
     vmm_window_unmap();
 
-    return (pte & VMM_FLAG_PRESENT) ? PTE_ADDR(pte) : 0;
+    return (pte & VMM_FLAG_PRESENT) ? ARCH_PTE_ADDR(pte) : 0;
 }
 
 void
@@ -545,17 +546,17 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
     uint64_t  pml4e = pml4[pml4_idx];
     if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return; }
 
-    uint64_t *pdpt  = vmm_window_map(PTE_ADDR(pml4e));
+    uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
     uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return; }
 
-    uint64_t *pd  = vmm_window_map(PTE_ADDR(pdpte));
+    uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
         vmm_window_unmap(); return;
     }
 
-    uint64_t *pt  = vmm_window_map(PTE_ADDR(pde));
+    uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
     if (pt[pt_idx] & VMM_FLAG_PRESENT)
         pt[pt_idx] = 0;
     vmm_window_unmap();

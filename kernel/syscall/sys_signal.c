@@ -204,6 +204,15 @@ sys_kill(uint64_t arg1, uint64_t arg2)
     int32_t  pid = (int32_t)(uint32_t)arg1;
     int      sig = (int)arg2;
     if (sig <= 0 || sig >= 64) return (uint64_t)-(int64_t)22; /* EINVAL */
+
+    /* S14: Prevent unprivileged processes from killing init (PID 1).
+     * Only vigil (PID 1 itself) can signal PID 1. */
+    if (pid == 1) {
+        aegis_process_t *cur = (aegis_process_t *)sched_current();
+        if (cur->pid != 1)
+            return (uint64_t)-(int64_t)1;  /* EPERM */
+    }
+
     if (pid < 0) {
         /* kill(-pgid, sig): deliver to entire process group */
         signal_send_pgrp((uint32_t)(-pid), sig);

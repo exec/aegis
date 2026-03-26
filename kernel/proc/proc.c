@@ -139,7 +139,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      *   [entry_rip][CS=0x23][RFLAGS=0x202][user_RSP][SS=0x1B]
      *
      * Push order (high-to-low, decrementing sp):
-     *   SS first (highest address), r15 last (lowest = task.rsp value).
+     *   SS first (highest address), r15 last (lowest = task.sp value).
      */
     uint64_t *sp = (uint64_t *)(kstack + STACK_SIZE);
 
@@ -171,10 +171,10 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     *--sp = 0;                  /* r12 */
     *--sp = 0;                  /* r13 */
     *--sp = 0;                  /* r14 */
-    *--sp = 0;                  /* r15 ← task.rsp */
+    *--sp = 0;                  /* r15 ← task.sp */
 
     /* Initialize task fields */
-    proc->task.rsp              = (uint64_t)(uintptr_t)sp;
+    proc->task.sp               = (uint64_t)(uintptr_t)sp;
     proc->task.stack_base       = kstack;
     proc->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + STACK_SIZE);
     proc->task.tid              = 0xFF;   /* fixed user-process TID for Phase 5 */

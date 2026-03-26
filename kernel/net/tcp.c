@@ -7,6 +7,14 @@
 #include "../core/printk.h"
 #include <stddef.h>                 /* NULL */
 
+/* S2: RFC 793 serial number arithmetic for TCP sequence numbers.
+ * 32-bit sequence numbers wrap; plain < / > gives wrong results near 2^31.
+ * a < b iff the signed difference (a - b) is negative. */
+static inline int seq_lt(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
+static inline int seq_le(uint32_t a, uint32_t b) { return (int32_t)(a - b) <= 0; }
+static inline int seq_gt(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
+static inline int seq_ge(uint32_t a, uint32_t b) { return (int32_t)(a - b) >= 0; }
+
 /* Local memory helpers. */
 static void _tcp_memset(void *dst, int val, uint32_t n)
 {
@@ -246,7 +254,7 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
 
     case TCP_ESTABLISHED:
         if (flags & TCP_ACK) {
-            if (ack > conn->snd_una)
+            if (seq_gt(ack, conn->snd_una))
                 conn->snd_una = ack;
         }
         if (payload_len > 0 && seq == conn->rcv_nxt) {

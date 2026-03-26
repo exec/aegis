@@ -14,6 +14,7 @@
  * All I/O: submit SQE -> ring doorbell -> poll CQE -> ring CQ head doorbell
  */
 #include "nvme.h"
+#include "arch.h"
 #include "../arch/x86_64/pcie.h"
 #include "../mm/vmm.h"
 #include "../mm/kva.h"
@@ -121,7 +122,7 @@ poll_cqe(volatile nvme_cqe_t *cq, uint32_t cq_depth,
                     *cq_head = 0;
                     *phase ^= 1u;
                 }
-                __asm__ volatile("sfence" ::: "memory");
+                arch_wmb();
                 *cq_head_db = *cq_head;
                 return -1;
             }
@@ -134,7 +135,7 @@ poll_cqe(volatile nvme_cqe_t *cq, uint32_t cq_depth,
             /* sfence: ensure our head-pointer update is visible before
              * the doorbell write that tells the controller we consumed
              * this entry. */
-            __asm__ volatile("sfence" ::: "memory");
+            arch_wmb();
             *cq_head_db = *cq_head;
             return (sc == 0) ? 0 : -1;
         }
@@ -167,7 +168,7 @@ nvme_identify(uint32_t nsid, uint8_t cns, void *buf, uint64_t buf_phys)
         s_asq_tail = 0;
 
     /* sfence: SQE must be fully written before the doorbell write. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     *doorbell(0, 0) = s_asq_tail;   /* admin SQ tail doorbell */
 
     return poll_cqe(s_acq, NVME_ADMIN_QUEUE_DEPTH,
@@ -190,7 +191,7 @@ nvme_create_io_cq(uint16_t qid, uint64_t cq_phys, uint16_t depth)
     if (s_asq_tail >= NVME_ADMIN_QUEUE_DEPTH)
         s_asq_tail = 0;
 
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     *doorbell(0, 0) = s_asq_tail;
     return poll_cqe(s_acq, NVME_ADMIN_QUEUE_DEPTH,
                     &s_acq_head, &s_acq_phase, doorbell(0, 1), 0, cid);
@@ -212,7 +213,7 @@ nvme_create_io_sq(uint16_t qid, uint64_t sq_phys, uint16_t depth,
     if (s_asq_tail >= NVME_ADMIN_QUEUE_DEPTH)
         s_asq_tail = 0;
 
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     *doorbell(0, 0) = s_asq_tail;
     return poll_cqe(s_acq, NVME_ADMIN_QUEUE_DEPTH,
                     &s_acq_head, &s_acq_phase, doorbell(0, 1), 0, cid);
@@ -431,7 +432,7 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
         s_iosq_tail = 0;
 
     /* sfence: SQE must be fully written to memory before doorbell write. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     *doorbell(1u, 0) = s_iosq_tail;
 
     rc = poll_cqe(s_iocq, NVME_IO_QUEUE_DEPTH,
@@ -480,7 +481,7 @@ nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
         s_iosq_tail = 0;
 
     /* sfence: SQE must be fully written to memory before doorbell write. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     *doorbell(1u, 0) = s_iosq_tail;
 
     return poll_cqe(s_iocq, NVME_IO_QUEUE_DEPTH,

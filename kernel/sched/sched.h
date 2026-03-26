@@ -9,7 +9,7 @@
 #define TASK_STOPPED  3U
 
 typedef struct aegis_task_t {
-    uint64_t             rsp;              /* MUST be first — ctx_switch reads [rdi+0] */
+    uint64_t             sp;               /* MUST be first — ctx_switch reads [rdi+0] */
     uint8_t             *stack_base;       /* bottom of kva-allocated stack (freed on exit via kva_free_pages) */
     uint64_t             kernel_stack_top; /* RSP0 value: kernel stack top for this task */
     uint32_t             tid;              /* task ID */

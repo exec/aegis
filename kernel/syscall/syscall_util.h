@@ -2,10 +2,7 @@
 #define SYSCALL_UTIL_H
 
 #include <stdint.h>
-
-/* USER_ADDR_MAX — highest canonical user-space virtual address (x86-64).
- * Shared by all syscall handlers. Do not redefine in individual syscall files. */
-#define USER_ADDR_MAX 0x00007FFFFFFFFFFFUL
+#include "arch.h"
 
 /* user_ptr_valid — return 1 if [addr, addr+len) lies entirely within the
  * canonical user address space, 0 otherwise.

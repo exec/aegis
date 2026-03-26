@@ -86,6 +86,11 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     /* Only support anonymous private mappings with addr==0. */
     if (arg1 != 0)
         return (uint64_t)-(int64_t)22;   /* EINVAL — fixed addr not supported */
+    /* S12: Reject MAP_FIXED addresses in kernel space (defense-in-depth).
+     * Currently arg1!=0 is rejected above; this guard protects against
+     * future relaxation of that check. */
+    if (arg1 != 0 && (arg1 >= 0xFFFF800000000000ULL || arg1 + arg2 < arg1))
+        return (uint64_t)(int64_t)-22;  /* -EINVAL */
     if (!(arg4 & MAP_ANONYMOUS))
         return (uint64_t)-(int64_t)22;   /* EINVAL — file-backed not supported */
     if (arg4 & MAP_SHARED)

@@ -81,6 +81,8 @@ static blkdev_t        s_devs[GPT_MAX_PARTS];
 static int gpt_part_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf)
 {
     gpt_part_priv_t *p = (gpt_part_priv_t *)dev->priv;
+    if (lba + count > dev->block_count)
+        return -1;
     return p->parent->read(p->parent, lba + p->lba_offset, count, buf);
 }
 
@@ -88,6 +90,8 @@ static int gpt_part_write(blkdev_t *dev, uint64_t lba, uint32_t count,
                           const void *buf)
 {
     gpt_part_priv_t *p = (gpt_part_priv_t *)dev->priv;
+    if (lba + count > dev->block_count)
+        return -1;
     return p->parent->write(p->parent, lba + p->lba_offset, count, buf);
 }
 

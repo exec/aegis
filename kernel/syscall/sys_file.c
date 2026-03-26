@@ -363,7 +363,7 @@ sys_nanosleep(uint64_t arg1, uint64_t arg2)
 
     uint64_t deadline = arch_get_ticks() + ticks;
     while (arch_get_ticks() < deadline)
-        __asm__ volatile("sti; hlt; cli");
+        arch_wait_for_irq();
     return 0;
 }
 
@@ -536,13 +536,13 @@ sys_lseek(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (arg3 == 0)        /* SEEK_SET */
         new_off = off;
     else if (arg3 == 1) { /* SEEK_CUR */
-        /* Guard against signed overflow in both directions.
-         * Positive: f->offset + off > INT64_MAX.
-         * Negative: f->offset + off < INT64_MIN (undefined behavior before check). */
-        if (off > 0 && (int64_t)f->offset > (int64_t)0x7FFFFFFFFFFFFFFFLL - off)
-            return (uint64_t)-(int64_t)22;   /* EINVAL */
-        if (off < 0 && (int64_t)f->offset < (int64_t)0x8000000000000000LL - off)
-            return (uint64_t)-(int64_t)22;   /* EINVAL */
+        /* S3: Safe signed overflow checks for SEEK_CUR.
+         * The old guards used 0x8000000000000000LL which is UB. */
+        int64_t cur = (int64_t)f->offset;
+        if (off > 0 && cur > (int64_t)0x7FFFFFFFFFFFFFFFLL - off)
+            return (uint64_t)(int64_t)-22;  /* -EINVAL */
+        if (off < 0 && cur < (int64_t)(-0x7FFFFFFFFFFFFFFFLL - 1) - off)
+            return (uint64_t)(int64_t)-22;  /* -EINVAL */
         new_off = (int64_t)f->offset + off;
     } else if (arg3 == 2) { /* SEEK_END */
         /* Guard against signed overflow: f->size is uint64_t.

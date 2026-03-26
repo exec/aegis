@@ -8,10 +8,10 @@
 #include "ext2.h"
 #include <stddef.h>
 
-/* Compile-time guard: ctx_switch.asm assumes rsp is at offset 0 of TCB.
- * If anyone adds a field before rsp, this catches it immediately. */
-_Static_assert(offsetof(aegis_task_t, rsp) == 0,
-    "rsp must be first field in aegis_task_t — ctx_switch depends on this");
+/* Compile-time guard: ctx_switch.asm assumes sp is at offset 0 of TCB.
+ * If anyone adds a field before sp, this catches it immediately. */
+_Static_assert(offsetof(aegis_task_t, sp) == 0,
+    "sp must be first field in aegis_task_t — ctx_switch depends on this");
 
 #define STACK_PAGES  4                     /* 16KB per task */
 #define STACK_SIZE   (STACK_PAGES * 4096UL)
@@ -48,13 +48,13 @@ sched_spawn(void (*fn)(void))
     /* Set up the stack to look like ctx_switch already ran.
      *
      * ctx_switch pops: r15, r14, r13, r12, rbp, rbx, then ret → fn.
-     * So the stack from low (RSP) to high must be:
+     * So the stack from low (sp) to high must be:
      *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0][fn]
      *
      * We build this by decrementing a pointer from stack_top:
-     *   fn pushed first (deepest = highest address before RSP setup)
+     *   fn pushed first (deepest = highest address before sp setup)
      *   then six zeros for the callee-saved regs
-     *   RSP ends up pointing at the r15 slot.
+     *   sp ends up pointing at the r15 slot.
      */
     uint64_t *sp = (uint64_t *)(stack + STACK_SIZE);
     *--sp = (uint64_t)(uintptr_t)fn;  /* return address: ret jumps here */
@@ -63,9 +63,9 @@ sched_spawn(void (*fn)(void))
     *--sp = 0;                         /* r12 */
     *--sp = 0;                         /* r13 */
     *--sp = 0;                         /* r14 */
-    *--sp = 0;                         /* r15  ← new task's RSP */
+    *--sp = 0;                         /* r15  ← new task's stack pointer */
 
-    task->rsp              = (uint64_t)(uintptr_t)sp;
+    task->sp               = (uint64_t)(uintptr_t)sp;
     task->stack_base       = stack;
     task->kernel_stack_top = (uint64_t)(uintptr_t)(stack + STACK_SIZE);
     task->is_user          = 0;
@@ -101,7 +101,7 @@ sched_add(aegis_task_t *task)
 }
 
 /* Deferred cleanup: dying task's resources cannot be freed before ctx_switch
- * (ctx_switch writes dying->rsp; the dying stack is live until RSP switches).
+ * (ctx_switch writes dying->sp; the dying stack is live until the stack pointer switches).
  * Record them here and free at the entry of the next sched_exit call. */
 static void    *g_prev_dying_tcb         = NULL;
 static void    *g_prev_dying_stack       = NULL;
@@ -240,7 +240,7 @@ sched_exit(void)
 
     if (s_current == dying_k) {  /* last task — everything has exited */
         arch_request_shutdown();
-        for (;;) __asm__ volatile ("hlt");
+        for (;;) arch_halt();
     }
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
@@ -251,8 +251,8 @@ sched_exit(void)
 
     /* Record dying kernel task for deferred cleanup at the next sched_exit entry.
      * Must be set AFTER all list manipulation and BEFORE ctx_switch:
-     * ctx_switch writes dying_k->rsp, so the TCB must remain valid until
-     * after the RSP switch completes. */
+     * ctx_switch writes dying_k->sp, so the TCB must remain valid until
+     * after the stack pointer switch completes. */
     g_prev_dying_stack       = (void *)dying_k->stack_base;
     g_prev_dying_stack_pages = dying_k->stack_pages;
     g_prev_dying_tcb         = dying_k;
@@ -422,11 +422,11 @@ sched_start(void)
      * IMPORTANT: Do NOT enable interrupts and return here. If we returned to
      * the idle loop and the first timer tick fired from there, sched_tick would call
      * ctx_switch(task_kbd, task_heartbeat) while RSP is deep in the ISR frame.
-     * ctx_switch would save the ISR stack pointer into task_kbd->rsp, corrupting
-     * the TCB. Resuming task_kbd later would load a garbage RSP and crash.
+     * ctx_switch would save the ISR stack pointer into task_kbd->sp, corrupting
+     * the TCB. Resuming task_kbd later would load a garbage stack pointer and crash.
      *
      * Fix: switch directly into the first task using a stack-local dummy TCB.
-     * ctx_switch saves our current RSP into dummy.rsp (which we immediately
+     * ctx_switch saves our current stack pointer into dummy.sp (which we immediately
      * abandon). The first task starts on its own correctly-constructed initial
      * stack. Each task enables interrupts at startup (arch-specific).
      *
@@ -497,7 +497,7 @@ sched_tick(void)
      */
 
     /* ctx_switch is declared in arch.h with a forward struct declaration.
-     * It saves old->rsp, loads s_current->rsp, and returns into new task. */
+     * It saves old->sp, loads s_current->sp, and returns into new task. */
     ctx_switch(old, s_current);
 
     /* Restore the incoming user process's FS base.

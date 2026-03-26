@@ -52,16 +52,52 @@ int udp_send(netdev_t *dev, uint16_t src_port, ip4_addr_t dst_ip,
     return ip_send(dev, dst_ip, IP_PROTO_UDP, s_udp_buf, udp_len);
 }
 
+/* S4: UDP pseudo-header checksum validation.
+ * Computes one's-complement sum over pseudo-header + UDP header + payload.
+ * Returns 0 if valid, non-zero if corrupted. */
+static uint16_t
+udp_checksum_verify(uint32_t src_ip, uint32_t dst_ip,
+                    const uint8_t *udp_pkt, uint16_t udp_len)
+{
+    uint32_t sum = 0;
+    /* pseudo-header */
+    sum += (src_ip >> 16) & 0xFFFF;
+    sum += src_ip & 0xFFFF;
+    sum += (dst_ip >> 16) & 0xFFFF;
+    sum += dst_ip & 0xFFFF;
+    sum += htons(17);            /* protocol = UDP */
+    sum += htons(udp_len);
+    /* UDP header + payload */
+    const uint16_t *p = (const uint16_t *)udp_pkt;
+    uint16_t i;
+    for (i = 0; i < udp_len / 2; i++)
+        sum += p[i];
+    if (udp_len & 1)
+        sum += udp_pkt[udp_len - 1];  /* odd byte, zero-padded */
+    /* fold carries */
+    while (sum >> 16)
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
 void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             const void *udp_data, uint16_t len)
 {
-    (void)dev; (void)dst_ip;
+    (void)dev;
     if (len < (uint16_t)sizeof(udp_hdr_t)) return;
 
     const udp_hdr_t *hdr      = (const udp_hdr_t *)udp_data;
     uint16_t udp_claimed = ntohs(hdr->length);
     if (udp_claimed < (uint16_t)sizeof(udp_hdr_t)) return;  /* malformed */
     if (udp_claimed > len) return;                           /* truncated */
+
+    /* S4: Validate UDP checksum (skip if checksum field is 0 per RFC 768). */
+    if (hdr->checksum != 0) {
+        if (udp_checksum_verify(src_ip, dst_ip,
+                                (const uint8_t *)hdr, udp_claimed) != 0)
+            return;  /* drop corrupted packet */
+    }
+
     uint16_t dst_port  = ntohs(hdr->dst_port);
     uint16_t src_port  = ntohs(hdr->src_port);
     uint16_t payload_len = (uint16_t)(udp_claimed - (uint16_t)sizeof(udp_hdr_t));

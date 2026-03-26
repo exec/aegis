@@ -30,6 +30,7 @@ typedef struct {
     mac_addr_t mac;
     uint32_t   age;    /* PIT ticks since last use; evict oldest */
     uint8_t    valid;
+    uint8_t    resolved; /* S5: 0 = pending request, 1 = reply received */
 } arp_entry_t;
 
 static arp_entry_t s_arp_table[ARP_TABLE_SIZE];
@@ -54,31 +55,42 @@ static arp_entry_t *arp_find(ip4_addr_t ip)
     return NULL;
 }
 
-static void arp_insert(ip4_addr_t ip, const mac_addr_t *mac)
+/* S5: Insert a pending (unresolved) ARP entry so that arp_rx_pkt only
+ * updates entries we actually requested.  If an entry already exists for
+ * this IP, leave it alone. */
+static void arp_insert_pending(ip4_addr_t ip)
 {
-    /* Prefer an existing match to update, then a free slot, then oldest. */
-    arp_entry_t *victim = NULL;
-    uint32_t     oldest = 0;
-    int          i;
-
+    int i;
+    /* Already have an entry? Don't overwrite. */
     for (i = 0; i < ARP_TABLE_SIZE; i++) {
-        arp_entry_t *e = &s_arp_table[i];
-        if (e->valid && e->ip == ip) {
-            victim = e;
-            break;
-        }
-        if (!e->valid) {
-            if (!victim) victim = e;
-        } else if (e->age >= oldest) {
-            oldest = e->age;
-            if (!victim || victim->valid) victim = e;
+        if (s_arp_table[i].valid && s_arp_table[i].ip == ip)
+            return;
+    }
+    /* Find a free slot (prefer free over evicting). */
+    for (i = 0; i < ARP_TABLE_SIZE; i++) {
+        if (!s_arp_table[i].valid) {
+            s_arp_table[i].ip       = ip;
+            _eth_memset(&s_arp_table[i].mac, 0, sizeof(mac_addr_t));
+            s_arp_table[i].age      = 0;
+            s_arp_table[i].valid    = 1;
+            s_arp_table[i].resolved = 0;
+            return;
         }
     }
-    if (!victim) victim = &s_arp_table[0]; /* fallback — never NULL */
-    victim->ip    = ip;
-    victim->mac   = *mac;
-    victim->age   = 0;
-    victim->valid = 1;
+    /* Table full — evict oldest. */
+    uint32_t oldest = 0;
+    int oldest_idx = 0;
+    for (i = 0; i < ARP_TABLE_SIZE; i++) {
+        if (s_arp_table[i].age >= oldest) {
+            oldest = s_arp_table[i].age;
+            oldest_idx = i;
+        }
+    }
+    s_arp_table[oldest_idx].ip       = ip;
+    _eth_memset(&s_arp_table[oldest_idx].mac, 0, sizeof(mac_addr_t));
+    s_arp_table[oldest_idx].age      = 0;
+    s_arp_table[oldest_idx].valid    = 1;
+    s_arp_table[oldest_idx].resolved = 0;
 }
 
 static void arp_send_request(netdev_t *dev, ip4_addr_t target_ip)
@@ -87,6 +99,10 @@ static void arp_send_request(netdev_t *dev, ip4_addr_t target_ip)
     mac_addr_t  my_mac;
     arp_pkt_t   pkt;
     mac_addr_t  bcast;
+
+    /* S5: Create a pending entry before sending the request so that
+     * arp_rx_pkt will only update entries we actually requested. */
+    arp_insert_pending(target_ip);
 
     net_get_config(&my_ip, NULL, NULL);  /* only need local IP; mask/gw unused here */
     /* dev->mac is uint8_t[6]; copy into mac_addr_t (same layout). */
@@ -113,7 +129,14 @@ static void arp_rx_pkt(const arp_pkt_t *pkt)
     if (ntohs(pkt->ptype) != 0x0800) return;
     if (pkt->hlen != 6 || pkt->plen != 4) return;
     if (ntohs(pkt->oper) != 2)       return;  /* only cache REPLY */
-    arp_insert(pkt->spa, &pkt->sha);
+
+    /* S5: Only update ARP cache for entries with pending requests.
+     * Reject unsolicited ARP replies to prevent cache poisoning. */
+    arp_entry_t *e = arp_find(pkt->spa);
+    if (!e) return;  /* no pending entry — unsolicited reply, drop */
+    e->mac      = pkt->sha;
+    e->age      = 0;
+    e->resolved = 1;
 }
 
 /* ---- eth_rx / eth_send ------------------------------------------------- */
@@ -166,7 +189,7 @@ int eth_send(netdev_t *dev, const mac_addr_t *dst_mac,
 int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
 {
     arp_entry_t *e = arp_find(ip);
-    if (e) {
+    if (e && e->resolved) {
         e->age = 0;
         *mac_out = e->mac;
         return 0;
@@ -201,18 +224,18 @@ int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
             /* Yield to QEMU/SLIRP: enable interrupts, halt until PIT fires,
              * re-disable.  The PIT ISR calls netdev_poll_all() which drains
              * the virtio RX ring and delivers any pending frames. */
-            __asm__ volatile("sti; hlt; cli");
+            arch_wait_for_irq();
             /* Also poll directly in case PIT ISR didn't run yet. */
             if (dev->poll)
                 dev->poll(dev);
             e = arp_find(ip);
-            if (e) {
-                __asm__ volatile("sti"); /* restore interrupts */
+            if (e && e->resolved) {
+                arch_enable_irq(); /* restore interrupts */
                 *mac_out = e->mac;
                 return 0;
             }
         }
     }
-    __asm__ volatile("sti"); /* restore interrupts on timeout path */
+    arch_enable_irq(); /* restore interrupts on timeout path */
     return -1; /* timeout — caller returns EHOSTUNREACH */
 }

@@ -98,6 +98,14 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
         uint64_t va_base   = ph->p_vaddr & ~4095UL;
         uint64_t va_offset = ph->p_vaddr & 4095UL;
 
+        /* S1: Guard against integer overflow in page_count calculation.
+         * A crafted ELF with p_memsz near UINT64_MAX wraps the addition
+         * to a small value, causing a tiny allocation but huge copy/zero. */
+        if (ph->p_memsz > 0x100000000ULL)   /* 4 GB per-segment cap */
+            return -1;
+        if (ph->p_filesz > ph->p_memsz)
+            return -1;
+
         /* Allocate kva pages for this segment — no contiguity assumption on
          * physical frames; kva maps each PMM page to a consecutive kernel VA. */
         uint64_t page_count = (va_offset + ph->p_memsz + 4095UL) / 4096UL;

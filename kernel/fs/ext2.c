@@ -309,6 +309,10 @@ int ext2_read(uint32_t inode_num, void *buf, uint32_t offset, uint32_t len)
     if (ext2_read_inode(inode_num, &inode) < 0)
         return -1;
 
+    /* S9: Reject unreasonably large inodes from malicious ext2 images. */
+    if (inode.i_size > (256U * 1024U * 1024U))  /* 256 MB cap */
+        return -5;  /* -EIO */
+
     if (offset >= inode.i_size)
         return 0;
 

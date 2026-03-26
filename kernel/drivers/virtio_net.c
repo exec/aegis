@@ -18,6 +18,7 @@
  */
 #include "virtio_net.h"
 #include "../net/netdev.h"
+#include "arch.h"
 #include "../arch/x86_64/pcie.h"
 #include "kva.h"
 #include "vmm.h"
@@ -310,7 +311,7 @@ virtio_net_init(void)
             /* Kick RX queue so device notices the pre-filled buffers.
              * virtio spec §2.7.13: driver SHOULD send notification after
              * adding available buffers. Required sfence before MMIO write. */
-            __asm__ volatile("sfence" ::: "memory");
+            arch_wmb();
             notify[noff * notify_mult / 4u] = 0u; /* queue index 0 = RX */
 
             s_priv.rx_desc      = desc;
@@ -351,7 +352,7 @@ virtio_net_init(void)
      * QEMU may defer processing available buffers until the device is fully
      * activated.  Kick again now that DRIVER_OK is set so the device picks up
      * the 256 pre-filled descriptors and starts delivering received frames. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     s_priv.notify_base[s_priv.rx_notify_off * s_priv.notify_off_mult / 4u] = 0u;
 
     /* Step 8: register netdev. */
@@ -414,7 +415,7 @@ virtio_net_send(netdev_t *dev, const void *pkt, uint16_t len)
     /* 5. sfence — memory barrier required before MMIO notify doorbell.
      * virtio spec §2.6.13.2: driver MUST issue memory barrier before
      * writing the notification register. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
 
     /* 6. Notify device: write queue index 1 to doorbell.
      * Doorbell address = notify_base + (queue_notify_off * notify_off_mult / 4). */
@@ -502,6 +503,6 @@ virtio_net_poll(netdev_t *dev)
      * which is correct per virtio spec §2.7.13 regardless of whether we
      * returned any buffers in this call.
      */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     p->notify_base[p->rx_notify_off * p->notify_off_mult / 4u] = 0u;
 }

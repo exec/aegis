@@ -100,15 +100,21 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         if (!user_ptr_valid(iov.iov_base, iov.iov_len))
             return (uint64_t)-14;  /* EFAULT */
 
-        /* Retry loop per iovec: console_write_fn returns a partial count when
-         * the user buffer straddles a page boundary.  Loop until all bytes of
-         * this vector are written or the write op signals an error. */
+        /* S8: Copy user buffer to kernel staging area to prevent TOCTOU.
+         * The user could unmap the page between validation and use.
+         * Copy in 256-byte chunks and write from kernel memory. */
         uint64_t vec_written = 0;
         while (vec_written < iov.iov_len) {
+            uint8_t staging[256];
+            uint64_t remaining = iov.iov_len - vec_written;
+            uint64_t chunk = remaining > 256 ? 256 : remaining;
+            copy_from_user(staging,
+                           (const void *)(uintptr_t)(iov.iov_base + vec_written),
+                           chunk);
             int r = proc->fds[arg1].ops->write(
                         proc->fds[arg1].priv,
-                        (const void *)(uintptr_t)(iov.iov_base + vec_written),
-                        iov.iov_len - vec_written);
+                        staging,
+                        chunk);
             if (r <= 0) {
                 if (r < 0 && total == 0)
                     return (uint64_t)(int64_t)r;
