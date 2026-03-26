@@ -556,9 +556,10 @@ sys_execve(syscall_frame_t *frame,
             proc->caps[ci].kind   = CAP_KIND_NULL;
             proc->caps[ci].rights = 0;
         }
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,  CAP_RIGHTS_READ);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,  CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,   CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
 
         /* Apply pre-registered exec caps, then zero them (consumed on exec). */
         {
