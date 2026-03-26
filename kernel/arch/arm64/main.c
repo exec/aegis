@@ -18,6 +18,9 @@
 void gic_init(void);
 void timer_init(void);
 
+/* From stubs.c (backed by uart_pl011.c RX) */
+void kbd_init(void);
+
 /* From proc.c */
 void proc_spawn_init(void);
 
@@ -46,7 +49,9 @@ kernel_main(uint64_t dtb_phys)
     arch_init();
     printk("[SERIAL] OK: PL011 UART initialized\n");
 
-    arch_mm_init((void *)(uintptr_t)dtb_phys);
+    /* Convert DTB physical address to TTBR1 VA.
+     * DTB is in device region (PA 0x0+), mapped at 0xFFFF000000000000+. */
+    arch_mm_init((void *)(uintptr_t)(dtb_phys + KERN_VA_OFFSET));
     pmm_init();
     vmm_init();
     kva_init();
@@ -54,6 +59,7 @@ kernel_main(uint64_t dtb_phys)
     install_vectors();
     gic_init();
     timer_init();
+    kbd_init();    /* PL011 RX interrupt for serial input */
 
     cap_init();
     vfs_init();

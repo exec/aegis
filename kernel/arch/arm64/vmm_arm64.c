@@ -387,7 +387,43 @@ void vmm_teardown_identity(void) {
 
 void vmm_free_user_pml4(uint64_t pml4_phys) { (void)pml4_phys; }
 uint64_t vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt) {
-    (void)pml4_phys; (void)virt; return 0;
+    uint64_t l0_idx = (virt >> 39) & 0x1FF;
+    uint64_t l1_idx = (virt >> 30) & 0x1FF;
+    uint64_t l2_idx = (virt >> 21) & 0x1FF;
+    uint64_t l3_idx = (virt >> 12) & 0x1FF;
+
+    uint64_t *tbl = vmm_window_map(pml4_phys);
+    uint64_t e = tbl[l0_idx];
+    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
+
+    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
+                    PTE_SH_INNER | PTE_ATTR_NORM;
+    arch_vmm_invlpg(VMM_WINDOW_VA);
+    tbl = (uint64_t *)VMM_WINDOW_VA;
+    e = tbl[l1_idx];
+    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
+    if (!(e & PTE_TABLE)) {
+        vmm_window_unmap();
+        return PTE_ADDR(e) | (virt & 0x3FFFFFFFUL);
+    }
+
+    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
+                    PTE_SH_INNER | PTE_ATTR_NORM;
+    arch_vmm_invlpg(VMM_WINDOW_VA);
+    e = tbl[l2_idx];
+    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
+    if (!(e & PTE_TABLE)) {
+        vmm_window_unmap();
+        return PTE_ADDR(e) | (virt & 0x1FFFFFUL);
+    }
+
+    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
+                    PTE_SH_INNER | PTE_ATTR_NORM;
+    arch_vmm_invlpg(VMM_WINDOW_VA);
+    e = tbl[l3_idx];
+    vmm_window_unmap();
+    if (!(e & PTE_VALID)) return 0;
+    return PTE_ADDR(e) | (virt & 0xFFFUL);
 }
 void vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt) {
     (void)pml4_phys; (void)virt;
@@ -397,14 +433,124 @@ void vmm_zero_page(uint64_t phys) {
     for (int i = 0; i < 512; i++) p[i] = 0;
     vmm_window_unmap();
 }
-int vmm_copy_user_pages(uint64_t src, uint64_t dst) {
-    (void)src; (void)dst; return -1;
+int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4) {
+    /* Walk src L0→L1→L2→L3. For each present leaf, allocate a new
+     * physical page, copy content, map into dst at the same VA. */
+    uint64_t i0, i1, i2, i3;
+
+    uint64_t *l0 = vmm_window_map(src_pml4);
+    for (i0 = 0; i0 < 512; i0++) {
+        if (!(l0[i0] & PTE_VALID)) continue;
+        uint64_t l1_phys = PTE_ADDR(l0[i0]);
+
+        /* Overwrite window to walk L1 */
+        *s_window_pte = l1_phys | PTE_VALID | PTE_PAGE | PTE_AF |
+                        PTE_SH_INNER | PTE_ATTR_NORM;
+        arch_vmm_invlpg(VMM_WINDOW_VA);
+        uint64_t *l1 = (uint64_t *)VMM_WINDOW_VA;
+
+        for (i1 = 0; i1 < 512; i1++) {
+            if (!(l1[i1] & PTE_VALID)) continue;
+            if (!(l1[i1] & PTE_TABLE)) continue; /* skip blocks */
+            uint64_t l2_phys = PTE_ADDR(l1[i1]);
+
+            *s_window_pte = l2_phys | PTE_VALID | PTE_PAGE | PTE_AF |
+                            PTE_SH_INNER | PTE_ATTR_NORM;
+            arch_vmm_invlpg(VMM_WINDOW_VA);
+            uint64_t *l2 = (uint64_t *)VMM_WINDOW_VA;
+
+            for (i2 = 0; i2 < 512; i2++) {
+                if (!(l2[i2] & PTE_VALID)) continue;
+                if (!(l2[i2] & PTE_TABLE)) continue;
+                uint64_t l3_phys = PTE_ADDR(l2[i2]);
+
+                *s_window_pte = l3_phys | PTE_VALID | PTE_PAGE | PTE_AF |
+                                PTE_SH_INNER | PTE_ATTR_NORM;
+                arch_vmm_invlpg(VMM_WINDOW_VA);
+                uint64_t *l3 = (uint64_t *)VMM_WINDOW_VA;
+
+                for (i3 = 0; i3 < 512; i3++) {
+                    if (!(l3[i3] & PTE_VALID)) continue;
+                    uint64_t src_page = PTE_ADDR(l3[i3]);
+                    (void)(l3[i3] & ~PTE_ADDR(~0UL)); /* flags preserved via USER|WRITABLE */
+
+                    /* Allocate new page for child */
+                    uint64_t new_page = pmm_alloc_page();
+                    if (!new_page) {
+                        vmm_window_unmap();
+                        return -1;
+                    }
+
+                    /* Copy page: map src → read into new_page via
+                     * window. Zero new page first, then copy src. */
+                    vmm_window_unmap();
+                    vmm_zero_page(new_page);
+
+                    /* Map src page, read 64 bytes at a time into new page
+                     * via alternating window maps. Use a small stack buf. */
+                    {
+                        uint64_t off;
+                        uint8_t chunk[64];
+                        for (off = 0; off < 4096; off += 64) {
+                            uint8_t *s = vmm_window_map(src_page);
+                            __builtin_memcpy(chunk, s + off, 64);
+                            vmm_window_unmap();
+                            uint8_t *d = vmm_window_map(new_page);
+                            __builtin_memcpy(d + off, chunk, 64);
+                            vmm_window_unmap();
+                        }
+                    }
+
+                    /* Map new page into dst PML4 at same VA */
+                    uint64_t va = (i0 << 39) | (i1 << 30) | (i2 << 21) | (i3 << 12);
+                    vmm_map_user_page(dst_pml4, va, new_page,
+                                      VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
+
+                    /* Re-map src L3 to continue the walk */
+                    *s_window_pte = l3_phys | PTE_VALID | PTE_PAGE | PTE_AF |
+                                    PTE_SH_INNER | PTE_ATTR_NORM;
+                    arch_vmm_invlpg(VMM_WINDOW_VA);
+                }
+                /* Re-map L2 */
+                *s_window_pte = l2_phys | PTE_VALID | PTE_PAGE | PTE_AF |
+                                PTE_SH_INNER | PTE_ATTR_NORM;
+                arch_vmm_invlpg(VMM_WINDOW_VA);
+            }
+            /* Re-map L1 */
+            *s_window_pte = l1_phys | PTE_VALID | PTE_PAGE | PTE_AF |
+                            PTE_SH_INNER | PTE_ATTR_NORM;
+            arch_vmm_invlpg(VMM_WINDOW_VA);
+        }
+        /* Re-map L0 */
+        *s_window_pte = src_pml4 | PTE_VALID | PTE_PAGE | PTE_AF |
+                        PTE_SH_INNER | PTE_ATTR_NORM;
+        arch_vmm_invlpg(VMM_WINDOW_VA);
+    }
+    vmm_window_unmap();
+    return 0;
 }
 void vmm_free_user_pages(uint64_t pml4_phys) { (void)pml4_phys; }
 int vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
                          const void *src, uint64_t len) {
-    (void)pml4_phys; (void)va; (void)src; (void)len; return -1;
+    const uint8_t *s = (const uint8_t *)src;
+    while (len > 0) {
+        uint64_t page_off = va & 0xFFF;
+        uint64_t chunk = 4096 - page_off;
+        if (chunk > len) chunk = len;
+
+        uint64_t phys = vmm_phys_of_user(pml4_phys, va);
+        if (!phys) return -1;
+
+        uint8_t *dst = vmm_window_map(phys);
+        __builtin_memcpy(dst + page_off, s, chunk);
+        vmm_window_unmap();
+
+        va  += chunk;
+        s   += chunk;
+        len -= chunk;
+    }
+    return 0;
 }
 int vmm_write_user_u64(uint64_t pml4_phys, uint64_t va, uint64_t val) {
-    (void)pml4_phys; (void)va; (void)val; return -1;
+    return vmm_write_user_bytes(pml4_phys, va, &val, 8);
 }

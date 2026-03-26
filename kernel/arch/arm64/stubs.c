@@ -99,12 +99,25 @@ EMPTY_ELF(httpd_bin); EMPTY_ELF(dhcp_bin);
 
 /* ── Stubs for subsystems not yet ported ──────────────────────────── */
 
-/* kbd stubs — no PS/2 on ARM64 QEMU virt */
-void kbd_init(void) {}
+/* kbd implementation — backed by PL011 UART RX on ARM64.
+ * uart_rx_read/poll/enable_rx_irq are in uart_pl011.c. */
+extern char uart_rx_read(void);
+extern int  uart_rx_poll(char *out);
+extern void uart_enable_rx_irq(void);
+extern void gic_enable_irq(uint32_t irq);
+
+void kbd_init(void) {
+    uart_enable_rx_irq();
+    gic_enable_irq(33);  /* PL011 UART0 = SPI 1 = GIC IRQ 33 */
+}
 void kbd_handler(void) {}
-char kbd_read(void) { for (;;) __asm__ volatile("wfi"); }
-char kbd_read_interruptible(int *interrupted) { (void)interrupted; for (;;) __asm__ volatile("wfi"); }
-int  kbd_poll(char *out) { (void)out; return 0; }
+char kbd_read(void) { return uart_rx_read(); }
+char kbd_read_interruptible(int *interrupted) {
+    /* TODO: check signal pending for interrupt support */
+    (void)interrupted;
+    return uart_rx_read();
+}
+int kbd_poll(char *out) { return uart_rx_poll(out); }
 static uint32_t s_tty_pgrp = 0;
 void     kbd_set_tty_pgrp(uint32_t pgid) { s_tty_pgrp = pgid; }
 uint32_t kbd_get_tty_pgrp(void) { return s_tty_pgrp; }

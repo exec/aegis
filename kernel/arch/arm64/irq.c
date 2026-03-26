@@ -15,6 +15,10 @@ void     gic_eoi(uint32_t irq);
 void     timer_handler(void);
 
 #define TIMER_IRQ 30
+#define UART_IRQ  33   /* PL011 UART0 = SPI 1 = IRQ 33 */
+
+/* From uart_pl011.c */
+void uart_rx_handler(void);
 
 void
 irq_handler(void)
@@ -23,11 +27,11 @@ irq_handler(void)
 
     if (irq == TIMER_IRQ) {
         timer_handler();
+    } else if (irq == UART_IRQ) {
+        uart_rx_handler();
     } else if (irq < 1020) {
-        /* Spurious or unhandled IRQ */
         printk("[IRQ] unhandled IRQ %u\n", irq);
     }
-    /* IRQ 1023 = spurious, no EOI needed */
 
     if (irq < 1020)
         gic_eoi(irq);
@@ -36,11 +40,11 @@ irq_handler(void)
 void
 exc_sync_handler(void)
 {
-    uint64_t esr;
-    uint64_t elr;
+    uint64_t esr, elr, far;
     __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
     __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
-    printk("[PANIC] kernel sync exception at ELR=0x%lx ESR=0x%lx\n", elr, esr);
+    __asm__ volatile("mrs %0, far_el1" : "=r"(far));
+    printk("[PANIC] kernel sync at ELR=0x%lx ESR=0x%lx FAR=0x%lx\n", elr, esr, far);
     for (;;)
         __asm__ volatile("wfi");
 }
