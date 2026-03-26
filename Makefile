@@ -113,7 +113,8 @@ NET_SRCS = \
     kernel/net/ip.c \
     kernel/net/udp.c \
     kernel/net/tcp.c \
-    kernel/net/socket.c
+    kernel/net/socket.c \
+    kernel/net/epoll.c
 
 FS_SRCS = \
     kernel/fs/vfs.c \
