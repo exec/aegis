@@ -84,19 +84,16 @@ void kbd_usb_inject(char c) { (void)c; }
 /* ── Signal stubs ── */
 void signal_send_pgrp(uint32_t pgrp, int sig) { (void)pgrp; (void)sig; }
 
-/* User binary blobs — empty placeholders. initrd.c references these symbols.
- * init_elf/init_elf_len come from init_arm64_bin.c (the real ARM64 init).
- * All others are empty until Docker-built ARM64 musl binaries replace them. */
-const char *init_name = "/bin/init";
+/* User binary blobs — real ARM64 musl-static binaries (compiled separately).
+ * init_elf from init_arm64_bin.c, others from *_arm64_bin.c files. */
+const char *init_name = "/bin/shell";
+
+/* Not yet built for ARM64 */
 #define EMPTY_ELF(name) \
     const unsigned char name##_elf[] = { 0 }; \
     const unsigned int  name##_elf_len = 0
-EMPTY_ELF(shell); EMPTY_ELF(cat);   EMPTY_ELF(echo);  EMPTY_ELF(ls);
-EMPTY_ELF(pwd);   EMPTY_ELF(uname); EMPTY_ELF(clear); EMPTY_ELF(true_bin);
-EMPTY_ELF(false_bin); EMPTY_ELF(wc); EMPTY_ELF(grep); EMPTY_ELF(sort);
-EMPTY_ELF(mkdir); EMPTY_ELF(touch); EMPTY_ELF(rm);    EMPTY_ELF(cp);
-EMPTY_ELF(mv);    EMPTY_ELF(whoami); EMPTY_ELF(oksh); EMPTY_ELF(login);
-EMPTY_ELF(vigil); EMPTY_ELF(vigictl); EMPTY_ELF(httpd_bin);
+EMPTY_ELF(oksh); EMPTY_ELF(vigil); EMPTY_ELF(vigictl);
+EMPTY_ELF(httpd_bin); EMPTY_ELF(dhcp_bin);
 #undef EMPTY_ELF
 
 /* proc_enter_user and fork_child_return are now in proc_enter.S */

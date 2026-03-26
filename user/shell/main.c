@@ -9,6 +9,13 @@
 static long
 sys_setfg(long pid)
 {
+#ifdef __aarch64__
+    /* ARM64: Aegis custom syscall 360 (x86 number, passed directly) */
+    register long x8 __asm__("x8") = 360;
+    register long x0 __asm__("x0") = pid;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory");
+    return x0;
+#else
     long ret;
     __asm__ volatile(
         "syscall"
@@ -17,6 +24,7 @@ sys_setfg(long pid)
         : "rcx", "r11", "memory"
     );
     return ret;
+#endif
 }
 
 #define MAX_PIPELINE 6    /* max pipeline stages; (PROC_MAX_FDS-3)/2 = 6 */
