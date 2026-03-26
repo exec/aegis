@@ -48,8 +48,8 @@ _memcpy(void *dst, const void *src, uint32_t n)
 /* ── BAR mapping helper ─────────────────────────────────────────────────────
  * Maps n_pages of a BAR region (physical base pa) into KVA with PWT+PCD
  * (no-cache) flags. Returns the virtual base address.
- * flags: 0x1Bu = Present(1)|Write(2)|PWT(8)|PCD(16) = no-cache MMIO mapping. */
-#define VIRTIO_MAP_FLAGS 0x1Bu
+ * Arch-neutral VMM flags for uncached MMIO mapping. */
+#define VIRTIO_MAP_FLAGS (VMM_FLAG_WRITABLE | VMM_FLAG_WC | VMM_FLAG_UCMINUS)
 
 static uintptr_t
 map_bar_region(uint64_t pa, uint32_t n_pages)

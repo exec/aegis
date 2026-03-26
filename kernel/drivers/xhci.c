@@ -497,7 +497,7 @@ xhci_init(void)
     /* Step 2: Map BAR0 MMIO.
      * pcie_device_t stores decoded 64-bit base addresses in bar[].
      * pcie.c strips the flag bits during enumeration (same as nvme.c).
-     * Map with PWT+PCD (Present|Write|PWT|PCD = 0x1B) — uncached MMIO. */
+     * Map with WC+UCMINUS (uncached MMIO). */
     {
         uint64_t  bar0_phys = dev->bar[0];
         uintptr_t bar0_kva  = (uintptr_t)kva_alloc_pages(XHCI_BAR0_PAGES);
@@ -508,9 +508,10 @@ xhci_init(void)
              * vmm_map_page does not panic on a double-map.
              * SAFETY: va is a present kva page; vmm_unmap_page is valid. */
             vmm_unmap_page(va);
-            /* SAFETY: map BAR0 MMIO uncached (0x1B = Present|Write|PWT|PCD).
+            /* SAFETY: map BAR0 MMIO uncached (WC+UCMINUS = PWT+PCD).
              * The PA is device MMIO; the kernel VA is the intended accessor. */
-            vmm_map_page(va, bar0_phys + (uint64_t)i * 4096u, 0x1Bu);
+            vmm_map_page(va, bar0_phys + (uint64_t)i * 4096u,
+                         VMM_FLAG_WRITABLE | VMM_FLAG_WC | VMM_FLAG_UCMINUS);
         }
         s_bar0_va = (uint8_t *)bar0_kva;
     }
