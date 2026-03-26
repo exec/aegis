@@ -141,6 +141,7 @@ sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen)
 
             /* Fill caller's addr struct */
             if (addr && addrlen) {
+                if (!user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
                 k_sockaddr_in_t sa;
                 sa.sin_family = AF_INET;
                 sa.sin_port   = htons(ns->remote_port);
@@ -308,7 +309,7 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
             s->udp_rx_head = (s->udp_rx_head + 1) & (UDP_RX_SLOTS - 1);
             uint32_t copy_len = slot->len < (uint32_t)len ? slot->len : (uint32_t)len;
             copy_to_user((void *)(uintptr_t)buf, slot->data, copy_len);
-            if (addr && addrlen >= sizeof(k_sockaddr_in_t)) {
+            if (addr && addrlen && user_ptr_valid(addrlen, sizeof(uint32_t))) {
                 k_sockaddr_in_t sa;
                 sa.sin_family = AF_INET;
                 sa.sin_port   = htons(slot->src_port);
@@ -366,6 +367,7 @@ uint64_t
 sys_getsockname(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
     if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;
+    if (addrlen && !user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
     sock_t *s; uint32_t sid;
     uint64_t err = get_proc_sock(fd, &s, &sid);
     if (err) return err;
@@ -384,6 +386,7 @@ uint64_t
 sys_getpeername(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
     if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;
+    if (addrlen && !user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
     sock_t *s; uint32_t sid;
     uint64_t err = get_proc_sock(fd, &s, &sid);
     if (err) return err;
@@ -568,8 +571,11 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
         }
         if (ready > 0 || timeout_ticks == 0) return (uint64_t)ready;
         if (deadline && (uint32_t)arch_get_ticks() >= deadline) return 0;
-        /* Sleep one tick and retry */
-        sched_block();
+        /* Yield: wait for next PIT tick then retry */
+        {
+            uint64_t now = arch_get_ticks();
+            while (arch_get_ticks() == now) { /* spin one tick */ }
+        }
     }
 }
 
@@ -625,6 +631,7 @@ sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t maxevents, uint64_t 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     uint32_t eid = epoll_id_from_fd((int)epfd, proc);
     if (eid == EPOLL_NONE) return (uint64_t)-(int64_t)9;  /* EBADF */
+    if (maxevents > EPOLL_MAX_WATCHES) return (uint64_t)-(int64_t)22;  /* EINVAL */
     if (!user_ptr_valid(events_ptr, (uint64_t)maxevents * sizeof(k_epoll_event_t)))
         return (uint64_t)-(int64_t)14;
 
