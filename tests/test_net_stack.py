@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 25 network protocol stack test.
+"""Phase 27 DHCP network stack test.
 
 Boots the ISO with QEMU q35 + virtio-net + SLIRP user networking and verifies:
-  1. [NET] configured: 10.0.2.15/24 gw 10.0.2.2
-  2. [NET] ICMP: echo reply from 10.0.2.2
-     (kernel sends ICMP ping to SLIRP gateway during net_init; QEMU SLIRP
-      responds to ICMP natively without any host-side configuration)
+  1. [DHCP] acquired — DHCP daemon obtained an IP address
 """
 import subprocess, sys, os, select, fcntl, time
 
@@ -18,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def build_iso():
-    """Build the shell ISO (make INIT=shell iso)."""
+    """Build the vigil ISO (make INIT=vigil iso)."""
     real_uid = os.getuid()
     real_gid = os.getgid()
 
@@ -26,10 +23,10 @@ def build_iso():
         os.setegid(real_gid)
         os.seteuid(real_uid)
 
-    r = subprocess.run(["make", "INIT=shell", "iso"],
+    r = subprocess.run(["make", "INIT=vigil", "iso"],
                        cwd=ROOT, preexec_fn=drop_euid)
     if r.returncode != 0:
-        print("[FAIL] make INIT=shell iso failed")
+        print("[FAIL] make INIT=vigil iso failed")
         sys.exit(1)
 
 
@@ -72,8 +69,7 @@ def main():
     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
     output = ""
-    found_configured = False
-    found_icmp_reply = False
+    found_dhcp = False
     start = time.time()
 
     try:
@@ -89,14 +85,8 @@ def main():
                     output += text
                     for line in text.splitlines():
                         print(line)
-                    # Search accumulated output for target strings (chunks may
-                    # arrive fragmented, so a single chunk's splitlines() may
-                    # not contain a complete line).
-                    if "[NET] configured:" in output:
-                        found_configured = True
-                    if "[NET] ICMP: echo reply from 10.0.2.2" in output:
-                        found_icmp_reply = True
-                    if found_icmp_reply:
+                    if "[DHCP] acquired" in output:
+                        found_dhcp = True
                         break
             if proc.poll() is not None:
                 break
@@ -107,12 +97,10 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    if not found_configured:
-        fail("'[NET] configured:' not found in serial output")
-    if not found_icmp_reply:
-        fail("'[NET] ICMP: echo reply from 10.0.2.2' not found in serial output")
+    if not found_dhcp:
+        fail("'[DHCP] acquired' not found in serial output")
 
-    print("PASS: network stack ICMP self-test succeeded")
+    print("PASS: DHCP acquired IP address")
     sys.exit(0)
 
 if __name__ == "__main__":

@@ -127,19 +127,12 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
 /* ---- ICMP -------------------------------------------------------------- */
 
 static uint8_t s_icmp_buf[1480];
-/* Set to 1 by icmp_rx when an echo reply arrives; polled by net_init. */
-static volatile int s_icmp_reply_received;
 
 static void icmp_rx(netdev_t *dev, ip4_addr_t src_ip,
                     const icmp_hdr_t *icmp, uint16_t len)
 {
     if (icmp->type == 0) {
-        /* Echo reply received during net_init self-test.
-         * Print the confirmation line — this is what test_net_stack.py checks. */
-        uint32_t s = ntohl(src_ip);
-        printk("[NET] ICMP: echo reply from %u.%u.%u.%u\n",
-               (s>>24)&0xff, (s>>16)&0xff, (s>>8)&0xff, s&0xff);
-        s_icmp_reply_received = 1;
+        /* Echo reply — silently drop (no self-test in net_init any more). */
         return;
     }
 
@@ -210,8 +203,6 @@ void ip_rx(netdev_t *dev, const void *frame,
 
 /* ---- net_init ---------------------------------------------------------- */
 
-static uint8_t s_ping_buf[sizeof(icmp_hdr_t)];
-
 void net_init(void)
 {
     netdev_t *dev = netdev_get("eth0");
@@ -220,49 +211,7 @@ void net_init(void)
          * boot.txt must NOT contain any [NET] lines. */
         return;
     }
-
     eth_init();
     udp_init();
     tcp_init();
-
-    /* Set static QEMU SLIRP IP configuration. */
-    net_set_config(htonl(0x0a00020f), /* 10.0.2.15 */
-                   htonl(0xffffff00), /* /24        */
-                   htonl(0x0a000202)  /* 10.0.2.2   */);
-
-    /* Send ICMP echo request to the QEMU SLIRP gateway (10.0.2.2). */
-    icmp_hdr_t *req = (icmp_hdr_t *)s_ping_buf;
-    req->type     = 8;
-    req->code     = 0;
-    req->id       = htons(0xAE91);
-    req->seq      = htons(1);
-    req->checksum = 0;
-    req->checksum = net_checksum_finish(
-                        net_checksum(s_ping_buf, sizeof(icmp_hdr_t)));
-
-    int send_result = ip_send(dev, htonl(0x0a000202), IP_PROTO_ICMP,
-                              s_ping_buf, sizeof(icmp_hdr_t));
-    if (send_result != 0) {
-        printk("[NET] WARN: ICMP send failed (ARP timeout?)\n");
-        return;
-    }
-    printk("[NET] ICMP: echo request sent\n");
-
-    /* Poll for the reply using sti+hlt+cli (same reason as arp_resolve).
-     * net_init() runs before sched_start() with interrupts disabled, so
-     * arch_get_ticks() never advances.  Yield to QEMU via sti+hlt+cli each
-     * iteration; the PIT ISR calls netdev_poll_all() → icmp_rx() which
-     * prints "[NET] ICMP: echo reply from ..." when the reply arrives.
-     * 500 iterations × 10 ms/tick ≈ 5 seconds total timeout. */
-    s_icmp_reply_received = 0;
-    {
-        uint32_t n;
-        for (n = 0; n < 500u; n++) {
-            arch_wait_for_irq();
-            netdev_poll_all(); /* drain in case PIT ISR hasn't run yet */
-            if (s_icmp_reply_received)
-                break;
-        }
-    }
-    arch_enable_irq(); /* restore interrupts */
 }

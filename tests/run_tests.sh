@@ -119,3 +119,8 @@ python3 tests/test_vigil.py
 # Skipped automatically if build/disk.img is not present.
 echo "--- test_socket ---"
 python3 tests/test_socket.py
+
+# Phase 27 HTTPS smoke test — boots INIT=vigil with curl on ext2 disk,
+# runs curl https://example.com. Skipped if build/disk.img is not present.
+echo "--- test_curl ---"
+python3 tests/test_curl.py

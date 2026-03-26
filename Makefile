@@ -165,7 +165,8 @@ PROG_BIN_SRCS = \
     kernel/login_bin.c \
     kernel/vigil_bin.c \
     kernel/vigictl_bin.c \
-    kernel/httpd_blob.c
+    kernel/httpd_blob.c \
+    kernel/dhcp_blob.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -379,6 +380,31 @@ build/httpd_bin.elf: kernel/httpd_bin.c
 kernel/httpd_blob.c: build/httpd_bin.elf
 	cd build && xxd -i httpd_bin.elf > ../kernel/httpd_blob.c
 
+user/dhcp/dhcp: user/dhcp/main.c
+	$(MAKE) -C user/dhcp
+
+build/dhcp_bin.elf: user/dhcp/dhcp
+	cp user/dhcp/dhcp build/dhcp_bin.elf
+
+# Embed compiled dhcp ELF into kernel initrd blob.
+kernel/dhcp_blob.c: build/dhcp_bin.elf
+	cd build && xxd -i dhcp_bin.elf > ../kernel/dhcp_blob.c
+
+# BearSSL source (fetch if absent)
+references/bearssl-0.6/inc/bearssl.h:
+	bash tools/fetch-bearssl.sh
+
+# BearSSL staging install
+build/bearssl-install/lib/libbearssl.a: references/bearssl-0.6/inc/bearssl.h
+	bash tools/build-bearssl.sh
+
+# curl binary
+build/curl/curl: build/bearssl-install/lib/libbearssl.a
+	bash tools/build-curl.sh
+
+.PHONY: curl_bin
+curl_bin: build/curl/curl
+
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
@@ -408,7 +434,9 @@ DISK_USER_BINS = \
 	user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
 	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
 	user/mkdir/mkdir.elf user/touch/touch.elf \
-	build/httpd_bin.elf
+	build/httpd_bin.elf \
+	build/dhcp_bin.elf \
+	build/curl/curl
 
 disk: $(DISK)
 
@@ -453,6 +481,21 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'write /tmp/aegis-httpd-run /etc/vigil/services/httpd/run\nwrite /tmp/aegis-httpd-policy /etc/vigil/services/httpd/policy\nwrite /tmp/aegis-httpd-caps /etc/vigil/services/httpd/caps\nwrite /tmp/aegis-httpd-user /etc/vigil/services/httpd/user\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	rm -f /tmp/aegis-httpd-run /tmp/aegis-httpd-policy /tmp/aegis-httpd-caps /tmp/aegis-httpd-user
+	# dhcp vigil service — DHCP client with NET_ADMIN cap
+	printf 'mkdir /etc/vigil/services/dhcp\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	printf 'exec /bin/dhcp\n' > /tmp/aegis-dhcp-run
+	printf 'respawn\nmax_restarts=10\n' > /tmp/aegis-dhcp-policy
+	printf 'NET_ADMIN NET_SOCKET\n' > /tmp/aegis-dhcp-caps
+	printf 'root\n' > /tmp/aegis-dhcp-user
+	printf 'write /tmp/aegis-dhcp-run /etc/vigil/services/dhcp/run\nwrite /tmp/aegis-dhcp-policy /etc/vigil/services/dhcp/policy\nwrite /tmp/aegis-dhcp-caps /etc/vigil/services/dhcp/caps\nwrite /tmp/aegis-dhcp-user /etc/vigil/services/dhcp/user\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	rm -f /tmp/aegis-dhcp-run /tmp/aegis-dhcp-policy /tmp/aegis-dhcp-caps /tmp/aegis-dhcp-user
+	# curl binary and CA bundle on ext2
+	printf 'mkdir /etc/ssl\nmkdir /etc/ssl/certs\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"

@@ -25,4 +25,16 @@ uint32_t initrd_get_size(const vfs_file_t *f);
  * Used by vfs_stat_path to avoid re-opening the file. */
 int initrd_stat_entry(const char *path, k_stat_t *out);
 
+/* initrd_iter_etc — iterate all initrd entries whose path starts with "/etc/".
+ * For each such entry, cb is called with:
+ *   path  — the short name without the "/etc/" prefix (e.g. "motd", "passwd",
+ *            "vigil/services/getty/run")
+ *   data  — pointer to file content (kernel static data)
+ *   len   — file length in bytes
+ *   ud    — opaque user data passed through unchanged
+ * Used by vfs_init() to populate the etc ramfs from initrd at boot. */
+typedef void (*initrd_etc_cb_t)(const char *path, const uint8_t *data,
+                                uint32_t len, void *ud);
+void initrd_iter_etc(initrd_etc_cb_t cb, void *ud);
+
 #endif /* INITRD_H */

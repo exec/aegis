@@ -111,6 +111,9 @@ typedef struct __attribute__((packed)) {
  * Returns 0 on success, -1 on failure. */
 int ext2_mount(const char *devname);
 
+/* Low-level inode access */
+int ext2_read_inode(uint32_t ino, ext2_inode_t *out);
+
 /* File operations for VFS integration */
 int ext2_open(const char *path, uint32_t *inode_out);
 int ext2_read(uint32_t inode_num, void *buf, uint32_t offset, uint32_t len);

@@ -423,6 +423,9 @@ sys_execve(syscall_frame_t *frame,
         return (uint64_t)-(int64_t)12;  /* ENOMEM */
 
     uint64_t ret = 0;  /* overwritten on error; 0 = success */
+    /* For ext2-backed binaries: kva buffer holding the ELF image. */
+    void    *ext2_buf   = (void *)0;
+    uint64_t ext2_pages = 0;
 
     /* 1. Copy path from user (<=255 bytes) */
     char path[256];
@@ -473,10 +476,33 @@ sys_execve(syscall_frame_t *frame,
         {
     int argc2 = argc;
 
-    /* 3. Look up path in initrd */
+    /* 3. Look up binary: initrd first, then VFS (ext2 on nvme0p1). */
     vfs_file_t f;
-    if (initrd_open(path, &f) != 0)
-        { ret = (uint64_t)-(int64_t)2; goto done; }  /* ENOENT */
+    const uint8_t *elf_data;
+    uint64_t       elf_size;
+    if (initrd_open(path, &f) == 0) {
+        elf_data = (const uint8_t *)initrd_get_data(&f);
+        elf_size = (uint64_t)initrd_get_size(&f);
+    } else {
+        vfs_file_t vf;
+        int vr = vfs_open(path, 0, &vf);
+        printk("[EXEC] vfs_open(%s)=%d size=%u\n", path, vr, (unsigned)vf.size);
+        if (vr != 0)
+            { ret = (uint64_t)-(int64_t)2; goto done; }  /* ENOENT */
+        if (vf.size == 0)
+            { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
+        ext2_pages = (vf.size + 4095ULL) / 4096ULL;
+        ext2_buf = kva_alloc_pages(ext2_pages);
+        printk("[EXEC] kva_alloc %u pages -> %p\n", (unsigned)ext2_pages, ext2_buf);
+        if (!ext2_buf)
+            { ret = (uint64_t)-(int64_t)12; goto done; }  /* ENOMEM */
+        int rr = vf.ops->read(vf.priv, ext2_buf, 0, vf.size);
+        printk("[EXEC] ext2 read -> %d\n", rr);
+        if (rr < 0)
+            { ret = (uint64_t)-(int64_t)5; goto done; }   /* EIO */
+        elf_data = (const uint8_t *)ext2_buf;
+        elf_size = vf.size;
+    }
 
     /* 4. Free all user leaf pages; reuse PML4 and page-table structure */
     vmm_free_user_pages(proc->pml4_phys);
@@ -516,10 +542,14 @@ sys_execve(syscall_frame_t *frame,
 
     /* 6. Load new ELF */
     elf_load_result_t er;
-    if (elf_load(proc->pml4_phys,
-                 (const uint8_t *)initrd_get_data(&f),
-                 (size_t)initrd_get_size(&f), &er) != 0)
+    if (elf_load(proc->pml4_phys, elf_data, (size_t)elf_size, &er) != 0)
         { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
+    /* Free ext2 buffer immediately after ELF is loaded (pages already mapped). */
+    if (ext2_buf) {
+        kva_free_pages(ext2_buf, ext2_pages);
+        ext2_buf   = (void *)0;
+        ext2_pages = 0;
+    }
     proc->brk = er.brk;
 
     /* 7. Allocate + map 4 user stack pages (16 KB) */
@@ -677,6 +707,7 @@ sys_execve(syscall_frame_t *frame,
     } /* argc scope */
 
 done:
+    if (ext2_buf) kva_free_pages(ext2_buf, ext2_pages);
     kva_free_pages(abuf, EXECVE_ARGBUF_PAGES);
     return ret;
 }

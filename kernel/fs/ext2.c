@@ -182,7 +182,34 @@ uint32_t ext2_block_num(const ext2_inode_t *inode,
         return entry;
     }
 
-    return 0;   /* double/triple indirect not supported */
+    /* Double indirect: i_block[13] → block of pointers → block of pointers */
+    if (file_block < 12 + ptrs_per_block + ptrs_per_block * ptrs_per_block) {
+        uint32_t dind = inode->i_block[13];
+        if (dind == 0) return 0;
+        uint8_t *outer = cache_get_slot(dind);
+        if (!outer) return 0;
+        uint32_t idx       = file_block - 12 - ptrs_per_block;
+        uint32_t outer_off = idx / ptrs_per_block;
+        uint32_t inner_off = idx % ptrs_per_block;
+        uint8_t *op = outer + outer_off * 4;
+        uint32_t ind;
+        ind  = (uint32_t)op[0];
+        ind |= (uint32_t)op[1] << 8;
+        ind |= (uint32_t)op[2] << 16;
+        ind |= (uint32_t)op[3] << 24;
+        if (ind == 0) return 0;
+        uint8_t *inner = cache_get_slot(ind);
+        if (!inner) return 0;
+        uint8_t *ip = inner + inner_off * 4;
+        uint32_t entry;
+        entry  = (uint32_t)ip[0];
+        entry |= (uint32_t)ip[1] << 8;
+        entry |= (uint32_t)ip[2] << 16;
+        entry |= (uint32_t)ip[3] << 24;
+        return entry;
+    }
+
+    return 0;   /* triple indirect not supported */
 }
 
 /* ------------------------------------------------------------------ */

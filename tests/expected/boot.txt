@@ -16,7 +16,7 @@
 [SMAP] OK: supervisor access prevention active
 [SMEP] OK: supervisor mode execution prevention active
 [VFS] OK: initialized
-[INITRD] OK: 33 files registered
+[INITRD] OK: 37 files registered
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)
 [PCIE] OK: skipped (no ECAM)
 [CAP] OK: 8 capabilities granted to init

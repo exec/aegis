@@ -239,6 +239,13 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Net stack (Phase 25) | ✅ | Ethernet/ARP/IPv4/ICMP/TCP/UDP; arp_resolve uses sti+hlt; 12-byte virtio header; test_net_stack.py PASS |
 | Vigil init system | ✅ | INIT=vigil; service supervision + respawn; exec_caps; test_vigil.py PASS |
 | Socket API (Phase 26) | ✅ | socket/bind/listen/accept/connect/send/recv/epoll; sock_t VFS fds; httpd; test_socket.py PASS |
+| writable /etc + /root | ✅ | multi-instance ramfs_t; initrd_iter_etc populates etc ramfs; /root ramfs empty at boot |
+| DHCP daemon (Phase 27) | ✅ | userspace RFC 2131 client; vigil service; DISCOVER→OFFER→REQUEST→ACK; test_vigil.py PASS |
+| ext2 execve | ✅ | sys_execve VFS fallback: initrd miss → vfs_open → kva_alloc → ext2_read → elf_load |
+| ext2 double indirect | ✅ | i_block[13]; covers files up to ~67 MB; required for curl (1.3 MB) |
+| ext2 stat (inode mode) | ✅ | vfs.c stat paths now read actual inode.i_mode from disk; fixes 0644→0775 for /bin/ |
+| BearSSL + curl build | ✅ | tools/fetch-bearssl.sh + tools/build-curl.sh; curl 8.x statically linked; ext2-only via make disk |
+| curl HTTPS e2e | ❌ | curl exec loads (311 pages) but exits silently — NET_SOCKET cap missing from execve baseline |
 
 ### Known deviations
 
@@ -278,7 +285,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 5. **ARP busy-poll disables interrupts.** `arp_resolve()` calls `cli` for up to 300,000 iterations (~100ms). This blocks preemption during ARP resolution from the syscall path. Async ARP queue is Phase 26+ work.
 
-6. **Static IP hardcoded.** `net_init()` sets 10.0.2.15/24 gw 10.0.2.2. Phase 28 DHCP daemon will replace this. A future `sys_netcfg` syscall will allow dynamic reconfiguration.
+6. **Static IP hardcoded — RESOLVED in Phase 27.** `net_init()` no longer sets a static IP. DHCP daemon acquires 10.0.2.15/24 gw 10.0.2.2 via SLIRP. `sys_netcfg` not yet implemented.
 
 7. **Shared static TX buffers.** `eth_send()` and `ip_send()` use file-scoped 1514-byte and 1500-byte static buffers. No concurrent sends. Sequential callers only. Phase 26 socket layer needs a per-process TX lock or ring.
 
@@ -300,7 +307,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 |-------|---------|--------|
 | 25 | Ethernet/ARP/IPv4/ICMP/TCP/UDP stack | ✅ Done — test_net_stack.py PASS |
 | 26 | POSIX socket API + epoll + Vigil AF_UNIX IPC (`sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*`) | ✅ Done — test_socket.py PASS |
-| 27 | DHCP + DNS daemon; writable /etc + /root (ramfs); BearSSL 0.6 + curl 8.13.0 (ext2) | 🔶 In progress — branch `phase27-dhcp-dns-curl` |
+| 27 | DHCP + DNS daemon; writable /etc + /root (ramfs); BearSSL 0.6 + curl 8.13.0 (ext2) | 🔶 Partial — curl loads but exits silently; NET_SOCKET cap fix needed |
 | 28 | Writable root — ramfs-root populated from initrd; full live-system writability; foundation for installer | Not started |
 | 29 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
 | 30 | Framebuffer / VESA | Not started |
@@ -316,4 +323,47 @@ A subsystem is ✅ only when `make test` passes with it included.
 - **Test machine B (ThinkPad X13 Gen 1):** Ryzen 7 Pro 4750U (Zen 2 / Renoir)
 - **Shared panic (both test machines A and B) — FIXED 2026-03-24:** `[PANIC] corrupt ring-3 iretq frame vec=32 ss=0x18 rsp=0x7ffffffe7d0` after `[SHELL] Aegis shell ready`. Root cause: AMD CPUs in 64-bit long mode strip RPL bits from SS (pushing 0x18 instead of 0x1B on interrupt entry) since SS is unused for addressing in 64-bit mode. Two-part fix: (1) relaxed panic check from `ss != 0x1B` to `(ss & ~3) != 0x18`; (2) added SS RPL normalization in `isr_dispatch` — `if (s->cs == 0x23) s->ss |= 3;` forces RPL=3 before iretq so AMD machines don't #GP. **AMD 64-bit behavior: SS RPL bits are not maintained; expect ss=0x18 on interrupt from ring-3 on AMD, ss=0x1B on Intel/QEMU.**
 
-*Last updated: 2026-03-26 — Phase 27 in progress on branch `phase27-dhcp-dns-curl`. DHCP daemon + writable /etc+/root + BearSSL 0.6 + curl 8.13.0 committed. Curl HTTPS end-to-end not yet verified (blocker: connect debug needed). Test bundling implemented (reduces ~25 QEMU boots to ~11). See Phase 27 forward constraints in branch CLAUDE.md.*
+---
+
+## Phase 27 — Forward Constraints
+
+**Phase 27 status: 🔶 Partial. Infrastructure done; curl HTTPS end-to-end fails.**
+
+**What is done:**
+- DHCP daemon: RFC 2131 state machine; vigil service; `[DHCP] acquired` on boot; `test_vigil.py` PASS
+- Writable `/etc` + `/root`: multi-instance `ramfs_t`; `initrd_iter_etc` populates etc ramfs at mount
+- BearSSL 0.6 + curl 8.x: `tools/fetch-bearssl.sh` + `tools/build-curl.sh`; statically linked; written to ext2 via `make disk`
+- `ext2_execve` VFS fallback: `sys_execve` tries initrd first, then `vfs_open` → `kva_alloc` → `ext2_read` → `elf_load`
+- `ext2_block_num` double indirect: `i_block[13]`; covers files up to ~67 MB
+- `vfs.c` ext2 stat: reads actual `inode.i_mode` from disk instead of hardcoded `0644`
+- `test_curl.py`: boots with QEMU monitor socket + keyboard injection; logs in; waits for DHCP; runs curl
+
+**Blocker — curl exits silently after exec:**
+curl loads (311 pages from ext2, double indirect) but exits immediately with no output. Most likely cause: `NET_SOCKET` capability is not granted in the execve baseline.
+
+**Fix needed in `kernel/syscall/sys_process.c`:**
+In `sys_execve`, after the three VFS cap grants (lines ~524–526), add:
+```c
+cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
+/* NET_SOCKET is a baseline cap — exec'd binaries may open sockets. */
+```
+After that fix, retest with `python3 tests/test_curl.py`. If curl still fails, check:
+1. Does `sys_socket()` return ENOCAP? Add `printk` in `sys_socket` to confirm.
+2. DNS: SLIRP provides resolver at 10.0.2.3. curl must be built with `--resolve-host` or use `/etc/resolv.conf`.
+3. Check `/etc/resolv.conf` is reachable: `cat /etc/resolv.conf` in the test shell.
+4. CA bundle: `tools/cacert.pem` → `/etc/ssl/certs/ca-certificates.crt` on ext2. Verify it exists.
+
+**Debug prints to remove once curl works:**
+In `kernel/syscall/sys_process.c` (~lines 489–500):
+```c
+printk("[EXEC] vfs_open(%s)=%d size=%u\n", ...);
+printk("[EXEC] kva_alloc %u pages -> %p\n", ...);
+printk("[EXEC] ext2 read -> %d\n", ...);
+```
+Remove these after the curl test passes.
+
+**Note:** `%d` and `%p` are not supported by `printk` — they print literally. Use `%u` for unsigned int values, `%x` for hex. The debug prints show `size=0` and `-> %d` which is misleading; actual values were correct (size=1269984, rr=success).
+
+---
+
+*Last updated: 2026-03-26 — Phase 27 partial: DHCP daemon ✅, writable /etc+/root ✅, BearSSL+curl build ✅, ext2 execve ✅, ext2 double indirect ✅, ext2 stat mode ✅. Blocker: curl exits silently after exec — add NET_SOCKET cap to execve baseline in sys_process.c.*
