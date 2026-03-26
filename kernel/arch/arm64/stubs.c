@@ -81,8 +81,7 @@ unsigned long strlen(const char *s) { unsigned long n = 0; while (s[n]) n++; ret
 /* ── USB HID stub ── */
 void kbd_usb_inject(char c) { (void)c; }
 
-/* ── Signal stubs ── */
-void signal_send_pgrp(uint32_t pgrp, int sig) { (void)pgrp; (void)sig; }
+/* signal_send_pid/pgrp/check_pending now in shared signal.c */
 
 /* User binary blobs — real ARM64 musl-static binaries (compiled separately).
  * init_elf from init_arm64_bin.c, others from *_arm64_bin.c files. */
@@ -120,8 +119,7 @@ void arch_set_kernel_stack(uint64_t sp0) {
 uint64_t g_master_pml4 = 0;
 void arch_set_master_pml4(uint64_t pml4_phys) { g_master_pml4 = pml4_phys; }
 
-/* sched.c exit path calls ext2_sync and signal_send_pid */
-/* ext2_sync provided by real ext2_cache.c */
-void signal_send_pid(uint32_t pid, int sig) { (void)pid; (void)sig; }
+/* ext2_sync provided by real ext2_cache.c.
+ * signal_send_pid/pgrp provided by shared signal.c. */
 
 /* proc_spawn_init is provided by the real proc.c (shared source). */

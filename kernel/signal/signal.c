@@ -5,14 +5,174 @@
 #include <stdint.h>
 
 #ifdef __aarch64__
-/* ARM64: signal delivery is not yet ported. Provide minimal stubs
- * so the kernel compiles. Signal dispatch is a no-op — signals are
- * queued but never delivered to user space until this is implemented. */
+/* ARM64 signal delivery — builds a signal frame on the user stack
+ * and redirects ELR to the signal handler. On sigreturn, the saved
+ * registers are restored from the frame. */
 #include "idt.h"
 #include "syscall.h"
-void signal_deliver(struct cpu_state *s) { (void)s; }
-int signal_deliver_sysret(struct syscall_frame *frame, uint64_t *saved_rdi_ptr) {
-    (void)frame; (void)saved_rdi_ptr; return 0;
+#include "uaccess.h"
+#include "syscall_util.h"
+#include "vmm.h"
+
+void
+signal_deliver(cpu_state_t *s)
+{
+    aegis_task_t *task = sched_current();
+    if (!task || !task->is_user) return;
+
+    aegis_process_t *proc = (aegis_process_t *)task;
+    uint64_t deliverable = proc->pending_signals & ~proc->signal_mask;
+    if (!deliverable) return;
+
+    /* Find lowest pending signal */
+    int signum;
+    for (signum = 1; signum < 32; signum++) {
+        if (deliverable & (1ULL << signum)) break;
+    }
+    if (signum >= 32) return;
+
+    k_sigaction_t *sa = &proc->sigactions[signum];
+
+    /* SIG_IGN — clear and return */
+    if (sa->sa_handler == SIG_IGN) {
+        proc->pending_signals &= ~(1ULL << signum);
+        return;
+    }
+
+    /* SIG_DFL — terminate for most signals */
+    if (sa->sa_handler == SIG_DFL) {
+        proc->pending_signals &= ~(1ULL << signum);
+        if (signum == SIGCHLD || signum == SIGCONT) return; /* ignore */
+        proc->exit_status = 128 + signum;
+        sched_exit();
+        __builtin_unreachable();
+    }
+
+    /* Build signal frame on user stack */
+    uint64_t user_sp = s->sp_el0;
+    uint64_t new_sp = (user_sp - sizeof(rt_sigframe_t)) & ~0xFUL; /* 16-byte align */
+
+    /* Validate new_sp */
+    if (new_sp >= user_sp || new_sp > USER_ADDR_MAX || new_sp < 0x1000) {
+        proc->exit_status = 128 + signum;
+        sched_exit();
+        __builtin_unreachable();
+    }
+
+    rt_sigframe_t sf;
+    /* Zero the frame */
+    {
+        uint8_t *p = (uint8_t *)&sf;
+        uint64_t i;
+        for (i = 0; i < sizeof(sf); i++) p[i] = 0;
+    }
+
+    /* Save registers into gregs */
+    {
+        int i;
+        for (i = 0; i < 31; i++)
+            sf.gregs[i] = (int64_t)s->x[i];
+        sf.gregs[REG_SP]     = (int64_t)s->sp_el0;
+        sf.gregs[REG_PC]     = (int64_t)s->elr;
+        sf.gregs[REG_PSTATE] = (int64_t)s->spsr;
+    }
+
+    sf.pretcode  = (uint64_t)sa->sa_restorer;
+    sf.uc_sigmask = proc->signal_mask;
+
+    /* Copy frame to user stack */
+    copy_to_user((void *)(uintptr_t)new_sp, &sf, sizeof(sf));
+
+    /* Redirect execution to signal handler */
+    s->elr    = (uint64_t)sa->sa_handler;
+    s->sp_el0 = new_sp;
+    s->x[0]   = (uint64_t)signum;  /* first argument = signal number */
+
+    /* Block the signal during handler execution */
+    proc->signal_mask |= sa->sa_mask | (1ULL << signum);
+    proc->signal_mask &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+
+    /* Clear pending */
+    proc->pending_signals &= ~(1ULL << signum);
+}
+
+int
+signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
+{
+    /* On ARM64, we only use the iretq-equivalent (ERET) path.
+     * The sysret path is x86-specific. Check for pending signals
+     * and deliver via the frame if needed. */
+    (void)saved_rdi_ptr;
+
+    aegis_task_t *task = sched_current();
+    if (!task || !task->is_user) return 0;
+
+    aegis_process_t *proc = (aegis_process_t *)task;
+    uint64_t deliverable = proc->pending_signals & ~proc->signal_mask;
+    if (!deliverable) return 0;
+
+    /* Find lowest pending signal */
+    int signum;
+    for (signum = 1; signum < 32; signum++) {
+        if (deliverable & (1ULL << signum)) break;
+    }
+    if (signum >= 32) return 0;
+
+    k_sigaction_t *sa = &proc->sigactions[signum];
+
+    if (sa->sa_handler == SIG_IGN) {
+        proc->pending_signals &= ~(1ULL << signum);
+        return 0;
+    }
+    if (sa->sa_handler == SIG_DFL) {
+        proc->pending_signals &= ~(1ULL << signum);
+        if (signum == SIGCHLD || signum == SIGCONT) return 0;
+        proc->exit_status = 128 + signum;
+        sched_exit();
+        __builtin_unreachable();
+    }
+
+    /* Build frame on user stack and redirect */
+    uint64_t user_sp = frame->user_sp;
+    uint64_t new_sp = (user_sp - sizeof(rt_sigframe_t)) & ~0xFUL;
+
+    if (new_sp >= user_sp || new_sp > USER_ADDR_MAX || new_sp < 0x1000) {
+        proc->exit_status = 128 + signum;
+        sched_exit();
+        __builtin_unreachable();
+    }
+
+    rt_sigframe_t sf;
+    {
+        uint8_t *p = (uint8_t *)&sf;
+        uint64_t i;
+        for (i = 0; i < sizeof(sf); i++) p[i] = 0;
+    }
+
+    /* Save registers from syscall frame */
+    {
+        int i;
+        for (i = 0; i < 31; i++)
+            sf.gregs[i] = (int64_t)frame->regs[i];
+        sf.gregs[REG_SP]     = (int64_t)frame->user_sp;
+        sf.gregs[REG_PC]     = (int64_t)frame->elr;
+        sf.gregs[REG_PSTATE] = (int64_t)frame->spsr;
+    }
+
+    sf.pretcode   = (uint64_t)sa->sa_restorer;
+    sf.uc_sigmask = proc->signal_mask;
+
+    copy_to_user((void *)(uintptr_t)new_sp, &sf, sizeof(sf));
+
+    FRAME_IP(frame) = (uint64_t)sa->sa_handler;
+    FRAME_SP(frame) = new_sp;
+    frame->regs[0]  = (uint64_t)signum;
+
+    proc->signal_mask |= sa->sa_mask | (1ULL << signum);
+    proc->signal_mask &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    proc->pending_signals &= ~(1ULL << signum);
+
+    return 1;
 }
 
 #else /* x86-64 */
@@ -221,24 +381,23 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
     return 1;
 }
 
+#endif /* !__aarch64__ — end of arch-specific signal_deliver/signal_deliver_sysret */
+
+/* ── Architecture-agnostic signal functions ──────────────────────── */
+
 void
 signal_send_pid(uint32_t pid, int signum)
 {
     if (pid == 0 || signum <= 0 || signum >= 64) return;
 
-    /*
-     * Walk the run queue to find the target process.
-     * Single-core, IF=0 at call sites — no lock needed.
-     */
     aegis_task_t *cur = sched_current();
     if (!cur) return;
-    aegis_task_t *t   = cur;
+    aegis_task_t *t = cur;
     do {
         if (t->is_user) {
             aegis_process_t *p = (aegis_process_t *)t;
             if (p->pid == pid) {
                 p->pending_signals |= (1ULL << (uint32_t)signum);
-                /* Wake blocked process so it can check pending signals */
                 if (t->state == TASK_BLOCKED)
                     sched_wake(t);
                 return;
@@ -261,7 +420,6 @@ signal_send_pgrp(uint32_t pgid, int signum)
             aegis_process_t *p = (aegis_process_t *)t;
             if (p->pgid == pgid && p->pid != 1) {
                 p->pending_signals |= (1ULL << (uint32_t)signum);
-                /* Wake stopped/blocked task so it can deliver the signal */
                 if (t->state == TASK_STOPPED)
                     sched_resume(t);
                 else if (t->state == TASK_BLOCKED)
@@ -281,4 +439,3 @@ signal_check_pending(void)
     aegis_process_t *proc = (aegis_process_t *)task;
     return (proc->pending_signals & ~proc->signal_mask) != 0;
 }
-#endif /* !__aarch64__ */
