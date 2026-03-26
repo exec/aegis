@@ -390,6 +390,21 @@ build/dhcp_bin.elf: user/dhcp/dhcp
 kernel/dhcp_blob.c: build/dhcp_bin.elf
 	cd build && xxd -i dhcp_bin.elf > ../kernel/dhcp_blob.c
 
+# BearSSL source (fetch if absent)
+references/bearssl-0.6/inc/bearssl.h:
+	bash tools/fetch-bearssl.sh
+
+# BearSSL staging install
+build/bearssl-install/lib/libbearssl.a: references/bearssl-0.6/inc/bearssl.h
+	bash tools/build-bearssl.sh
+
+# curl binary
+build/curl/curl: build/bearssl-install/lib/libbearssl.a
+	bash tools/build-curl.sh
+
+.PHONY: curl_bin
+curl_bin: build/curl/curl
+
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
@@ -420,7 +435,8 @@ DISK_USER_BINS = \
 	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
 	user/mkdir/mkdir.elf user/touch/touch.elf \
 	build/httpd_bin.elf \
-	build/dhcp_bin.elf
+	build/dhcp_bin.elf \
+	build/curl/curl
 
 disk: $(DISK)
 
@@ -475,6 +491,11 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'write /tmp/aegis-dhcp-run /etc/vigil/services/dhcp/run\nwrite /tmp/aegis-dhcp-policy /etc/vigil/services/dhcp/policy\nwrite /tmp/aegis-dhcp-caps /etc/vigil/services/dhcp/caps\nwrite /tmp/aegis-dhcp-user /etc/vigil/services/dhcp/user\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	rm -f /tmp/aegis-dhcp-run /tmp/aegis-dhcp-policy /tmp/aegis-dhcp-caps /tmp/aegis-dhcp-user
+	# curl binary and CA bundle on ext2
+	printf 'mkdir /etc/ssl\nmkdir /etc/ssl/certs\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"
