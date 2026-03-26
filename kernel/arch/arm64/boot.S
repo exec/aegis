@@ -14,11 +14,6 @@
     .section .text.boot
     .globl _start
 _start:
-    /* Debug: write '0' immediately */
-    mov     x4, #0x09000000
-    mov     x5, #0x30
-    str     w5, [x4]
-
     mov     x19, x0             /* save DTB pointer */
     msr     daifset, #0xf       /* mask all exceptions */
     msr     spsel, #1           /* use SP_EL1 */
@@ -145,11 +140,6 @@ _start:
     dsb     sy
     isb
 
-    /* Debug: write 'A' to PL011 before MMU enable */
-    mov     x4, #0x09000000
-    mov     x5, #0x41          /* 'A' */
-    str     w5, [x4]
-
     /* Enable MMU + caches */
     mrs     x1, sctlr_el1
     orr     x1, x1, #(1 << 0)
@@ -158,50 +148,19 @@ _start:
     msr     sctlr_el1, x1
     isb
 
-    /* Debug: write 'B' after MMU enable (still at low VA) */
-    mov     x4, #0x09000000
-    mov     x5, #0x42          /* 'B' */
-    str     w5, [x4]
-
     /* Jump to high VA (TTBR1 range) */
     ldr     x2, =.Lhigh
     br      x2
 
 .Lhigh:
-    /* Debug: write 'C' at high VA */
-    ldr     x4, =0xFFFF000009000000
-    mov     x5, #0x43          /* 'C' */
-    str     w5, [x4]
-    /* Now at 0xFFFF000040000xxx. Switch SP to high VA. */
+    /* Set up kernel stack */
     ldr     x1, =boot_stack_top
     mov     sp, x1
 
-    /* kernel_main(dtb_phys) — absolute call, not PC-relative bl.
-     * bl would use a veneer at low VA; blr with loaded addr is correct. */
-    /* Debug: output high nibble of x2 (kernel_main addr) as hex chars */
-    ldr     x2, =kernel_main
-    ldr     x4, =0xFFFF000009000000
-
-    /* Print the value we're about to jump to: extract byte at position 1 */
-    lsr     x5, x2, #8
-    and     x5, x5, #0xF
-    add     x5, x5, #0x30
-    cmp     x5, #0x3A
-    b.lo    5f
-    add     x5, x5, #7
-5:  str     w5, [x4]
-
-    /* Print newline then jump */
-    mov     x5, #0x0A
-    str     w5, [x4]
-
+    /* Call kernel_main */
     mov     x0, x19
+    ldr     x2, =kernel_main
     blr     x2
-
-    /* Debug 'F' if kernel_main returns (shouldn't) */
-    ldr     x4, =0xFFFF000009000000
-    mov     x5, #0x46
-    str     w5, [x4]
 
 .Lhang:
     wfi

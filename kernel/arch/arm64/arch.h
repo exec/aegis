@@ -69,8 +69,9 @@ static inline int arch_get_fb_info(arch_fb_info_t *out) { (void)out; return 0; }
 #define ARCH_KERNEL_VIRT_BASE 0xFFFF000040000000UL
 #define KERN_VA_OFFSET        0xFFFF000000000000UL
 
-/* KVA bump allocator base — in TTBR1 range, past kernel + window. */
-#define ARCH_KVA_BASE (ARCH_KERNEL_VIRT_BASE + 0xA00000UL)
+/* KVA bump allocator base — past the 64MB block-mapped region + window.
+ * Block mappings: L2[0..31] = 64MB. Window: L2[32]. KVA: L2[33+]. */
+#define ARCH_KVA_BASE (ARCH_KERNEL_VIRT_BASE + 0x4200000UL)  /* +66MB */
 
 /* -------------------------------------------------------------------------
  * Virtual memory interface

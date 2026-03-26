@@ -20,7 +20,15 @@
 proc_enter_user:
     /* Stack has (low → high): SPSR, ELR, user_SP, PML4_phys */
     ldp     x0, x1, [sp], #16      /* x0 = SPSR, x1 = ELR */
-    ldp     x2, x3, [sp], #16      /* x2 = user_SP, x3 = PML4_phys (unused) */
+    ldp     x2, x3, [sp], #16      /* x2 = user_SP, x3 = PML4_phys */
+
+    /* Switch TTBR0 to user page tables */
+    msr     ttbr0_el1, x3
+    dsb     sy
+    isb
+    tlbi    vmalle1
+    dsb     sy
+    isb
 
     /* Set return state */
     msr     spsr_el1, x0

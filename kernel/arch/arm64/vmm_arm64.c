@@ -58,7 +58,8 @@ static volatile uint64_t *s_window_pte;
 
 /* Window VA: we pick an address in the identity-mapped region that doesn't
  * conflict with kernel code/data. Use a fixed VA past the kernel. */
-#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x800000UL)  /* +8MB from kernel base */
+/* Window at L2[32] = +64MB, just past the 32 block-mapped entries. */
+#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x4000000UL)
 
 /* ── Window allocator ──────────────────────────────────────────────── */
 
@@ -206,7 +207,9 @@ vmm_init(void)
      * L2[4] is replaced by the window allocator table below.
      * L2[5+] are left unmapped — KVA creates L3 tables on demand via
      * vmm_map_page → ensure_table. PMM still knows about all 128MB. */
-    for (int i = 0; i < 5; i++) {
+    /* Map first 32 × 2MB = 64MB as block descriptors.
+     * Remaining RAM (64MB+) is available to KVA via L3 page tables. */
+    for (int i = 0; i < 32; i++) {
         l2_ram[i] = (0x40000000UL + (uint64_t)i * 0x200000UL) |
                      PTE_VALID | /* block: bit[1]=0 */ PTE_AF |
                      PTE_SH_INNER | PTE_ATTR_NORM | PTE_AP_RW_EL1;
@@ -249,7 +252,9 @@ vmm_get_master_pml4(void)
 void
 vmm_switch_to(uint64_t pml4_phys)
 {
-    arch_vmm_load_pml4(pml4_phys);
+    /* Switch user address space (TTBR0). */
+    extern void arch_vmm_load_user_ttbr0(uint64_t phys);
+    arch_vmm_load_user_ttbr0(pml4_phys);
 }
 
 void
@@ -310,16 +315,14 @@ void
 vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
                   uint64_t phys, uint64_t flags)
 {
-    /* On ARM64 (no TTBR0/TTBR1 split yet), map user pages into the
-     * MASTER PML4 so they're accessible without switching TTBR0.
-     * User address space isolation via TTBR1 is future work. */
-    (void)pml4_phys;
+    /* Map user pages into the per-process PML4 (TTBR0).
+     * User addresses are in the lower half (bit 55 = 0). */
     uint64_t l0_idx = (virt >> 39) & 0x1FF;
     uint64_t l1_idx = (virt >> 30) & 0x1FF;
     uint64_t l2_idx = (virt >> 21) & 0x1FF;
     uint64_t l3_idx = (virt >> 12) & 0x1FF;
 
-    uint64_t l1_phys = ensure_table(s_pml4_phys, l0_idx);
+    uint64_t l1_phys = ensure_table(pml4_phys, l0_idx);
     uint64_t l2_phys = ensure_table(l1_phys, l1_idx);
     uint64_t l3_phys = ensure_table(l2_phys, l2_idx);
 
@@ -332,32 +335,10 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
 uint64_t
 vmm_create_user_pml4(void)
 {
-    uint64_t user_l0 = alloc_table();
-    uint64_t user_l1 = alloc_table();
-
-    /* Read master L1 to get the RAM entry (L1[1]) */
-    uint64_t *master_l0 = vmm_window_map(s_pml4_phys);
-    uint64_t master_l1_phys = PTE_ADDR(master_l0[0]);
-    vmm_window_unmap();
-
-    uint64_t *master_l1 = vmm_window_map(master_l1_phys);
-    uint64_t ram_l2_entry = master_l1[1];  /* L1[1] → RAM L2 table */
-    vmm_window_unmap();
-
-    /* User L1: only RAM (L1[1]). L1[0] is empty — user code at low
-     * addresses (0x400000 etc.) maps via vmm_map_user_page → ensure_table.
-     * The kernel switches TTBR0 back to master PML4 on exception entry
-     * so device MMIO (UART, GIC) is accessible during syscall handling. */
-    uint64_t *ul1 = vmm_window_map(user_l1);
-    ul1[1] = ram_l2_entry;  /* share kernel RAM mappings */
-    vmm_window_unmap();
-
-    /* User L0[0] → user L1 */
-    uint64_t *ul0 = vmm_window_map(user_l0);
-    ul0[0] = user_l1 | PTE_VALID | PTE_TABLE;
-    vmm_window_unmap();
-
-    return user_l0;
+    /* User PML4 for TTBR0 (lower half). Starts empty — user pages are
+     * mapped via vmm_map_user_page → ensure_table. Kernel is in TTBR1
+     * (upper half), so no kernel entries needed in user PML4. */
+    return alloc_table();
 }
 
 uint64_t
