@@ -28,11 +28,14 @@ ELF     = $(BUILD)/aegis-arm64.elf
 
 # ARM64 arch-specific sources
 ARCH_OBJS = $(BUILD)/boot.o \
+            $(BUILD)/vectors.o \
             $(BUILD)/uart_pl011.o \
             $(BUILD)/main.o \
             $(BUILD)/arch_mm.o \
             $(BUILD)/arch_vmm.o \
             $(BUILD)/mmu_early.o \
+            $(BUILD)/gic.o \
+            $(BUILD)/irq.o \
             $(BUILD)/stubs.o
 
 # Shared kernel sources (arch-agnostic)
@@ -58,6 +61,15 @@ $(BUILD)/main.o: main.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/arch_mm.o: arch_mm.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/vectors.o: vectors.S | $(BUILD)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+$(BUILD)/gic.o: gic.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/irq.o: irq.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/arch_vmm.o: arch_vmm.c | $(BUILD)

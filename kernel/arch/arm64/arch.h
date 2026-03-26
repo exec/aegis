@@ -82,6 +82,16 @@ void arch_vmm_load_pml4(uint64_t phys);
 void arch_vmm_invlpg(uint64_t virt);
 
 /* -------------------------------------------------------------------------
+ * Timer
+ * ------------------------------------------------------------------------- */
+
+/* Returns the tick count (incremented 100x/second by the generic timer). */
+uint64_t arch_get_ticks(void);
+
+/* Request a deferred shutdown (QEMU exit). */
+void arch_request_shutdown(void);
+
+/* -------------------------------------------------------------------------
  * Arch-portable helpers
  * ------------------------------------------------------------------------- */
 

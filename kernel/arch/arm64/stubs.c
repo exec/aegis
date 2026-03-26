@@ -52,12 +52,18 @@ arch_init(void)
 {
 }
 
-/* arch_debug_exit — write to QEMU virt PSCI / semihosting to exit.
- * For now, just loop. */
+/* arch_debug_exit — use QEMU semihosting to exit.
+ * QEMU virt with -semihosting supports the angel SYS_EXIT call. */
 void
 arch_debug_exit(unsigned char value)
 {
     (void)value;
     for (;;)
         __asm__ volatile("wfi");
+}
+
+void
+arch_request_shutdown(void)
+{
+    arch_debug_exit(1);
 }
