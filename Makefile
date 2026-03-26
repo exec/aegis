@@ -136,6 +136,7 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_process.c \
     kernel/syscall/sys_file.c \
     kernel/syscall/sys_signal.c \
+    kernel/syscall/sys_socket.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
     $(INIT_BIN_C)

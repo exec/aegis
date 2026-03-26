@@ -69,6 +69,27 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 257: return sys_openat(arg1, arg2, arg3, arg4);
     case 162: return sys_sync();
     case 228: return sys_clock_gettime(arg1, arg2);
+    case  41: return sys_socket(arg1, arg2, arg3);
+    case  42: return sys_connect(arg1, arg2, arg3);
+    case  43: return sys_accept(arg1, arg2, arg3);
+    case  44: return sys_sendto(arg1, arg2, arg3, arg4, arg5, arg6);
+    case  45: return sys_recvfrom(arg1, arg2, arg3, arg4, arg5, arg6);
+    case  46: return sys_sendmsg(arg1, arg2, arg3);
+    case  47: return sys_recvmsg(arg1, arg2, arg3);
+    case  48: return sys_shutdown(arg1, arg2);
+    case  49: return sys_bind(arg1, arg2, arg3);
+    case  50: return sys_listen(arg1, arg2);
+    case  51: return sys_getsockname(arg1, arg2, arg3);
+    case  52: return sys_getpeername(arg1, arg2, arg3);
+    case  53: return sys_socketpair(arg1, arg2, arg3, arg4);
+    case  54: return sys_setsockopt(arg1, arg2, arg3, arg4, arg5);
+    case  55: return sys_getsockopt(arg1, arg2, arg3, arg4, arg5);
+    case   7: return sys_poll(arg1, arg2, arg3);
+    case  23: return sys_select(arg1, arg2, arg3, arg4, arg5);
+    case 291: return sys_epoll_create1(arg1);
+    case 233: return sys_epoll_ctl(arg1, arg2, arg3, arg4);
+    case 232: return sys_epoll_wait(arg1, arg2, arg3, arg4);
+    case 500: return sys_netcfg(arg1, arg2, arg3, arg4);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

@@ -360,3 +360,118 @@ void tcp_tick(void)
             tcp_send_segment(c->dev, c, TCP_SYN, NULL, 0);
     }
 }
+
+/* ── Socket-layer helpers (Phase 26) ─────────────────────────────────────── */
+
+/* tcp_listen: register a listening socket at port. */
+int
+tcp_listen(uint16_t port, uint32_t sock_id)
+{
+    uint32_t i;
+    for (i = 0; i < TCP_MAX_CONNS; i++) {
+        if (s_tcp[i].state == TCP_CLOSED) {
+            _tcp_memset(&s_tcp[i], 0, sizeof(s_tcp[i]));
+            s_tcp[i].state      = TCP_LISTEN;
+            s_tcp[i].local_port = port;
+            s_tcp[i].sock_id    = sock_id;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* tcp_connect: send SYN, allocate conn. Returns 0 on success. */
+int
+tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
+            uint32_t *conn_id_out)
+{
+    extern netdev_t *netdev_get(const char *name);
+    uint32_t i;
+    for (i = 0; i < TCP_MAX_CONNS; i++) {
+        if (s_tcp[i].state == TCP_CLOSED) {
+            _tcp_memset(&s_tcp[i], 0, sizeof(s_tcp[i]));
+            s_tcp[i].state       = TCP_SYN_SENT;
+            s_tcp[i].local_port  = (uint16_t)(49152u + (arch_get_ticks() & 0x3FFFu));
+            s_tcp[i].remote_ip   = dst_ip;
+            s_tcp[i].remote_port = dst_port;
+            s_tcp[i].sock_id     = sock_id;
+            s_tcp[i].snd_nxt     = (uint32_t)arch_get_ticks();
+            s_tcp[i].snd_una     = s_tcp[i].snd_nxt;
+            *conn_id_out = i;
+            netdev_t *dev = netdev_get("eth0");
+            s_tcp[i].dev = dev;
+            tcp_send_segment(dev, &s_tcp[i], TCP_SYN, (void *)0, 0);
+            s_tcp[i].snd_nxt++;
+            s_tcp[i].retransmit_at = (uint32_t)arch_get_ticks() + TCP_RTO_INITIAL;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* tcp_conn_recv: read up to max_len bytes from rbuf. max_len=0 returns available count. */
+int
+tcp_conn_recv(uint32_t conn_id, void *dst, uint16_t max_len)
+{
+    if (conn_id >= TCP_MAX_CONNS) return -1;
+    tcp_conn_t *c = &s_tcp[conn_id];
+    uint32_t avail = (c->rbuf_tail - c->rbuf_head + TCP_RBUF_SIZE) % TCP_RBUF_SIZE;
+    if (max_len == 0) return (int)avail;  /* peek */
+    if (avail == 0) {
+        if (c->state == TCP_CLOSE_WAIT || c->state == TCP_CLOSED) return 0;  /* EOF */
+        return -11;  /* EAGAIN */
+    }
+    uint32_t n = avail < max_len ? avail : max_len;
+    uint8_t *d = (uint8_t *)dst;
+    uint32_t j;
+    for (j = 0; j < n; j++) {
+        d[j] = c->rbuf[c->rbuf_head];
+        c->rbuf_head = (c->rbuf_head + 1) % TCP_RBUF_SIZE;
+    }
+    return (int)n;
+}
+
+/* tcp_conn_send: copy data into sbuf and send. */
+int
+tcp_conn_send(uint32_t conn_id, const void *data, uint16_t len)
+{
+    if (conn_id >= TCP_MAX_CONNS) return -1;
+    tcp_conn_t *c = &s_tcp[conn_id];
+    if (c->state != TCP_ESTABLISHED) return -32;  /* EPIPE */
+    return tcp_send_segment(c->dev, c, TCP_PSH | TCP_ACK, data, len) == 0 ? len : -1;
+}
+
+/* tcp_conn_close: send FIN. */
+int
+tcp_conn_close(uint32_t conn_id)
+{
+    if (conn_id >= TCP_MAX_CONNS) return -1;
+    tcp_conn_t *c = &s_tcp[conn_id];
+    if (c->state == TCP_ESTABLISHED) {
+        tcp_send_segment(c->dev, c, TCP_FIN | TCP_ACK, (void *)0, 0);
+        c->state = TCP_FIN_WAIT_1;
+        c->snd_nxt++;
+    }
+    return 0;
+}
+
+/* tcp_conn_get_addr: fill remote/local address. */
+void
+tcp_conn_get_addr(uint32_t conn_id, ip4_addr_t *rip, uint16_t *rport,
+                  ip4_addr_t *lip, uint16_t *lport)
+{
+    if (conn_id >= TCP_MAX_CONNS) return;
+    tcp_conn_t *c = &s_tcp[conn_id];
+    if (rip)   *rip   = c->remote_ip;
+    if (rport) *rport = c->remote_port;
+    if (lip)   *lip   = c->local_ip;
+    if (lport) *lport = c->local_port;
+}
+
+/* tcp_conn_set_sock: update sock_id back-reference after accept. */
+void
+tcp_conn_set_sock(uint32_t conn_id, uint32_t sock_id)
+{
+    if (conn_id >= TCP_MAX_CONNS) return;
+    s_tcp[conn_id].sock_id = sock_id;
+}

@@ -94,3 +94,21 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     }
     /* No binding: drop silently. */
 }
+
+/* udp_bind: register a sock_id for the given port. Returns 0 or -1. */
+int
+udp_bind(uint16_t port, uint32_t sock_id)
+{
+    uint32_t i;
+    for (i = 0; i < UDP_BINDINGS_MAX; i++) {
+        if (s_udp[i].port == port && s_udp[i].port != 0) return -1; /* EADDRINUSE */
+    }
+    for (i = 0; i < UDP_BINDINGS_MAX; i++) {
+        if (s_udp[i].port == 0) {
+            s_udp[i].port    = port;
+            s_udp[i].sock_id = sock_id;
+            return 0;
+        }
+    }
+    return -1;
+}

@@ -63,4 +63,15 @@ void tcp_tick(void);
 int tcp_send_segment(netdev_t *dev, tcp_conn_t *conn,
                      uint8_t flags, const void *payload, uint16_t len);
 
+/* ── Socket-layer helpers (Phase 26) ─────────────────────────────────────── */
+int  tcp_listen(uint16_t port, uint32_t sock_id);
+int  tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
+                 uint32_t *conn_id_out);
+int  tcp_conn_recv(uint32_t conn_id, void *dst, uint16_t max_len);
+int  tcp_conn_send(uint32_t conn_id, const void *data, uint16_t len);
+int  tcp_conn_close(uint32_t conn_id);
+void tcp_conn_get_addr(uint32_t conn_id, ip4_addr_t *rip, uint16_t *rport,
+                       ip4_addr_t *lip, uint16_t *lport);
+void tcp_conn_set_sock(uint32_t conn_id, uint32_t sock_id);
+
 #endif /* TCP_H */

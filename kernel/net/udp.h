@@ -28,4 +28,7 @@ int udp_send(netdev_t *dev, uint16_t src_port, ip4_addr_t dst_ip,
 void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             const void *udp_data, uint16_t len);
 
+/* udp_bind: register sock_id for dst_port. Returns 0 on success, -1 if already bound. */
+int udp_bind(uint16_t port, uint32_t sock_id);
+
 #endif /* UDP_H */

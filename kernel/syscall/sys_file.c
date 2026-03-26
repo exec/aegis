@@ -482,6 +482,15 @@ sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     case 3: /* F_GETFL */ return (uint64_t)f->flags;
     case 4: /* F_SETFL */
         f->flags = (f->flags & ~0x800U) | ((uint32_t)arg3 & 0x800U);
+        /* Also update socket nonblocking flag if fd is a socket */
+        {
+            uint32_t sid2 = sock_id_from_fd((int)arg1, proc);
+            if (sid2 != SOCK_NONE) {
+                sock_t *sk = sock_get(sid2);
+                if (sk)
+                    sk->nonblocking = (arg3 & 0x800U) ? 1 : 0;
+            }
+        }
         return 0;
     case 0:   /* F_DUPFD */
     case 1030: { /* F_DUPFD_CLOEXEC (0x406) — same as F_DUPFD + set FD_CLOEXEC */

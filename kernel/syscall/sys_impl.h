@@ -20,6 +20,8 @@
 #include "arch.h"
 #include "ext2.h"
 #include "kbd_vfs.h"
+#include "socket.h"
+#include "epoll.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -155,6 +157,35 @@ uint64_t sys_rt_sigreturn(syscall_frame_t *frame);
 uint64_t sys_rt_sigsuspend(uint64_t a1, uint64_t a2);
 uint64_t sys_kill(uint64_t a1, uint64_t a2);
 uint64_t sys_setfg(uint64_t a1);
+
+/* ── sys_socket.c ───────────────────────────────────────────────────────── */
+uint64_t sys_socket(uint64_t domain, uint64_t type, uint64_t proto);
+uint64_t sys_bind(uint64_t fd, uint64_t addr, uint64_t addrlen);
+uint64_t sys_listen(uint64_t fd, uint64_t backlog);
+uint64_t sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen);
+uint64_t sys_connect(uint64_t fd, uint64_t addr, uint64_t addrlen);
+uint64_t sys_sendto(uint64_t fd, uint64_t buf, uint64_t len,
+                    uint64_t flags, uint64_t addr, uint64_t addrlen);
+uint64_t sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
+                      uint64_t flags, uint64_t addr, uint64_t addrlen);
+uint64_t sys_sendmsg(uint64_t fd, uint64_t msg, uint64_t flags);
+uint64_t sys_recvmsg(uint64_t fd, uint64_t msg, uint64_t flags);
+uint64_t sys_shutdown(uint64_t fd, uint64_t how);
+uint64_t sys_getsockname(uint64_t fd, uint64_t addr, uint64_t addrlen);
+uint64_t sys_getpeername(uint64_t fd, uint64_t addr, uint64_t addrlen);
+uint64_t sys_socketpair(uint64_t domain, uint64_t type, uint64_t proto, uint64_t sv);
+uint64_t sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
+                        uint64_t optval, uint64_t optlen);
+uint64_t sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
+                        uint64_t optval, uint64_t optlen);
+uint64_t sys_poll(uint64_t fds, uint64_t nfds, uint64_t timeout_ms);
+uint64_t sys_select(uint64_t nfds, uint64_t rfds, uint64_t wfds,
+                    uint64_t efds, uint64_t timeout);
+uint64_t sys_epoll_create1(uint64_t flags);
+uint64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd, uint64_t event);
+uint64_t sys_epoll_wait(uint64_t epfd, uint64_t events,
+                        uint64_t maxevents, uint64_t timeout_ms);
+uint64_t sys_netcfg(uint64_t op, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
 /* ── Process group / session / resource syscalls (sys_process.c) ─────────── */
 uint64_t sys_setpgid(uint64_t pid_arg, uint64_t pgid_arg);
