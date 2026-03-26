@@ -169,6 +169,7 @@ _exc_irq_el1:
 _exc_sync_el0:
     KERNEL_ENTRY_FROM_EL0
     SAVE_ALL_EL0
+    bl      save_user_tpidr     /* capture TPIDR_EL0 → proc->fs_base */
 
     mrs     x9, esr_el1
     lsr     x9, x9, #26
@@ -209,6 +210,7 @@ _exc_irq_el0:
     str     x9, [sp]
 
     SAVE_ALL_EL0
+    bl      save_user_tpidr
     bl      irq_handler
     RESTORE_ALL_EL0
 

@@ -8,6 +8,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "arch.h"  /* for arch_set_fs_base */
+#include "printk.h"
 
 /* GCC emits calls to memcpy/memset even with -ffreestanding.
  * Provide minimal implementations. */
@@ -139,20 +141,31 @@ void arch_set_master_pml4(uint64_t pml4_phys) { g_master_pml4 = pml4_phys; }
 extern void arch_vmm_load_user_ttbr0(uint64_t phys);
 extern uint64_t arch_get_current_pml4(void);  /* in proc.c */
 
+/* Save TPIDR_EL0 to proc->fs_base on every EL0 exception entry.
+ * musl sets TPIDR_EL0 directly in user space; the kernel captures it here. */
+extern void arch_save_current_fs_base(uint64_t val);  /* in proc.c */
+
+void save_user_tpidr(void) {
+    uint64_t tpidr;
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tpidr));
+    if (tpidr)
+        arch_save_current_fs_base(tpidr);
+}
+
+/* Called from fork_child_return and EL0 IRQ return to set TTBR0 + TLS. */
+extern uint64_t arch_get_current_fs_base(void);  /* in proc.c */
+
 extern void serial_write_string(const char *);
 void fork_child_load_ttbr0(void) {
     uint64_t pml4 = arch_get_current_pml4();
-    if (pml4) {
-        /* Check if L0[0] is valid */
-        uint64_t *l0 = (uint64_t *)(uintptr_t)(pml4 + 0xFFFF000000000000UL);
-        if (l0[0] & 1)
-            serial_write_string("[FORK] child L0[0] valid\r\n");
-        else
-            serial_write_string("[FORK] child L0[0] EMPTY!\r\n");
+    if (pml4)
         arch_vmm_load_user_ttbr0(pml4);
-    } else {
-        serial_write_string("[FORK] no pml4!\r\n");
-    }
+    /* Restore TLS for the current task. On ARM64, TPIDR_EL0 is set by
+     * musl in userspace and saved to proc->fs_base on every EL0 exception
+     * entry (see save_user_tpidr below). */
+    uint64_t fs = arch_get_current_fs_base();
+    if (fs)
+        arch_set_fs_base(fs);
 }
 
 /* proc_spawn_init is provided by the real proc.c (shared source). */

@@ -348,3 +348,16 @@ uint64_t arch_get_current_pml4(void) {
         return ((aegis_process_t *)t)->pml4_phys;
     return 0;
 }
+
+uint64_t arch_get_current_fs_base(void) {
+    aegis_task_t *t = sched_current();
+    if (t && t->is_user)
+        return ((aegis_process_t *)t)->fs_base;
+    return 0;
+}
+
+void arch_save_current_fs_base(uint64_t val) {
+    aegis_task_t *t = sched_current();
+    if (t && t->is_user)
+        ((aegis_process_t *)t)->fs_base = val;
+}

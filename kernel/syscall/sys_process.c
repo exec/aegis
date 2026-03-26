@@ -161,7 +161,17 @@ sys_fork(syscall_frame_t *frame)
 
     child->brk             = parent->brk;
     child->mmap_base       = parent->mmap_base;
+#ifdef __aarch64__
+    /* ARM64: musl sets TPIDR_EL0 directly, not via arch_prctl.
+     * Read the current TPIDR_EL0 value and save to child. */
+    {
+        uint64_t tpidr;
+        __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tpidr));
+        child->fs_base = tpidr;
+    }
+#else
     child->fs_base         = parent->fs_base;
+#endif
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     child->pid             = proc_alloc_pid();
     child->ppid            = parent->pid;

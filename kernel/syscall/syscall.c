@@ -23,7 +23,8 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  80: num = 5;   break;  /* fstat */
     case  93: num = 60;  break;  /* exit */
     case  94: num = 231; break;  /* exit_group */
-    case  96: num = 273; break;  /* set_robust_list */
+    case  96: num = 218; break;  /* set_tid_address */
+    case  99: num = 273; break;  /* set_robust_list */
     case 113: num = 228; break;  /* clock_gettime */
     case 134: num = 13;  break;  /* rt_sigaction */
     case 135: num = 14;  break;  /* rt_sigprocmask */
