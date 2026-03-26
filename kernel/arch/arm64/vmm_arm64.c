@@ -153,6 +153,9 @@ ensure_table(uint64_t parent_phys, uint64_t idx)
     if (!(entry & PTE_VALID)) {
         uint64_t child = alloc_table();
         parent[idx] = table_entry(child);
+        /* DSB + ISB: ensure the page table write is visible to the MMU
+         * before any subsequent table walk or data access. */
+        __asm__ volatile("dsb sy; isb" ::: "memory");
         return child;
     }
     return PTE_ADDR(entry);
@@ -375,41 +378,28 @@ void vmm_teardown_identity(void) {
 
 void vmm_free_user_pml4(uint64_t pml4_phys) { (void)pml4_phys; }
 uint64_t vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt) {
+    /* Walk user page tables via TTBR1 high VA (no window). */
     uint64_t l0_idx = (virt >> 39) & 0x1FF;
     uint64_t l1_idx = (virt >> 30) & 0x1FF;
     uint64_t l2_idx = (virt >> 21) & 0x1FF;
     uint64_t l3_idx = (virt >> 12) & 0x1FF;
 
-    uint64_t *tbl = vmm_window_map(pml4_phys);
-    uint64_t e = tbl[l0_idx];
-    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
+    uint64_t *l0 = (uint64_t *)(uintptr_t)(pml4_phys + KERN_VA_OFFSET);
+    uint64_t e = l0[l0_idx];
+    if (!(e & PTE_VALID)) return 0;
 
-    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
-                    PTE_SH_INNER | PTE_ATTR_NORM;
-    arch_vmm_invlpg(VMM_WINDOW_VA);
-    tbl = (uint64_t *)VMM_WINDOW_VA;
-    e = tbl[l1_idx];
-    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
-    if (!(e & PTE_TABLE)) {
-        vmm_window_unmap();
-        return PTE_ADDR(e) | (virt & 0x3FFFFFFFUL);
-    }
+    uint64_t *l1 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l1[l1_idx];
+    if (!(e & PTE_VALID)) return 0;
+    if (!(e & PTE_TABLE)) return PTE_ADDR(e) | (virt & 0x3FFFFFFFUL);
 
-    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
-                    PTE_SH_INNER | PTE_ATTR_NORM;
-    arch_vmm_invlpg(VMM_WINDOW_VA);
-    e = tbl[l2_idx];
-    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
-    if (!(e & PTE_TABLE)) {
-        vmm_window_unmap();
-        return PTE_ADDR(e) | (virt & 0x1FFFFFUL);
-    }
+    uint64_t *l2 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l2[l2_idx];
+    if (!(e & PTE_VALID)) return 0;
+    if (!(e & PTE_TABLE)) return PTE_ADDR(e) | (virt & 0x1FFFFFUL);
 
-    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
-                    PTE_SH_INNER | PTE_ATTR_NORM;
-    arch_vmm_invlpg(VMM_WINDOW_VA);
-    e = tbl[l3_idx];
-    vmm_window_unmap();
+    uint64_t *l3 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l3[l3_idx];
     if (!(e & PTE_VALID)) return 0;
     return PTE_ADDR(e) | (virt & 0xFFFUL);
 }
@@ -479,9 +469,9 @@ int vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
         uint64_t phys = vmm_phys_of_user(pml4_phys, va);
         if (!phys) return -1;
 
-        /* Write via TTBR1 high VA (PA + KERN_VA_OFFSET).
-         * Can't use TTBR0 (identity map may be overwritten by scheduler). */
-        __builtin_memcpy((uint8_t *)(uintptr_t)(phys + KERN_VA_OFFSET + page_off), s, chunk);
+        /* Write via TTBR1 high VA. phys already includes page offset
+         * (vmm_phys_of_user returns full PA, not page-aligned). */
+        __builtin_memcpy((uint8_t *)(uintptr_t)(phys + KERN_VA_OFFSET), s, chunk);
 
         va  += chunk;
         s   += chunk;
