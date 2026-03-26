@@ -135,4 +135,14 @@ void arch_set_master_pml4(uint64_t pml4_phys) { g_master_pml4 = pml4_phys; }
 /* ext2_sync provided by real ext2_cache.c.
  * signal_send_pid/pgrp provided by shared signal.c. */
 
+/* Called from fork_child_return in proc_enter.S to load the child's TTBR0. */
+extern void arch_vmm_load_user_ttbr0(uint64_t phys);
+extern uint64_t arch_get_current_pml4(void);  /* in proc.c */
+
+void fork_child_load_ttbr0(void) {
+    uint64_t pml4 = arch_get_current_pml4();
+    if (pml4)
+        arch_vmm_load_user_ttbr0(pml4);
+}
+
 /* proc_spawn_init is provided by the real proc.c (shared source). */

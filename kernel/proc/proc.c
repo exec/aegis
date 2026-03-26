@@ -339,3 +339,12 @@ proc_spawn_init(void)
 {
     proc_spawn(init_elf, (size_t)init_elf_len);
 }
+
+/* arch_get_current_pml4 — return current user process PML4 phys addr.
+ * Used by ARM64 fork_child_return to load TTBR0. */
+uint64_t arch_get_current_pml4(void) {
+    aegis_task_t *t = sched_current();
+    if (t && t->is_user)
+        return ((aegis_process_t *)t)->pml4_phys;
+    return 0;
+}

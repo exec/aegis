@@ -71,11 +71,18 @@ proc_enter_user:
     eret
 
 fork_child_return:
+    /* Load child's TTBR0 from its process struct.
+     * sched_current() returns the current task (child).
+     * proc->pml4_phys is at a known offset in aegis_process_t. */
+    bl      fork_child_load_ttbr0
+
     /* Restore SAVE_ALL_EL0 frame and ERET */
     ldp     x10, x11, [sp, #(31*8)]
     ldr     x12,       [sp, #(33*8)]
     msr     sp_el0,    x10
     msr     elr_el1,   x11
+    /* Validate SPSR */
+    and     x12, x12, #0xF0000000
     msr     spsr_el1,  x12
     ldp     x0,  x1,  [sp, #(0*8)]
     ldp     x2,  x3,  [sp, #(2*8)]

@@ -58,8 +58,8 @@ static volatile uint64_t *s_window_pte;
 
 /* Window VA: we pick an address in the identity-mapped region that doesn't
  * conflict with kernel code/data. Use a fixed VA past the kernel. */
-/* Window at L2[32] = +64MB, just past the 32 block-mapped entries. */
-#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x4000000UL)
+/* Window at L2[128] = +256MB, just past the 128 block-mapped entries. */
+#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x10000000UL)
 
 /* ── Window allocator ──────────────────────────────────────────────── */
 
@@ -96,7 +96,7 @@ alloc_table_early(void)
     return phys;
 }
 
-/* Post-init alloc: uses window to zero the page. */
+/* Post-init alloc: zero via TTBR1 high VA. */
 static uint64_t
 alloc_table(void)
 {
@@ -105,10 +105,9 @@ alloc_table(void)
         printk("[VMM] FAIL: out of memory\n");
         for (;;) arch_halt();
     }
-    uint64_t *t = vmm_window_map(phys);
+    uint64_t *t = (uint64_t *)(uintptr_t)(phys + KERN_VA_OFFSET);
     for (int i = 0; i < 512; i++)
         t[i] = 0;
-    vmm_window_unmap();
     return phys;
 }
 
@@ -142,19 +141,18 @@ table_entry(uint64_t child_phys)
     return child_phys | PTE_VALID | PTE_TABLE;
 }
 
-/* Ensure a child table exists at parent[idx]. Returns child phys addr. */
+/* Ensure a child table exists at parent[idx]. Returns child phys addr.
+ * Uses TTBR1 high VA (PA + KERN_VA_OFFSET) instead of window to avoid
+ * window conflicts during nested page table manipulation. */
 static uint64_t
 ensure_table(uint64_t parent_phys, uint64_t idx)
 {
-    uint64_t *parent = vmm_window_map(parent_phys);
+    uint64_t *parent = (uint64_t *)(uintptr_t)(parent_phys + KERN_VA_OFFSET);
     uint64_t entry = parent[idx];
-    vmm_window_unmap();
 
     if (!(entry & PTE_VALID)) {
         uint64_t child = alloc_table();
-        parent = vmm_window_map(parent_phys);
         parent[idx] = table_entry(child);
-        vmm_window_unmap();
         return child;
     }
     return PTE_ADDR(entry);
@@ -207,9 +205,9 @@ vmm_init(void)
      * L2[4] is replaced by the window allocator table below.
      * L2[5+] are left unmapped — KVA creates L3 tables on demand via
      * vmm_map_page → ensure_table. PMM still knows about all 128MB. */
-    /* Map first 32 × 2MB = 64MB as block descriptors.
-     * Remaining RAM (64MB+) is available to KVA via L3 page tables. */
-    for (int i = 0; i < 32; i++) {
+    /* Map 128 × 2MB = 256MB as block descriptors (covers -m 256M).
+     * Window at L2[128], KVA at L2[129+]. Blocks cover all PMM range. */
+    for (int i = 0; i < 128; i++) {
         l2_ram[i] = (0x40000000UL + (uint64_t)i * 0x200000UL) |
                      PTE_VALID | /* block: bit[1]=0 */ PTE_AF |
                      PTE_SH_INNER | PTE_ATTR_NORM | PTE_AP_RW_EL1;
@@ -269,9 +267,8 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
     uint64_t l2_phys = ensure_table(l1_phys, l1_idx);
     uint64_t l3_phys = ensure_table(l2_phys, l2_idx);
 
-    uint64_t *l3 = vmm_window_map(l3_phys);
+    uint64_t *l3 = (uint64_t *)(uintptr_t)(l3_phys + KERN_VA_OFFSET);
     l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
-    vmm_window_unmap();
     arch_vmm_invlpg(virt);
 }
 
@@ -326,10 +323,15 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     uint64_t l2_phys = ensure_table(l1_phys, l1_idx);
     uint64_t l3_phys = ensure_table(l2_phys, l2_idx);
 
-    uint64_t *l3 = vmm_window_map(l3_phys);
+    uint64_t *l3 = (uint64_t *)(uintptr_t)(l3_phys + KERN_VA_OFFSET);
     l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
-    vmm_window_unmap();
     arch_vmm_invlpg(virt);
+
+    static int s_umap_count = 0;
+    s_umap_count++;
+    if (s_umap_count <= 3 || (s_umap_count % 20 == 0))
+        printk("[UMAP] #%u va=0x%lx → L2[%lu] L3[%lu]\n",
+               (uint32_t)s_umap_count, virt, l2_idx, l3_idx);
 }
 
 uint64_t
@@ -344,38 +346,30 @@ vmm_create_user_pml4(void)
 uint64_t
 vmm_phys_of(uint64_t virt)
 {
+    /* Walk kernel page tables via TTBR1 high VA (no window). */
     uint64_t l0_idx = (virt >> 39) & 0x1FF;
     uint64_t l1_idx = (virt >> 30) & 0x1FF;
     uint64_t l2_idx = (virt >> 21) & 0x1FF;
     uint64_t l3_idx = (virt >> 12) & 0x1FF;
 
-    uint64_t *tbl = vmm_window_map(s_pml4_phys);
-    uint64_t e = tbl[l0_idx];
-    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
+    uint64_t *l0 = (uint64_t *)(uintptr_t)(s_pml4_phys + KERN_VA_OFFSET);
+    uint64_t e = l0[l0_idx];
+    if (!(e & PTE_VALID)) return 0;
 
-    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
-                    PTE_SH_INNER | PTE_ATTR_NORM;
-    arch_vmm_invlpg(VMM_WINDOW_VA);
-    tbl = (uint64_t *)VMM_WINDOW_VA;
-    e = tbl[l1_idx];
-    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
-    /* Check if L1 block (bit[1]=0) */
+    uint64_t *l1 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l1[l1_idx];
+    if (!(e & PTE_VALID)) return 0;
     if (!(e & PTE_TABLE))
         return PTE_ADDR(e) | (virt & 0x3FFFFFFFUL);
 
-    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
-                    PTE_SH_INNER | PTE_ATTR_NORM;
-    arch_vmm_invlpg(VMM_WINDOW_VA);
-    e = tbl[l2_idx];
-    if (!(e & PTE_VALID)) { vmm_window_unmap(); return 0; }
+    uint64_t *l2 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l2[l2_idx];
+    if (!(e & PTE_VALID)) return 0;
     if (!(e & PTE_TABLE))
         return PTE_ADDR(e) | (virt & 0x1FFFFFUL);
 
-    *s_window_pte = PTE_ADDR(e) | PTE_VALID | PTE_PAGE | PTE_AF |
-                    PTE_SH_INNER | PTE_ATTR_NORM;
-    arch_vmm_invlpg(VMM_WINDOW_VA);
-    e = tbl[l3_idx];
-    vmm_window_unmap();
+    uint64_t *l3 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l3[l3_idx];
     if (!(e & PTE_VALID)) return 0;
     return PTE_ADDR(e) | (virt & 0xFFFUL);
 }
@@ -429,104 +423,77 @@ void vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt) {
     (void)pml4_phys; (void)virt;
 }
 void vmm_zero_page(uint64_t phys) {
-    uint64_t *p = vmm_window_map(phys);
+    uint64_t *p = (uint64_t *)(uintptr_t)(phys + KERN_VA_OFFSET);
     for (int i = 0; i < 512; i++) p[i] = 0;
-    vmm_window_unmap();
 }
 int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4) {
-    /* Walk src L0→L1→L2→L3. For each present leaf, allocate a new
-     * physical page, copy content, map into dst at the same VA. */
+    /* Walk src page tables via TTBR1 high VA (PA + KERN_VA_OFFSET).
+     * TTBR0 may not have identity map during fork (scheduler switches it).
+     * TTBR1 kern_l1[1] maps all RAM PA 0x40000000+ at high VA. */
     uint64_t i0, i1, i2, i3;
 
-    uint64_t *l0 = vmm_window_map(src_pml4);
+    /* Convert PA → kernel VA for page table access */
+    #define PA_TO_KVA(pa) ((uint64_t *)(uintptr_t)((pa) + KERN_VA_OFFSET))
+
+    uint64_t *l0 = PA_TO_KVA(src_pml4);
+
+    /* Debug: count pages in src PML4 */
+    {
+        int total = 0;
+        uint64_t ii0, ii1, ii2, ii3;
+        for (ii0 = 0; ii0 < 512; ii0++) {
+            if (!(l0[ii0] & PTE_VALID)) continue;
+            uint64_t *dl1 = PA_TO_KVA(PTE_ADDR(l0[ii0]));
+            for (ii1 = 0; ii1 < 512; ii1++) {
+                if (!(dl1[ii1] & PTE_VALID) || !(dl1[ii1] & PTE_TABLE)) continue;
+                uint64_t *dl2 = PA_TO_KVA(PTE_ADDR(dl1[ii1]));
+                for (ii2 = 0; ii2 < 512; ii2++) {
+                    if (!(dl2[ii2] & PTE_VALID)) continue;
+                    if (ii2 < 10) printk("[FORK] L2[%lu]=0x%lx t=%lu\n", ii2, dl2[ii2], (dl2[ii2]>>1)&1);
+                    if (!(dl2[ii2] & PTE_TABLE)) continue;
+                    uint64_t *dl3 = PA_TO_KVA(PTE_ADDR(dl2[ii2]));
+                    for (ii3 = 0; ii3 < 512; ii3++)
+                        if (dl3[ii3] & PTE_VALID) total++;
+                }
+            }
+        }
+        printk("[FORK] src has %u leaf pages\n", (uint32_t)total);
+    }
+
     for (i0 = 0; i0 < 512; i0++) {
         if (!(l0[i0] & PTE_VALID)) continue;
-        uint64_t l1_phys = PTE_ADDR(l0[i0]);
-
-        /* Overwrite window to walk L1 */
-        *s_window_pte = l1_phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                        PTE_SH_INNER | PTE_ATTR_NORM;
-        arch_vmm_invlpg(VMM_WINDOW_VA);
-        uint64_t *l1 = (uint64_t *)VMM_WINDOW_VA;
+        uint64_t *l1 = PA_TO_KVA(PTE_ADDR(l0[i0]));
 
         for (i1 = 0; i1 < 512; i1++) {
             if (!(l1[i1] & PTE_VALID)) continue;
-            if (!(l1[i1] & PTE_TABLE)) continue; /* skip blocks */
-            uint64_t l2_phys = PTE_ADDR(l1[i1]);
-
-            *s_window_pte = l2_phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                            PTE_SH_INNER | PTE_ATTR_NORM;
-            arch_vmm_invlpg(VMM_WINDOW_VA);
-            uint64_t *l2 = (uint64_t *)VMM_WINDOW_VA;
+            if (!(l1[i1] & PTE_TABLE)) continue;
+            uint64_t *l2 = PA_TO_KVA(PTE_ADDR(l1[i1]));
 
             for (i2 = 0; i2 < 512; i2++) {
                 if (!(l2[i2] & PTE_VALID)) continue;
                 if (!(l2[i2] & PTE_TABLE)) continue;
-                uint64_t l3_phys = PTE_ADDR(l2[i2]);
-
-                *s_window_pte = l3_phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                                PTE_SH_INNER | PTE_ATTR_NORM;
-                arch_vmm_invlpg(VMM_WINDOW_VA);
-                uint64_t *l3 = (uint64_t *)VMM_WINDOW_VA;
+                uint64_t *l3 = PA_TO_KVA(PTE_ADDR(l2[i2]));
 
                 for (i3 = 0; i3 < 512; i3++) {
                     if (!(l3[i3] & PTE_VALID)) continue;
-                    uint64_t src_page = PTE_ADDR(l3[i3]);
-                    (void)(l3[i3] & ~PTE_ADDR(~0UL)); /* flags preserved via USER|WRITABLE */
+                    uint64_t src_phys = PTE_ADDR(l3[i3]);
 
-                    /* Allocate new page for child */
-                    uint64_t new_page = pmm_alloc_page();
-                    if (!new_page) {
-                        vmm_window_unmap();
-                        return -1;
-                    }
+                    uint64_t new_phys = pmm_alloc_page();
+                    if (!new_phys) return -1;
 
-                    /* Copy page: map src → read into new_page via
-                     * window. Zero new page first, then copy src. */
-                    vmm_window_unmap();
-                    vmm_zero_page(new_page);
+                    /* Copy 4KB via TTBR1 high VA */
+                    __builtin_memcpy((void *)(uintptr_t)(new_phys + KERN_VA_OFFSET),
+                                     (const void *)(uintptr_t)(src_phys + KERN_VA_OFFSET),
+                                     4096);
 
-                    /* Map src page, read 64 bytes at a time into new page
-                     * via alternating window maps. Use a small stack buf. */
-                    {
-                        uint64_t off;
-                        uint8_t chunk[64];
-                        for (off = 0; off < 4096; off += 64) {
-                            uint8_t *s = vmm_window_map(src_page);
-                            __builtin_memcpy(chunk, s + off, 64);
-                            vmm_window_unmap();
-                            uint8_t *d = vmm_window_map(new_page);
-                            __builtin_memcpy(d + off, chunk, 64);
-                            vmm_window_unmap();
-                        }
-                    }
-
-                    /* Map new page into dst PML4 at same VA */
                     uint64_t va = (i0 << 39) | (i1 << 30) | (i2 << 21) | (i3 << 12);
-                    vmm_map_user_page(dst_pml4, va, new_page,
+                    vmm_map_user_page(dst_pml4, va, new_phys,
                                       VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
-
-                    /* Re-map src L3 to continue the walk */
-                    *s_window_pte = l3_phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                                    PTE_SH_INNER | PTE_ATTR_NORM;
-                    arch_vmm_invlpg(VMM_WINDOW_VA);
                 }
-                /* Re-map L2 */
-                *s_window_pte = l2_phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                                PTE_SH_INNER | PTE_ATTR_NORM;
-                arch_vmm_invlpg(VMM_WINDOW_VA);
             }
-            /* Re-map L1 */
-            *s_window_pte = l1_phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                            PTE_SH_INNER | PTE_ATTR_NORM;
-            arch_vmm_invlpg(VMM_WINDOW_VA);
         }
-        /* Re-map L0 */
-        *s_window_pte = src_pml4 | PTE_VALID | PTE_PAGE | PTE_AF |
-                        PTE_SH_INNER | PTE_ATTR_NORM;
-        arch_vmm_invlpg(VMM_WINDOW_VA);
     }
-    vmm_window_unmap();
+    #undef PA_TO_KVA
     return 0;
 }
 void vmm_free_user_pages(uint64_t pml4_phys) { (void)pml4_phys; }
@@ -541,9 +508,9 @@ int vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
         uint64_t phys = vmm_phys_of_user(pml4_phys, va);
         if (!phys) return -1;
 
-        /* Write directly via TTBR0 identity map (still active from boot).
-         * Avoids window conflict with vmm_phys_of_user. */
-        __builtin_memcpy((uint8_t *)(uintptr_t)(phys + page_off), s, chunk);
+        /* Write via TTBR1 high VA (PA + KERN_VA_OFFSET).
+         * Can't use TTBR0 (identity map may be overwritten by scheduler). */
+        __builtin_memcpy((uint8_t *)(uintptr_t)(phys + KERN_VA_OFFSET + page_off), s, chunk);
 
         va  += chunk;
         s   += chunk;

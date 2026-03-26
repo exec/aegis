@@ -200,8 +200,24 @@ _exc_sync_el0:
 /* ── EL0 IRQ ── */
 _exc_irq_el0:
     KERNEL_ENTRY_FROM_EL0
+
+    /* Save TTBR0 before sched_tick may switch tasks.
+     * After ctx_switch, we may return to a DIFFERENT task.
+     * That task's TTBR0 must be loaded before ERET. */
+    mrs     x9, ttbr0_el1
+    sub     sp, sp, #16
+    str     x9, [sp]
+
     SAVE_ALL_EL0
     bl      irq_handler
     RESTORE_ALL_EL0
+
+    /* If sched_tick switched tasks, the current task may differ
+     * from the one that entered. Load current task's TTBR0. */
+    bl      fork_child_load_ttbr0
+
+    /* Discard saved TTBR0 (we loaded the correct one above) */
+    add     sp, sp, #16
+
     KERNEL_EXIT_TO_EL0
     eret
