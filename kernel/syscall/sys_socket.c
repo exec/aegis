@@ -309,7 +309,9 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
             s->udp_rx_head = (s->udp_rx_head + 1) & (UDP_RX_SLOTS - 1);
             uint32_t copy_len = slot->len < (uint32_t)len ? slot->len : (uint32_t)len;
             copy_to_user((void *)(uintptr_t)buf, slot->data, copy_len);
-            if (addr && addrlen && user_ptr_valid(addrlen, sizeof(uint32_t))) {
+            if (addr && addrlen &&
+                user_ptr_valid(addr, sizeof(k_sockaddr_in_t)) &&
+                user_ptr_valid(addrlen, sizeof(uint32_t))) {
                 k_sockaddr_in_t sa;
                 sa.sin_family = AF_INET;
                 sa.sin_port   = htons(slot->src_port);
