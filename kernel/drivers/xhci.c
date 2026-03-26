@@ -16,6 +16,7 @@
  * No MSI/MSI-X — event ring is polled, not interrupt-driven.
  */
 #include "xhci.h"
+#include "arch.h"
 #include "../arch/x86_64/pcie.h"
 #include "../mm/vmm.h"
 #include "../mm/kva.h"
@@ -218,7 +219,7 @@ ring_cmd_doorbell(void)
     volatile uint32_t *db =
         (volatile uint32_t *)(s_bar0_va + s_cap->dboff);
     /* sfence: all TRB writes must be globally visible before doorbell. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     db[0] = 0;
 }
 
@@ -728,7 +729,7 @@ xhci_schedule_interrupt_in(uint8_t slot_id, uint8_t ep_id,
      * 64KB BAR0 mapping; db[slot_id] is within that range for slot_id < 32. */
     db = (volatile uint32_t *)(s_bar0_va + s_cap->dboff);
     /* sfence: TRB write must be globally visible before doorbell write. */
-    __asm__ volatile("sfence" ::: "memory");
+    arch_wmb();
     db[slot_id] = ep_id;
 
     return 0;

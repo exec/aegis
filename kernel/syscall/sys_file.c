@@ -363,7 +363,7 @@ sys_nanosleep(uint64_t arg1, uint64_t arg2)
 
     uint64_t deadline = arch_get_ticks() + ticks;
     while (arch_get_ticks() < deadline)
-        __asm__ volatile("sti; hlt; cli");
+        arch_wait_for_irq();
     return 0;
 }
 

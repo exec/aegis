@@ -201,18 +201,18 @@ int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
             /* Yield to QEMU/SLIRP: enable interrupts, halt until PIT fires,
              * re-disable.  The PIT ISR calls netdev_poll_all() which drains
              * the virtio RX ring and delivers any pending frames. */
-            __asm__ volatile("sti; hlt; cli");
+            arch_wait_for_irq();
             /* Also poll directly in case PIT ISR didn't run yet. */
             if (dev->poll)
                 dev->poll(dev);
             e = arp_find(ip);
             if (e) {
-                __asm__ volatile("sti"); /* restore interrupts */
+                arch_enable_irq(); /* restore interrupts */
                 *mac_out = e->mac;
                 return 0;
             }
         }
     }
-    __asm__ volatile("sti"); /* restore interrupts on timeout path */
+    arch_enable_irq(); /* restore interrupts on timeout path */
     return -1; /* timeout — caller returns EHOSTUNREACH */
 }

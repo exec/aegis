@@ -108,6 +108,11 @@ typedef struct {
  * was found, 0 otherwise. */
 int arch_get_fb_info(arch_fb_info_t *out);
 
+/* Highest canonical user-space virtual address. Used by syscall handlers
+ * to validate user pointers. Architecture-dependent: x86-64 uses 47-bit
+ * canonical addresses; ARM64 48-bit VA uses 0x0000FFFFFFFFFFFF. */
+#define USER_ADDR_MAX 0x00007FFFFFFFFFFFUL
+
 /* Physical base address of the kernel image (arch-defined load address).
  * pmm_init() uses this to reserve the kernel image pages. */
 #define ARCH_KERNEL_PHYS_BASE 0x100000UL
@@ -266,6 +271,31 @@ arch_set_fs_base(uint64_t addr)
     uint32_t lo = (uint32_t)addr;
     uint32_t hi = (uint32_t)(addr >> 32);
     __asm__ volatile ("wrmsr" : : "c"(0xC0000100U), "a"(lo), "d"(hi));
+}
+
+/* -------------------------------------------------------------------------
+ * Arch-portable helpers — used by kernel/core/, kernel/drivers/, kernel/net/
+ * Each architecture provides its own implementation in arch.h.
+ * ------------------------------------------------------------------------- */
+
+/* arch_wmb — write memory barrier. Ensures all preceding stores are globally
+ * visible before any subsequent MMIO writes. Used by DMA-capable drivers
+ * (virtio, NVMe, xHCI) before doorbell writes. */
+static inline void arch_wmb(void) { __asm__ volatile("sfence" ::: "memory"); }
+
+/* arch_enable_irq / arch_disable_irq — unmask/mask hardware interrupts. */
+static inline void arch_enable_irq(void)  { __asm__ volatile("sti" ::: "memory"); }
+static inline void arch_disable_irq(void) { __asm__ volatile("cli" ::: "memory"); }
+
+/* arch_halt — halt CPU until next interrupt. Caller must ensure interrupts
+ * are enabled (arch_enable_irq) before calling, or CPU will hang forever. */
+static inline void arch_halt(void) { __asm__ volatile("hlt" ::: "memory"); }
+
+/* arch_wait_for_irq — enable interrupts, halt until next interrupt fires,
+ * then disable interrupts again. Atomic: no window for nested interrupts
+ * between enable and halt on x86 (STI shadow covers HLT). */
+static inline void arch_wait_for_irq(void) {
+    __asm__ volatile("sti; hlt; cli" ::: "memory");
 }
 
 #endif

@@ -36,9 +36,9 @@
 static void
 task_idle(void)
 {
-    __asm__ volatile ("sti");
+    arch_enable_irq();
     for (;;)
-        __asm__ volatile ("hlt");
+        arch_halt();
 }
 
 void

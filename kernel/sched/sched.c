@@ -240,7 +240,7 @@ sched_exit(void)
 
     if (s_current == dying_k) {  /* last task — everything has exited */
         arch_request_shutdown();
-        for (;;) __asm__ volatile ("hlt");
+        for (;;) arch_halt();
     }
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
