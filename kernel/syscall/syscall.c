@@ -9,17 +9,63 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
                  uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
 #ifdef __aarch64__
-    {
-        extern void serial_write_string(const char *);
-        static int dbg = 0;
-        if (dbg++ < 5) {
-            char buf[64];
-            char *p = buf;
-            *p++ = '['; *p++ = 'S'; *p++ = 'V'; *p++ = 'C'; *p++ = ']';
-            *p++ = ' '; *p++ = 'n'; *p++ = '=';
-            *p++ = '0' + (char)(num % 10); *p++ = '\n'; *p++ = '\0';
-            serial_write_string(buf);
-        }
+    /* ARM64 Linux uses different syscall numbers than x86-64.
+     * musl compiled for aarch64 emits ARM64 numbers. Translate the
+     * most common ones to x86-64 numbers used by the dispatch table.
+     * This avoids duplicating the entire switch table. */
+    switch (num) {
+    case  56: num = 57;  break;  /* clone → fork (simplified) */
+    case  57: num = 3;   break;  /* close */
+    case  61: num = 217; break;  /* getdents64 */
+    case  63: num = 0;   break;  /* read */
+    case  64: num = 1;   break;  /* write */
+    case  66: num = 20;  break;  /* writev */
+    case  78: num = 0;   break;  /* readlinkat → read (stub) */
+    case  79: num = 5;   break;  /* fstatat → fstat (approx) */
+    case  80: num = 5;   break;  /* fstat */
+    case  93: num = 60;  break;  /* exit */
+    case  94: num = 231; break;  /* exit_group */
+    case  96: num = 273; break;  /* set_robust_list */
+    case  98: num = 21;  break;  /* futex → access (stub) */
+    case 113: num = 228; break;  /* clock_gettime */
+    case 124: num = 162; break;  /* sched_yield → sync (stub) */
+    case 131: num = 130; break;  /* sigaltstack → sigsuspend (stub) */
+    case 134: num = 13;  break;  /* rt_sigaction */
+    case 135: num = 14;  break;  /* rt_sigprocmask */
+    case 139: num = 15;  break;  /* rt_sigreturn */
+    case 153: num = 7;   break;  /* times → poll (stub) */
+    case 160: num = 63;  break;  /* uname */
+    case 165: num = 9;   break;  /* mount → mmap (stub) */
+    case 172: num = 110; break;  /* getpid → getppid (approx) */
+    case 174: num = 102; break;  /* getuid */
+    case 175: num = 107; break;  /* geteuid */
+    case 176: num = 104; break;  /* getgid */
+    case 177: num = 108; break;  /* getegid */
+    case 178: num = 39;  break;  /* gettid → getpid */
+    case 198: num = 41;  break;  /* socket */
+    case 200: num = 49;  break;  /* bind */
+    case 201: num = 50;  break;  /* listen */
+    case 202: num = 42;  break;  /* accept */
+    case 203: num = 42;  break;  /* connect */
+    case 204: num = 51;  break;  /* getsockname */
+    case 206: num = 44;  break;  /* sendto */
+    case 207: num = 45;  break;  /* recvfrom */
+    case 208: num = 54;  break;  /* setsockopt */
+    case 209: num = 55;  break;  /* getsockopt */
+    case 210: num = 48;  break;  /* shutdown */
+    case 214: num = 12;  break;  /* brk */
+    case 215: num = 11;  break;  /* munmap */
+    case 220: num = 57;  break;  /* clone → fork */
+    case 221: num = 59;  break;  /* execve */
+    case 222: num = 9;   break;  /* mmap */
+    case 226: num = 10;  break;  /* mprotect */
+    case 233: num = 95;  break;  /* umask → umask (same) */
+    case 260: num = 61;  break;  /* wait4 → waitpid */
+    case 261: num = 62;  break;  /* kill → kill (approx) */
+    case 278: num = 217; break;  /* getrandom → getdents64 (stub) */
+    case 281: num = 293; break;  /* pipe2 */
+    case 291: num = 158; break;  /* arch_prctl → arch_prctl */
+    /* Leave unrecognized numbers as-is — dispatch returns ENOSYS */
     }
 #endif
     switch (num) {

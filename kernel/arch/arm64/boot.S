@@ -28,6 +28,12 @@ _start:
      * Exceptions from EL0 will use SP_EL1. */
     msr     spsel, #1
 
+    /* Enable FP/SIMD (CPACR_EL1.FPEN = 0b11).
+     * musl libc uses SIMD instructions; without this, EL0 gets #FP trap. */
+    mov     x1, #(3 << 20)
+    msr     cpacr_el1, x1
+    isb
+
     /* Zero BSS */
     adrp    x1, __bss_start
     add     x1, x1, :lo12:__bss_start
