@@ -219,8 +219,9 @@ vmm_init(void)
     {
         /* First, unmap the 2MB block at L2[4] (if it was mapped) so we
          * can replace it with a table entry pointing to s_window_pt. */
-        uint64_t win_l2_idx = (VMM_WINDOW_VA - 0x40000000UL) / 0x200000UL;
-        uint64_t win_pt_phys = (uint64_t)(uintptr_t)s_window_pt;
+        uint64_t win_l2_idx = (VMM_WINDOW_VA - ARCH_KERNEL_VIRT_BASE) / 0x200000UL;
+        /* s_window_pt is a BSS variable at high VA; convert to PA for page table */
+        uint64_t win_pt_phys = (uint64_t)(uintptr_t)s_window_pt - KERN_VA_OFFSET;
 
         /* Zero the window PT */
         for (int i = 0; i < 512; i++)

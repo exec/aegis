@@ -16,9 +16,9 @@
 #include "printk.h"
 #include <stdint.h>
 
-/* GICv2 MMIO base addresses (QEMU virt) */
-#define GICD_BASE   0x08000000UL
-#define GICC_BASE   0x08010000UL
+/* GICv2 MMIO at high VA via TTBR1 kernel mapping */
+#define GICD_BASE   0xFFFF000008000000UL
+#define GICC_BASE   0xFFFF000008010000UL
 
 /* Distributor registers */
 #define GICD_CTLR       (*(volatile uint32_t *)(GICD_BASE + 0x000))

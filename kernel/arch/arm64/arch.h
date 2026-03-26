@@ -63,12 +63,13 @@ static inline int arch_get_fb_info(arch_fb_info_t *out) { (void)out; return 0; }
  * QEMU virt loads at 0x40000000 (1GB). */
 #define ARCH_KERNEL_PHYS_BASE 0x40000000UL
 
-/* Virtual base of the kernel. Identity-mapped for now (VA == PA).
- * Higher-half mapping (0xFFFF800040000000) is a future phase. */
-#define ARCH_KERNEL_VIRT_BASE 0x40000000UL
+/* Virtual base of the kernel in TTBR1 upper half.
+ * VA = 0xFFFF000040000000; PA = 0x40000000.
+ * Offset = VA - PA = 0xFFFF000000000000. */
+#define ARCH_KERNEL_VIRT_BASE 0xFFFF000040000000UL
+#define KERN_VA_OFFSET        0xFFFF000000000000UL
 
-/* KVA bump allocator base address — must be in an unmapped L2 region
- * so vmm_map_page can create L3 tables on demand. L2[5] = +0xA00000. */
+/* KVA bump allocator base — in TTBR1 range, past kernel + window. */
 #define ARCH_KVA_BASE (ARCH_KERNEL_VIRT_BASE + 0xA00000UL)
 
 /* -------------------------------------------------------------------------

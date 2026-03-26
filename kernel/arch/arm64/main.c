@@ -43,6 +43,19 @@ task_idle(void)
 void
 kernel_main(uint64_t dtb_phys)
 {
+    /* Direct UART write — proof of life from kernel_main */
+    volatile uint32_t *uart = (volatile uint32_t *)0xFFFF000009000000UL;
+    uart[0] = '\r';
+    uart[0] = '\n';
+    uart[0] = '[';
+    uart[0] = 'B';
+    uart[0] = 'O';
+    uart[0] = 'O';
+    uart[0] = 'T';
+    uart[0] = ']';
+    uart[0] = '\r';
+    uart[0] = '\n';
+
     arch_init();
     printk("[SERIAL] OK: PL011 UART initialized\n");
 

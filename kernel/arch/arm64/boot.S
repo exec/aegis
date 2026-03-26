@@ -1,44 +1,42 @@
 /*
- * boot.S — ARM64 kernel entry point for QEMU virt machine.
+ * boot.S — ARM64 kernel entry (TTBR1 higher-half boot).
  *
- * QEMU -kernel loads this as an ELF. On entry:
- *   x0 = physical address of device tree blob (DTB)
- *   CPU is in EL1 (QEMU virt drops to EL1 before entry)
- *   MMU is off, caches may be on or off
- *
- * This stub:
- *   1. Masks all exceptions (DAIF)
- *   2. Zeros BSS
- *   3. Sets up a 16KB boot stack
- *   4. Calls mmu_early_init() to build identity-map page tables
- *   5. Configures MAIR, TCR, TTBR0 and enables the MMU
- *   6. Jumps to kernel_main(dtb_phys) in C
+ * QEMU loads at physical 0x40000000. _start runs with MMU off.
+ * We build two page tables:
+ *   TTBR0: identity map (VA=PA) for the boot transition
+ *   TTBR1: kernel at 0xFFFF000040000000 → PA 0x40000000
+ * Enable MMU, jump to high VA, call kernel_main.
  */
+
+/* VA offset: high VA - physical addr */
+#define VA_OFF 0xFFFF000000000000
 
     .section .text.boot
     .globl _start
 _start:
-    /* Save DTB pointer — x0 is clobbered by BSS zeroing */
-    mov     x19, x0
+    /* Debug: write '0' immediately */
+    mov     x4, #0x09000000
+    mov     x5, #0x30
+    str     w5, [x4]
 
-    /* Mask all exceptions (debug, SError, IRQ, FIQ) */
-    msr     daifset, #0xf
+    mov     x19, x0             /* save DTB pointer */
+    msr     daifset, #0xf       /* mask all exceptions */
+    msr     spsel, #1           /* use SP_EL1 */
 
-    /* Use SP_EL1 for kernel stack (SPSel=1).
-     * Exceptions from EL0 will use SP_EL1. */
-    msr     spsel, #1
-
-    /* Enable FP/SIMD (CPACR_EL1.FPEN = 0b11).
-     * musl libc uses SIMD instructions; without this, EL0 gets #FP trap. */
+    /* Enable FP/SIMD */
     mov     x1, #(3 << 20)
     msr     cpacr_el1, x1
     isb
 
-    /* Zero BSS */
-    adrp    x1, __bss_start
-    add     x1, x1, :lo12:__bss_start
-    adrp    x2, __bss_end
-    add     x2, x2, :lo12:__bss_end
+    /* Zero BSS (physical addresses — MMU off).
+     * __bss_start/__bss_end are high VAs; subtract VA_OFF to get PA.
+     * Can't use adrp (±4GB range exceeded). Use ldr + subtract. */
+    mov     x3, #0xFFFF
+    lsl     x3, x3, #48         /* x3 = 0xFFFF000000000000 (VA offset) */
+    ldr     x1, =__bss_start
+    sub     x1, x1, x3          /* VA → PA */
+    ldr     x2, =__bss_end
+    sub     x2, x2, x3
 .Lzero_bss:
     cmp     x1, x2
     b.ge    .Lbss_done
@@ -46,65 +44,173 @@ _start:
     b       .Lzero_bss
 .Lbss_done:
 
-    /* Set up boot stack */
-    adrp    x1, boot_stack_top
-    add     x1, x1, :lo12:boot_stack_top
+    /* Boot stack (physical) */
+    ldr     x1, =boot_stack_top
+    sub     x1, x1, x3          /* VA to PA */
     mov     sp, x1
 
-    /* Build early identity-map page tables */
-    bl      mmu_early_init
+    /* Build page tables inline (can't call C — it's linked at high VA).
+     * x3 = VA_OFF = 0xFFFF000000000000 (already set above).
+     *
+     * TTBR0 identity map: boot_l0[0] → boot_l1
+     *   boot_l1[0] → device 1GB, boot_l1[1] → RAM 1GB
+     * TTBR1 kernel map: kern_l0[0] → kern_l1
+     *   kern_l1[0] → device 1GB, kern_l1[1] → RAM 1GB */
 
-    /* ── Configure MMU registers ── */
+    /* Load physical addresses of page tables */
+    ldr     x10, =boot_l0
+    sub     x10, x10, x3        /* boot_l0 PA */
+    ldr     x11, =boot_l1
+    sub     x11, x11, x3        /* boot_l1 PA */
+    ldr     x12, =kern_l0
+    sub     x12, x12, x3        /* kern_l0 PA */
+    ldr     x13, =kern_l1
+    sub     x13, x13, x3        /* kern_l1 PA */
 
-    /* MAIR_EL1: Memory Attribute Indirection Register
-     *   Attr0 = 0xFF → Normal, Write-Back, Read/Write Allocate (inner+outer)
-     *   Attr1 = 0x00 → Device-nGnRnE (strongly ordered, no gather, no reorder) */
+    /* Zero all four tables (512 × 8 = 4096 bytes each) */
+    mov     x14, #512
+    mov     x15, x10
+1:  str     xzr, [x15], #8
+    subs    x14, x14, #1
+    b.ne    1b
+    mov     x14, #512
+    mov     x15, x11
+2:  str     xzr, [x15], #8
+    subs    x14, x14, #1
+    b.ne    2b
+    mov     x14, #512
+    mov     x15, x12
+3:  str     xzr, [x15], #8
+    subs    x14, x14, #1
+    b.ne    3b
+    mov     x14, #512
+    mov     x15, x13
+4:  str     xzr, [x15], #8
+    subs    x14, x14, #1
+    b.ne    4b
+
+    /* PTE constants */
+    .set PTE_V, (1 << 0)       /* Valid */
+    .set PTE_T, (1 << 1)       /* Table descriptor */
+    .set PTE_AF, (1 << 10)     /* Access Flag */
+    .set PTE_SH, (3 << 8)      /* Inner Shareable */
+    .set PTE_DEV, (1 << 2)     /* AttrIndx=1 (Device) */
+
+    /* TTBR0: boot_l0[0] → boot_l1 (table) */
+    mov     x14, #(PTE_V | PTE_T)
+    orr     x14, x14, x11      /* boot_l1 PA | valid | table */
+    str     x14, [x10]          /* boot_l0[0] */
+
+    /* boot_l1[0] = device 1GB block at PA 0 */
+    mov     x14, #(PTE_V | PTE_AF | PTE_DEV)
+    str     x14, [x11]          /* boot_l1[0] = 0 | device */
+
+    /* boot_l1[1] = RAM 1GB block at PA 0x40000000 */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    orr     x14, x14, #0x40000000
+    str     x14, [x11, #8]      /* boot_l1[1] */
+
+    /* TTBR1: kern_l0[0] → kern_l1 (table) */
+    mov     x14, #(PTE_V | PTE_T)
+    orr     x14, x14, x13      /* kern_l1 PA */
+    str     x14, [x12]          /* kern_l0[0] */
+
+    /* kern_l1[0] = device 1GB at PA 0 */
+    mov     x14, #(PTE_V | PTE_AF | PTE_DEV)
+    str     x14, [x13]          /* kern_l1[0] */
+
+    /* kern_l1[1] = RAM 1GB at PA 0x40000000 */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    orr     x14, x14, #0x40000000
+    str     x14, [x13, #8]      /* kern_l1[1] */
+
+    /* ── MMU configuration ── */
+
+    /* MAIR: Attr0=Normal WB, Attr1=Device-nGnRnE */
     ldr     x1, =0x00000000000000FF
     msr     mair_el1, x1
 
-    /* TCR_EL1: Translation Control Register
-     *   T0SZ  = 16  → 48-bit VA for TTBR0 (bits [5:0])
-     *   TG0   = 0b00 → 4KB granule for TTBR0 (bits [15:14])
-     *   SH0   = 0b11 → Inner Shareable (bits [13:12])
-     *   ORGN0 = 0b01 → Outer Write-Back Allocate (bits [11:10])
-     *   IRGN0 = 0b01 → Inner Write-Back Allocate (bits [9:8])
-     *
-     * Bits [31:16] control TTBR1 — left as 0 (unused for now). */
-    ldr     x1, =(16 | (0b11 << 12) | (0b01 << 10) | (0b01 << 8))
+    /* TCR: T0SZ=16 (48-bit user), T1SZ=16 (48-bit kernel),
+     * TG0=4KB, TG1=4KB, Inner Shareable, WB Allocate */
+    ldr     x1, =(16 | (0b11 << 12) | (0b01 << 10) | (0b01 << 8) | \
+                  (16 << 16) | (0b10 << 30) | (0b11 << 28) | (0b01 << 26) | (0b01 << 24))
     msr     tcr_el1, x1
 
-    /* TTBR0_EL1: point at boot_l0 (built by mmu_early_init) */
-    adrp    x1, boot_l0
-    add     x1, x1, :lo12:boot_l0
-    msr     ttbr0_el1, x1
+    /* TTBR0: identity map (boot_l0 PA in x10) */
+    msr     ttbr0_el1, x10
 
-    /* Ensure all table writes are visible before enabling MMU */
+    /* TTBR1: kernel map (kern_l0 PA in x12) */
+    msr     ttbr1_el1, x12
+
     dsb     sy
     isb
 
-    /* Enable MMU: set SCTLR_EL1.M (bit 0), also C (bit 2) for data cache,
-     * I (bit 12) for instruction cache. */
+    /* Debug: write 'A' to PL011 before MMU enable */
+    mov     x4, #0x09000000
+    mov     x5, #0x41          /* 'A' */
+    str     w5, [x4]
+
+    /* Enable MMU + caches */
     mrs     x1, sctlr_el1
-    orr     x1, x1, #(1 << 0)    /* M — MMU enable */
-    orr     x1, x1, #(1 << 2)    /* C — data cache enable */
-    orr     x1, x1, #(1 << 12)   /* I — instruction cache enable */
+    orr     x1, x1, #(1 << 0)
+    orr     x1, x1, #(1 << 2)
+    orr     x1, x1, #(1 << 12)
     msr     sctlr_el1, x1
     isb
 
-    /* MMU is now on. Identity map means VA == PA — we continue executing. */
+    /* Debug: write 'B' after MMU enable (still at low VA) */
+    mov     x4, #0x09000000
+    mov     x5, #0x42          /* 'B' */
+    str     w5, [x4]
 
-    /* Restore DTB pointer and call kernel_main */
+    /* Jump to high VA (TTBR1 range) */
+    ldr     x2, =.Lhigh
+    br      x2
+
+.Lhigh:
+    /* Debug: write 'C' at high VA */
+    ldr     x4, =0xFFFF000009000000
+    mov     x5, #0x43          /* 'C' */
+    str     w5, [x4]
+    /* Now at 0xFFFF000040000xxx. Switch SP to high VA. */
+    ldr     x1, =boot_stack_top
+    mov     sp, x1
+
+    /* kernel_main(dtb_phys) — absolute call, not PC-relative bl.
+     * bl would use a veneer at low VA; blr with loaded addr is correct. */
+    /* Debug: output high nibble of x2 (kernel_main addr) as hex chars */
+    ldr     x2, =kernel_main
+    ldr     x4, =0xFFFF000009000000
+
+    /* Print the value we're about to jump to: extract byte at position 1 */
+    lsr     x5, x2, #8
+    and     x5, x5, #0xF
+    add     x5, x5, #0x30
+    cmp     x5, #0x3A
+    b.lo    5f
+    add     x5, x5, #7
+5:  str     w5, [x4]
+
+    /* Print newline then jump */
+    mov     x5, #0x0A
+    str     w5, [x4]
+
     mov     x0, x19
-    bl      kernel_main
+    blr     x2
 
-    /* kernel_main should not return */
+    /* Debug 'F' if kernel_main returns (shouldn't) */
+    ldr     x4, =0xFFFF000009000000
+    mov     x5, #0x46
+    str     w5, [x4]
+
 .Lhang:
     wfi
     b       .Lhang
 
-    /* 16KB boot stack in BSS */
+    /* Boot stack */
     .section .bss
     .align 16
 boot_stack_bottom:
-    .space  16384
+    .space 16384
+    .globl boot_stack_top
 boot_stack_top:

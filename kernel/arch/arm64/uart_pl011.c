@@ -14,7 +14,9 @@
 
 #include <stdint.h>
 
-#define PL011_BASE  0x09000000UL
+/* PL011 at high VA via TTBR1 kernel mapping.
+ * Physical 0x09000000 → Virtual 0xFFFF000009000000. */
+#define PL011_BASE  0xFFFF000009000000UL
 #define UARTDR      (*(volatile uint32_t *)(PL011_BASE + 0x000))
 #define UARTFR      (*(volatile uint32_t *)(PL011_BASE + 0x018))
 #define UARTFR_TXFF (1U << 5)
