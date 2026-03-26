@@ -1,25 +1,26 @@
 /*
- * main.c — ARM64 kernel entry point (minimal boot stage).
+ * main.c — ARM64 kernel entry point.
  *
  * Called from boot.S with MMU off. DTB physical address in x0.
- * Goal: prove the toolchain, boot path, and serial output work.
+ * Initializes serial, parses DTB for memory, runs PMM.
  */
 
-#include <stdint.h>
-
-/* Provided by uart_pl011.c */
-void uart_puts(const char *s);
+#include "arch.h"
+#include "printk.h"
+#include "pmm.h"
 
 void
 kernel_main(uint64_t dtb_phys)
 {
-    (void)dtb_phys;
+    arch_init();
+    printk("[SERIAL] OK: PL011 UART initialized\n");
 
-    uart_puts("[SERIAL] OK: PL011 UART initialized\n");
-    uart_puts("[AEGIS] ARM64 boot stub reached.\n");
-    uart_puts("[AEGIS] System halted.\n");
+    arch_mm_init((void *)(uintptr_t)dtb_phys);
+    pmm_init();
 
-    /* Halt */
+    printk("[AEGIS] ARM64 kernel ready.\n");
+    printk("[AEGIS] System halted.\n");
+
     for (;;)
-        __asm__ volatile("wfi");
+        arch_halt();
 }

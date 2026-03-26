@@ -38,6 +38,7 @@ SECTIONS
     }
     . = ALIGN(8);
     __bss_end = .;
+    _kernel_end = .;
 
     /DISCARD/ : {
         *(.comment)
