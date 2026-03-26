@@ -31,11 +31,14 @@ ARCH_OBJS = $(BUILD)/boot.o \
             $(BUILD)/uart_pl011.o \
             $(BUILD)/main.o \
             $(BUILD)/arch_mm.o \
+            $(BUILD)/arch_vmm.o \
+            $(BUILD)/mmu_early.o \
             $(BUILD)/stubs.o
 
 # Shared kernel sources (arch-agnostic)
 SHARED_OBJS = $(BUILD)/printk.o \
-              $(BUILD)/pmm.o
+              $(BUILD)/pmm.o \
+              $(BUILD)/vmm_arm64.o
 
 OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
 
@@ -56,6 +59,12 @@ $(BUILD)/main.o: main.c | $(BUILD)
 $(BUILD)/arch_mm.o: arch_mm.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/arch_vmm.o: arch_vmm.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/mmu_early.o: mmu_early.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/stubs.o: stubs.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -64,6 +73,9 @@ $(BUILD)/printk.o: $(REPO)/kernel/core/printk.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/pmm.o: $(REPO)/kernel/mm/pmm.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/vmm_arm64.o: vmm_arm64.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(ELF): $(OBJS) linker.ld
@@ -85,9 +97,9 @@ test: $(ELF)
 	  -m 128M -nographic \
 	  -kernel $(ELF) 2>/dev/null \
 	  | tee /tmp/aegis-arm64-serial.txt || true
-	@grep -q '\[PMM\] OK' /tmp/aegis-arm64-serial.txt && \
-	  echo "PASS: [PMM] OK found" || \
-	  (echo "FAIL: [PMM] OK not found"; cat /tmp/aegis-arm64-serial.txt; exit 1)
+	@grep -q '\[VMM\] OK' /tmp/aegis-arm64-serial.txt && \
+	  echo "PASS: [VMM] OK found" || \
+	  (echo "FAIL: [VMM] OK not found"; cat /tmp/aegis-arm64-serial.txt; exit 1)
 
 clean:
 	rm -rf $(BUILD)

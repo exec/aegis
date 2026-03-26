@@ -109,10 +109,12 @@ void pmm_init(void)
         pmm_reserve_region(reserved[i].base, reserved[i].len);
 
     /* Step 4: reserve the kernel image + bitmap (bitmap is in .bss,
-     * inside this range).  Cast through uintptr_t first: direct
-     * pointer-to-uint64_t cast may warn under C99 §7.18.1.4. */
+     * inside this range).  The kernel image spans from PHYS_BASE to
+     * PHYS_BASE + kernel_size, where kernel_size = _kernel_end_VA - VIRT_BASE.
+     * Cast through uintptr_t first: direct pointer-to-uint64_t cast
+     * may warn under C99 §7.18.1.4. */
     pmm_reserve_region(ARCH_KERNEL_PHYS_BASE,
-                       ((uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE) - ARCH_KERNEL_PHYS_BASE);
+                       (uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE);
 
     /* Step 5: report — derived from raw multiboot2 usable bytes (before
      * our own reservations) so this line stays stable as the kernel grows. */

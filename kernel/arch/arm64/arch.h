@@ -63,8 +63,19 @@ static inline int arch_get_fb_info(arch_fb_info_t *out) { (void)out; return 0; }
  * QEMU virt loads at 0x40000000 (1GB). */
 #define ARCH_KERNEL_PHYS_BASE 0x40000000UL
 
-/* Virtual base = physical for now (MMU off). VMM phase will change this. */
+/* Virtual base of the kernel. Identity-mapped for now (VA == PA).
+ * Higher-half mapping (0xFFFF800040000000) is a future phase. */
 #define ARCH_KERNEL_VIRT_BASE 0x40000000UL
+
+/* -------------------------------------------------------------------------
+ * Virtual memory interface
+ * ------------------------------------------------------------------------- */
+
+/* Load a page table root into TTBR0_EL1 and flush TLB. */
+void arch_vmm_load_pml4(uint64_t phys);
+
+/* Invalidate TLB entry for a single virtual address. */
+void arch_vmm_invlpg(uint64_t virt);
 
 /* -------------------------------------------------------------------------
  * Arch-portable helpers
