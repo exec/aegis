@@ -336,18 +336,23 @@ void
 vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
                   uint64_t phys, uint64_t flags)
 {
+    /* On ARM64 (no TTBR0/TTBR1 split yet), map user pages into the
+     * MASTER PML4 so they're accessible without switching TTBR0.
+     * User address space isolation via TTBR1 is future work. */
+    (void)pml4_phys;
     uint64_t l0_idx = (virt >> 39) & 0x1FF;
     uint64_t l1_idx = (virt >> 30) & 0x1FF;
     uint64_t l2_idx = (virt >> 21) & 0x1FF;
     uint64_t l3_idx = (virt >> 12) & 0x1FF;
 
-    uint64_t l1_phys = ensure_table(pml4_phys, l0_idx, VMM_FLAG_USER);
+    uint64_t l1_phys = ensure_table(s_pml4_phys, l0_idx, VMM_FLAG_USER);
     uint64_t l2_phys = ensure_table(l1_phys, l1_idx, VMM_FLAG_USER);
     uint64_t l3_phys = ensure_table(l2_phys, l2_idx, VMM_FLAG_USER);
 
     uint64_t *l3 = vmm_window_map(l3_phys);
     l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
+    arch_vmm_invlpg(virt);
 }
 
 uint64_t

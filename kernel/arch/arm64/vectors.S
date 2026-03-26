@@ -10,29 +10,12 @@
 
 /* ── Macros ──────────────────────────────────────────────────────── */
 
+/* No TTBR0 switch needed — user pages mapped in master PML4.
+ * TTBR1-based kernel/user isolation is future work. */
 .macro KERNEL_ENTRY_FROM_EL0
-    /* Save user TTBR0 and switch to kernel PML4.
-     * Uses x9/x10 as scratch — saved by SAVE_ALL_EL0 afterward. */
-    mrs     x9, ttbr0_el1
-    adrp    x10, g_saved_user_ttbr0
-    add     x10, x10, :lo12:g_saved_user_ttbr0
-    str     x9, [x10]               /* save user TTBR0 */
-    adrp    x10, g_master_pml4
-    add     x10, x10, :lo12:g_master_pml4
-    ldr     x10, [x10]
-    msr     ttbr0_el1, x10          /* switch to master */
-    tlbi    vmalle1                 /* flush TLB after TTBR switch */
-    dsb     sy
-    isb
 .endm
 
 .macro KERNEL_EXIT_TO_EL0
-    /* Restore user TTBR0 before ERET */
-    adrp    x10, g_saved_user_ttbr0
-    add     x10, x10, :lo12:g_saved_user_ttbr0
-    ldr     x10, [x10]
-    msr     ttbr0_el1, x10
-    isb
 .endm
 
 .macro SAVE_ALL_EL0
