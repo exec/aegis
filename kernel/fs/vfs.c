@@ -6,10 +6,28 @@
 #include "uaccess.h"
 #include <stdint.h>
 
+static ramfs_t s_run_ramfs;
+static ramfs_t s_etc_ramfs;
+static ramfs_t s_root_ramfs;
+
+/* Callback: populate etc ramfs from initrd entries */
+static void
+populate_etc_cb(const char *name, const uint8_t *data, uint32_t len, void *ud)
+{
+    (void)ud;
+    ramfs_populate(&s_etc_ramfs, name, data, len);
+}
+
 void
 vfs_init(void)
 {
-    ramfs_init();
+    ramfs_init(&s_run_ramfs);
+    ramfs_init(&s_etc_ramfs);
+    ramfs_init(&s_root_ramfs);
+    /* Shadow all /etc/ initrd entries into the writable etc ramfs */
+    initrd_iter_etc(populate_etc_cb, (void *)0);
+    /* Ensure /etc/resolv.conf exists as an empty slot (DHCP daemon writes it) */
+    ramfs_populate(&s_etc_ramfs, "resolv.conf", (const uint8_t *)0, 0);
     printk("[VFS] OK: initialized\n");
     initrd_register();
 }
@@ -175,8 +193,11 @@ static const vfs_ops_t s_ext2_ops = {
  * vfs_open — resolve path to a vfs_file_t across all registered backends.
  *
  * Priority order:
- *   1. initrd (static in-kernel filesystem: /bin, /etc/motd, /dev)
- *   2. ext2 on nvme0 (if mounted)
+ *   1. /run/ ramfs (writable; /run/ paths only)
+ *   2. /etc/ ramfs (writable; shadows initrd /etc/ entries)
+ *   3. /root/ ramfs (writable; initially empty)
+ *   4. initrd (static: /bin/, /dev/, and /etc/ directory structure)
+ *   5. ext2 on nvme0 (if mounted)
  *
  * flags: open flags forwarded from sys_open.  VFS_O_CREAT causes vfs_open
  *        to call ext2_create() if the file is not found on ext2.
@@ -187,39 +208,48 @@ static const vfs_ops_t s_ext2_ops = {
 int
 vfs_open(const char *path, int flags, vfs_file_t *out)
 {
-    /* Try initrd first — handles /bin, /etc/motd, /dev/console, /dev/kbd */
+    /* 1. /run/ → run ramfs */
+    if (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n' && path[4]=='/')
+        return ramfs_open(&s_run_ramfs, path + 5, flags, out);
+
+    /* 2. /etc/ → try etc ramfs first (for writable shadow copies of /etc files).
+     *    If ramfs returns ENOENT and VFS_O_CREAT is not set, fall through to
+     *    initrd so that directory opens (/etc/vigil/services) and any path not
+     *    yet in the ramfs are served from the read-only initrd layer.
+     *    Bare /etc (path[4]=='\0') is a directory open — always go to initrd. */
+    if (path[0]=='/' && path[1]=='e' && path[2]=='t' && path[3]=='c' && path[4]=='/') {
+        int r = ramfs_open(&s_etc_ramfs, path + 5, flags, out);
+        if (r == 0 || (flags & (int)VFS_O_CREAT))
+            return r;
+        /* ENOENT from ramfs and no O_CREAT — fall through to initrd */
+    }
+
+    /* 3. /root/ or bare /root → root ramfs */
+    if (path[0]=='/' && path[1]=='r' && path[2]=='o' && path[3]=='o' && path[4]=='t') {
+        if (path[5] == '/')
+            return ramfs_open(&s_root_ramfs, path + 6, flags, out);
+        if (path[5] == '\0')
+            return ramfs_opendir(&s_root_ramfs, out);
+    }
+
+    /* 4. initrd — /bin/, /dev/, /etc/ directories and any /etc/ path not in ramfs */
     if (initrd_open(path, out) == 0)
         return 0;
 
-    /* Route /run/ paths to ramfs */
-    {
-        const char *p = path;
-        /* /run/ file routing: p[4] is '\0' for bare "/run" so that case
-         * falls through to the streq directory check above */
-        if (p[0]=='/' && p[1]=='r' && p[2]=='u' && p[3]=='n' && p[4]=='/')
-            return ramfs_open(path + 5, flags, out);
-    }
-
-    /* Fall through to ext2.  ext2_open() returns -1 if not mounted or
-     * the file does not exist. */
+    /* 5. ext2 fallback */
     uint32_t ino = 0;
     if (ext2_open(path, &ino) < 0) {
-        /* If O_CREAT is set, create the file and try again. */
         if ((flags & (int)VFS_O_CREAT) && ext2_create(path, 0644) == 0) {
             if (ext2_open(path, &ino) < 0)
-                return -2;  /* ENOENT — create succeeded but open failed */
+                return -2;
         } else {
-            return -2;  /* ENOENT */
+            return -2;
         }
     }
-
     ext2_fd_priv_t *p = ext2_pool_alloc(ino);
-    if (!p)
-        return -12;  /* ENOMEM — fd pool exhausted */
-
+    if (!p) return -12;
     int sz = ext2_file_size(ino);
     if (sz < 0) sz = 0;
-
     out->ops    = &s_ext2_ops;
     out->priv   = (void *)p;
     out->offset = 0;
@@ -293,14 +323,21 @@ vfs_stat_path(const char *path, k_stat_t *out)
         return 0;
     }
 
-    /* ramfs lookup for /run/ paths — pass short name without /run/ prefix */
-    {
-        const char *p = path;
-        /* /run/ file routing: p[4] is '\0' for bare "/run" so that case
-         * falls through to the streq directory check above */
-        if (p[0]=='/' && p[1]=='r' && p[2]=='u' && p[3]=='n' && p[4]=='/')
-            return ramfs_stat_path(path + 5, out);
+    /* /run/ → run ramfs (MUST precede initrd) */
+    if (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n' && path[4]=='/')
+        return ramfs_stat(&s_run_ramfs, path + 5, out);
+
+    /* /etc/ → try etc ramfs first; fall through to initrd on ENOENT */
+    if (path[0]=='/' && path[1]=='e' && path[2]=='t' && path[3]=='c' && path[4]=='/') {
+        int r = ramfs_stat(&s_etc_ramfs, path + 5, out);
+        if (r == 0)
+            return 0;
+        /* ENOENT — fall through to initrd stat below */
     }
+
+    /* /root/ → root ramfs */
+    if (path[0]=='/' && path[1]=='r' && path[2]=='o' && path[3]=='o' && path[4]=='t' && path[5]=='/')
+        return ramfs_stat(&s_root_ramfs, path + 6, out);
 
     /* Initrd file lookup */
     if (initrd_stat_entry(path, out) == 0)

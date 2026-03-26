@@ -1,6 +1,10 @@
 /* sys_io.c — I/O syscall implementations: read, write, writev, close */
 #include "sys_impl.h"
 
+#ifndef EISDIR
+#define EISDIR 21
+#endif
+
 /*
  * sys_write — syscall 1
  *
@@ -150,6 +154,8 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     vfs_file_t *f = &proc->fds[arg1];
     if (!f->ops)
         return (uint64_t)-9;   /* EBADF */
+    if (!f->ops->read)
+        return (uint64_t)-(int64_t)EISDIR;  /* directory fd, not readable */
     if (!user_ptr_valid(arg2, arg3))
         return (uint64_t)-14;  /* EFAULT */
 
