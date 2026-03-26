@@ -111,12 +111,17 @@ timer_init(void)
     printk("[TIMER] OK: ARM generic timer at 100 Hz\n");
 }
 
+/* From sched.c */
+void sched_tick(void);
+
 void
 timer_handler(void)
 {
     s_ticks++;
     /* Re-arm timer for next tick */
     timer_set_next(s_timer_freq / 100);
+    /* Drive preemptive scheduling */
+    sched_tick();
 }
 
 uint64_t

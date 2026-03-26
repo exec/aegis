@@ -46,24 +46,34 @@ sched_spawn(void (*fn)(void))
     uint8_t *stack = stack_region + 4096UL;
 
     /* Set up the stack to look like ctx_switch already ran.
-     *
-     * ctx_switch pops: r15, r14, r13, r12, rbp, rbx, then ret → fn.
-     * So the stack from low (sp) to high must be:
-     *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0][fn]
-     *
-     * We build this by decrementing a pointer from stack_top:
-     *   fn pushed first (deepest = highest address before sp setup)
-     *   then six zeros for the callee-saved regs
-     *   sp ends up pointing at the r15 slot.
-     */
+     * The frame layout must match the push/pop order in ctx_switch.asm/S. */
     uint64_t *sp = (uint64_t *)(stack + STACK_SIZE);
-    *--sp = (uint64_t)(uintptr_t)fn;  /* return address: ret jumps here */
-    *--sp = 0;                         /* rbx */
-    *--sp = 0;                         /* rbp */
-    *--sp = 0;                         /* r12 */
-    *--sp = 0;                         /* r13 */
-    *--sp = 0;                         /* r14 */
-    *--sp = 0;                         /* r15  ← new task's stack pointer */
+#ifdef __aarch64__
+    /* ARM64 ctx_switch pushes 6 pairs via stp (x19/x20 ... x29/x30).
+     * x30 (lr) = fn. Build from high to low matching ldp order:
+     * [x19][x20] [x21][x22] [x23][x24] [x25][x26] [x27][x28] [x29][x30] */
+    *--sp = 0;                          /* x20 */
+    *--sp = 0;                          /* x19 */
+    *--sp = 0;                          /* x22 */
+    *--sp = 0;                          /* x21 */
+    *--sp = 0;                          /* x24 */
+    *--sp = 0;                          /* x23 */
+    *--sp = 0;                          /* x26 */
+    *--sp = 0;                          /* x25 */
+    *--sp = 0;                          /* x28 */
+    *--sp = 0;                          /* x27 */
+    *--sp = (uint64_t)(uintptr_t)fn;   /* x30 (lr) — ret jumps here */
+    *--sp = 0;                          /* x29 (fp) */
+#else
+    /* x86-64 ctx_switch pops: r15, r14, r13, r12, rbp, rbx, then ret → fn. */
+    *--sp = (uint64_t)(uintptr_t)fn;   /* return address */
+    *--sp = 0;                          /* rbx */
+    *--sp = 0;                          /* rbp */
+    *--sp = 0;                          /* r12 */
+    *--sp = 0;                          /* r13 */
+    *--sp = 0;                          /* r14 */
+    *--sp = 0;                          /* r15 */
+#endif
 
     task->sp               = (uint64_t)(uintptr_t)sp;
     task->stack_base       = stack;

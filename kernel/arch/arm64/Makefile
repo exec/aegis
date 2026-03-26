@@ -19,7 +19,15 @@ CFLAGS  = -ffreestanding -nostdlib -nostdinc \
           -I. \
           -I$(REPO)/kernel/core \
           -I$(REPO)/kernel/mm \
-          -I$(REPO)/kernel/drivers
+          -I$(REPO)/kernel/sched \
+          -I$(REPO)/kernel/proc \
+          -I$(REPO)/kernel/syscall \
+          -I$(REPO)/kernel/elf \
+          -I$(REPO)/kernel/fs \
+          -I$(REPO)/kernel/signal \
+          -I$(REPO)/kernel/drivers \
+          -I$(REPO)/kernel/net \
+          -I$(REPO)/kernel/cap
 
 ASFLAGS = -g
 
@@ -36,13 +44,15 @@ ARCH_OBJS = $(BUILD)/boot.o \
             $(BUILD)/mmu_early.o \
             $(BUILD)/gic.o \
             $(BUILD)/irq.o \
-            $(BUILD)/stubs.o
+            $(BUILD)/stubs.o \
+            $(BUILD)/ctx_switch.o
 
 # Shared kernel sources (arch-agnostic)
 SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/pmm.o \
               $(BUILD)/vmm_arm64.o \
-              $(BUILD)/kva.o
+              $(BUILD)/kva.o \
+              $(BUILD)/sched.o
 
 OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
 
@@ -81,6 +91,9 @@ $(BUILD)/mmu_early.o: mmu_early.c | $(BUILD)
 $(BUILD)/stubs.o: stubs.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/ctx_switch.o: ctx_switch.S | $(BUILD)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
 # Shared kernel sources
 $(BUILD)/printk.o: $(REPO)/kernel/core/printk.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -92,6 +105,9 @@ $(BUILD)/vmm_arm64.o: vmm_arm64.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/kva.o: $(REPO)/kernel/mm/kva.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sched.o: $(REPO)/kernel/sched/sched.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(ELF): $(OBJS) linker.ld

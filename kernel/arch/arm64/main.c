@@ -9,6 +9,7 @@
 #include "pmm.h"
 #include "vmm.h"
 #include "kva.h"
+#include "sched.h"
 
 /* From gic.c */
 void gic_init(void);
@@ -22,6 +23,23 @@ install_vectors(void)
 {
     __asm__ volatile("msr vbar_el1, %0" : : "r"(exception_vectors));
     __asm__ volatile("isb");
+}
+
+/* Task 0: idle — enables interrupts and halts until next tick. */
+static void
+task_idle(void)
+{
+    arch_enable_irq();
+    for (;;)
+        arch_halt();
+}
+
+/* Task 1: test task — prints and exits */
+static void
+task_test(void)
+{
+    printk("[TEST] task running, ticks=%lu\n", arch_get_ticks());
+    sched_exit();
 }
 
 void
@@ -39,16 +57,11 @@ kernel_main(uint64_t dtb_phys)
     gic_init();
     timer_init();
 
-    /* Enable IRQs — timer will start ticking */
-    arch_enable_irq();
+    sched_init();
+    sched_spawn(task_idle);
+    sched_spawn(task_test);
 
-    /* Wait a few ticks to prove the timer works */
-    while (arch_get_ticks() < 3)
-        arch_halt();
+    sched_start();
 
-    printk("[AEGIS] ARM64 kernel ready, ticks=%lu\n", arch_get_ticks());
-    printk("[AEGIS] System halted.\n");
-
-    for (;;)
-        arch_halt();
+    __builtin_unreachable();
 }

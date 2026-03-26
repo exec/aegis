@@ -82,6 +82,33 @@ void arch_vmm_load_pml4(uint64_t phys);
 void arch_vmm_invlpg(uint64_t virt);
 
 /* -------------------------------------------------------------------------
+ * Context switch + ring-3 support
+ * ------------------------------------------------------------------------- */
+
+struct aegis_task_t;
+void ctx_switch(struct aegis_task_t *outgoing, struct aegis_task_t *incoming);
+
+/* Set SP_EL1 (kernel stack for EL0→EL1 exceptions). */
+void arch_set_kernel_stack(uint64_t sp0);
+
+/* Set EL0 TLS base (TPIDR_EL0). */
+static inline void
+arch_set_fs_base(uint64_t addr)
+{
+    __asm__ volatile("msr tpidr_el0, %0" : : "r"(addr));
+}
+
+/* Store master page table address for ISR/syscall CR3 restore.
+ * On ARM64, TTBR1 handles kernel — this is a TTBR0 save for user restore. */
+void arch_set_master_pml4(uint64_t pml4_phys);
+
+/* Number of callee-saved register slots pushed by ctx_switch.
+ * ARM64: x19-x28 (10) + x29/fp (1) + x30/lr (1) = 12 slots.
+ * x30 (lr) serves as the return address — stored at [sp+0] after push.
+ * sched_spawn must build a matching frame: 11 zeros + fn as lr. */
+#define ARCH_CTX_SLOTS 12
+
+/* -------------------------------------------------------------------------
  * Timer
  * ------------------------------------------------------------------------- */
 

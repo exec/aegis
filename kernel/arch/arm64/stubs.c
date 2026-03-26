@@ -67,3 +67,16 @@ arch_request_shutdown(void)
 {
     arch_debug_exit(1);
 }
+
+/* ── Stubs for subsystems not yet ported ──────────────────────────── */
+
+/* sched.c calls these — stub until user process support is added */
+void arch_set_kernel_stack(uint64_t sp0) { (void)sp0; }
+void arch_set_master_pml4(uint64_t pml4_phys) { (void)pml4_phys; }
+
+/* sched.c exit path calls ext2_sync and signal_send_pid */
+void ext2_sync(void) {}
+void signal_send_pid(uint32_t pid, int sig) { (void)pid; (void)sig; }
+
+/* proc.h referenced from sched.c — needs proc_spawn_init stub */
+void proc_spawn_init(void) {}

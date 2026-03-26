@@ -148,6 +148,11 @@ struct aegis_task_t;
  * again with that task as the incoming argument. */
 void ctx_switch(struct aegis_task_t *outgoing, struct aegis_task_t *incoming);
 
+/* Number of callee-saved register slots pushed by ctx_switch.
+ * x86-64: rbx, rbp, r12-r15 (6) + return address (1) = 7 slots.
+ * sched_spawn must build a matching frame. */
+#define ARCH_CTX_SLOTS 7
+
 /* -------------------------------------------------------------------------
  * Phase 4: Interrupt infrastructure
  * ------------------------------------------------------------------------- */
