@@ -18,7 +18,6 @@
 [RNG] OK: ChaCha20 CSPRNG seeded
 [VFS] OK: initialized
 [INITRD] OK: 38 files registered
-[PROCFS] OK: /proc virtual filesystem
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)
 [PCIE] OK: skipped (no ECAM)
 [CAP] OK: 9 capabilities granted to init

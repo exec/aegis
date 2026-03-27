@@ -625,7 +625,7 @@ procfs_open_pid(uint32_t pid, const char *path, vfs_file_t *out)
 void
 procfs_init(void)
 {
-    printk("[PROCFS] OK: /proc virtual filesystem\n");
+    /* No-op — procfs is a VFS backend, not a hardware subsystem. */
 }
 
 /*
