@@ -120,6 +120,7 @@ uint64_t sys_mprotect(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_exit(uint64_t a1);
 uint64_t sys_exit_group(uint64_t a1);
 uint64_t sys_getpid(void);
+uint64_t sys_gettid(void);
 uint64_t sys_getppid(void);
 uint64_t sys_set_tid_address(uint64_t a1);
 uint64_t sys_set_robust_list(uint64_t a1, uint64_t a2);

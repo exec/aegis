@@ -225,6 +225,8 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     }
 
     proc->pid              = proc_alloc_pid();   /* 1 for init */
+    proc->tgid             = proc->pid;
+    proc->thread_count     = 1;
     proc->ppid             = 0;
     proc->uid              = 0;
     proc->gid              = 0;

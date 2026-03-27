@@ -48,6 +48,14 @@ sys_getpid(void)
 {
     aegis_task_t *task = sched_current();
     if (!task->is_user) return 0;
+    return (uint64_t)((aegis_process_t *)task)->tgid;
+}
+
+uint64_t
+sys_gettid(void)
+{
+    aegis_task_t *task = sched_current();
+    if (!task->is_user) return 0;
     return (uint64_t)((aegis_process_t *)task)->pid;
 }
 
@@ -64,7 +72,14 @@ sys_getppid(void)
     return (uint64_t)proc->ppid;
 }
 
-uint64_t sys_set_tid_address(uint64_t arg1) { (void)arg1; return 1; }
+uint64_t
+sys_set_tid_address(uint64_t arg1)
+{
+    aegis_task_t *task = sched_current();
+    task->clear_child_tid = arg1;
+    if (!task->is_user) return 1;
+    return (uint64_t)((aegis_process_t *)task)->pid;
+}
 
 uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
 {
@@ -165,6 +180,8 @@ sys_fork(syscall_frame_t *frame)
 #endif
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     child->pid             = proc_alloc_pid();
+    child->tgid            = child->pid;
+    child->thread_count    = 1;
     child->ppid            = parent->pid;
     child->pgid            = parent->pgid;
     child->uid             = parent->uid;
@@ -558,6 +575,7 @@ sys_execve(syscall_frame_t *frame,
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
 
         /* Apply pre-registered exec caps, then zero them (consumed on exec). */
         {

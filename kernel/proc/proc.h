@@ -29,6 +29,8 @@ typedef struct {
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
     uint32_t      pid;          /* unique process ID; 1 = init */
+    uint32_t      tgid;         /* thread group ID (= leader's PID) */
+    uint32_t      thread_count; /* live threads in this group (leader tracks) */
     uint32_t      ppid;         /* parent PID; 0 = no parent   */
     uint32_t      uid;          /* user ID; 0 = root */
     uint32_t      gid;          /* group ID; 0 = root */
