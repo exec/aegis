@@ -157,6 +157,9 @@ def test_ctrl_c_kills_cat():
     # Send Ctrl-C via QEMU monitor (SIGINT to foreground PID via kbd driver)
     _send_key(mon_sock, "ctrl-c")
 
+    # Give the kernel time to deliver SIGINT and the shell to print a new prompt
+    time.sleep(1)
+
     # Wait for shell prompt to reappear — shell must still be alive.
     out = _read_until_prompt(proc, time.time() + CMD_TIMEOUT)
 
