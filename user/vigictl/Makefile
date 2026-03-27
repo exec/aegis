@@ -1,6 +1,7 @@
-CC      = musl-gcc
-CFLAGS  = -static -O2 -Wall -Wextra
-TARGET  = vigictl
+MUSL_DIR   = ../../build/musl-dynamic
+CC         = $(MUSL_DIR)/usr/bin/musl-gcc
+CFLAGS     = -O2 -Wall -Wextra -fno-pie -no-pie -Wl,--build-id=none
+TARGET     = vigictl
 
 $(TARGET): main.c
 	$(CC) $(CFLAGS) -o $@ $<
