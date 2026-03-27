@@ -181,6 +181,8 @@ Debug cycle: **one failure → diagnose → fix → one retry**. Do NOT retry th
 
 CFLAGS includes `-g` and `-fno-omit-frame-pointer` for reliable stack unwinding.
 
+**ASLR design constraint:** When ASLR is eventually implemented, debug builds MUST disable it so that `make sym ADDR=...` continues to resolve addresses deterministically. Panic backtraces are useless if load addresses are randomized and not logged.
+
 **Panic backtrace:** `isr_dispatch` calls `panic_backtrace(s->rbp)` on kernel-mode exceptions (CS=0x08). Prints up to 16 return addresses. Ring-3 faults (CS=0x23) skip backtrace.
 
 ```
@@ -317,7 +319,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 30 | **mprotect + mmap improvements** — real mprotect (W^X via NX); munmap VA freelist (64-slot best-fit + coalescing) | ✅ Done |
 | 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | ✅ Done |
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | ✅ Done |
-| 33 | **Dynamic linking** — ELF interpreter (ld.so); shared library loading gated by `CAP_KIND_VFS_READ`; dlopen/dlsym | Not started |
+| 33 | **Dynamic linking** — ELF interpreter (musl ldso); PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; most binaries dynamic | Not started |
 | 34 | Writable root — ramfs populated from initrd; full live-system writability; foundation for installer | Not started |
 | 35 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
 | 36 | Framebuffer / VESA | Not started |
