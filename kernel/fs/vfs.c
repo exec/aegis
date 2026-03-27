@@ -3,6 +3,7 @@
 #include "ext2.h"
 #include "ramfs.h"
 #include "procfs.h"
+#include "pty.h"
 #include "printk.h"
 #include "uaccess.h"
 #include <stdint.h>
@@ -209,6 +210,22 @@ static const vfs_ops_t s_ext2_ops = {
 int
 vfs_open(const char *path, int flags, vfs_file_t *out)
 {
+    /* /dev/ptmx → allocate PTY master */
+    if (path[0]=='/' && path[1]=='d' && path[2]=='e' && path[3]=='v' && path[4]=='/' &&
+        path[5]=='p' && path[6]=='t' && path[7]=='m' && path[8]=='x' && path[9]=='\0')
+        return ptmx_open(flags, out);
+
+    /* /dev/pts/N → open PTY slave */
+    if (path[0]=='/' && path[1]=='d' && path[2]=='e' && path[3]=='v' && path[4]=='/' &&
+        path[5]=='p' && path[6]=='t' && path[7]=='s' && path[8]=='/') {
+        uint32_t idx = 0;
+        const char *s = path + 9;
+        while (*s >= '0' && *s <= '9')
+            idx = idx * 10 + (uint32_t)(*s++ - '0');
+        if (*s != '\0') return -2;
+        return pts_open(idx, flags, out);
+    }
+
     /* /proc/ → procfs */
     if (path[0]=='/' && path[1]=='p' && path[2]=='r' && path[3]=='o' &&
         path[4]=='c' && (path[5]=='/' || path[5]=='\0'))
@@ -340,6 +357,36 @@ vfs_stat_path(const char *path, k_stat_t *out)
         out->st_mode  = S_IFCHR | 0666;
         out->st_ino   = 4;
         out->st_rdev  = makedev(1, 3);
+        out->st_dev   = 1;
+        out->st_nlink = 1;
+        return 0;
+    }
+
+    if (streq(path, "/dev/ptmx")) {
+        __builtin_memset(out, 0, sizeof(*out));
+        out->st_mode  = S_IFCHR | 0666;
+        out->st_ino   = 6;
+        out->st_rdev  = makedev(5, 2);
+        out->st_dev   = 1;
+        out->st_nlink = 1;
+        return 0;
+    }
+
+    if (streq(path, "/dev/pts")) {
+        __builtin_memset(out, 0, sizeof(*out));
+        out->st_dev   = 1;
+        out->st_ino   = 7;
+        out->st_nlink = 2;
+        out->st_mode  = S_IFDIR | 0755;
+        return 0;
+    }
+
+    if (path[0]=='/' && path[1]=='d' && path[2]=='e' && path[3]=='v' && path[4]=='/' &&
+        path[5]=='p' && path[6]=='t' && path[7]=='s' && path[8]=='/') {
+        __builtin_memset(out, 0, sizeof(*out));
+        out->st_mode  = S_IFCHR | 0620;
+        out->st_ino   = 8;
+        out->st_rdev  = makedev(136, 0);
         out->st_dev   = 1;
         out->st_nlink = 1;
         return 0;

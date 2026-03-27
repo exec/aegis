@@ -1,13 +1,7 @@
 /* sys_file.c — File and filesystem syscalls */
 #include "sys_impl.h"
-
-#ifndef TCGETS
-#define TCGETS    0x5401UL
-#define TCSETS    0x5402UL
-#define TCSETSW   0x5403UL
-#define TCSETSF   0x5404UL
-#define TIOCSPGRP 0x5410UL
-#endif
+#include "pty.h"
+#include "tty.h"
 
 /*
  * sys_open — syscall 2
@@ -397,20 +391,43 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
 
+    /* Determine if this fd has an associated tty_t */
+    tty_t *tty = (tty_t *)0;
+    if (kbd_vfs_is_tty(f))
+        tty = tty_console();
+    else if (pty_is_slave(f))
+        tty = pty_get_tty(f);
+
     switch (arg2) {
-    case 0x5413UL: { /* TIOCGWINSZ — struct winsize: uint16 rows, cols, xpixel, ypixel */
+    case TIOCGWINSZ: {
+        if (tty)
+            return (uint64_t)(int64_t)tty_ioctl(tty, (uint32_t)arg2, arg3);
         uint16_t ws[4] = { 25, 80, 0, 0 };
         if (!user_ptr_valid(arg3, sizeof(ws)))
             return (uint64_t)-(int64_t)14; /* EFAULT */
         copy_to_user((void *)(uintptr_t)arg3, ws, sizeof(ws));
         return 0;
     }
-    case 0x540FUL: { /* TIOCGPGRP — return foreground PID */
-        uint32_t pgid = kbd_get_tty_pgrp();
-        if (!user_ptr_valid(arg3, sizeof(pgid)))
-            return (uint64_t)-(int64_t)14; /* EFAULT */
-        copy_to_user((void *)(uintptr_t)arg3, &pgid, sizeof(pgid));
-        return 0;
+    case TIOCGPGRP:
+        if (!tty) return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)tty_ioctl(tty, (uint32_t)arg2, arg3);
+    case TCGETS:
+        if (!tty) return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)tty_ioctl(tty, (uint32_t)arg2, arg3);
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF:
+        if (!tty) return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)tty_ioctl(tty, (uint32_t)arg2, arg3);
+    case TIOCSPGRP:
+        if (!tty) return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)tty_ioctl(tty, (uint32_t)arg2, arg3);
+    case TIOCSWINSZ: { /* 0x5414 */
+        tty_t *ws_tty = tty;
+        if (pty_is_master(f))
+            ws_tty = &((pty_pair_t *)f->priv)->tty;
+        if (!ws_tty) return (uint64_t)-(int64_t)25; /* ENOTTY */
+        return (uint64_t)(int64_t)tty_ioctl(ws_tty, (uint32_t)arg2, arg3);
     }
     case 0x541BUL: { /* FIONREAD — bytes available in pipe */
         int32_t avail = 0;
@@ -423,26 +440,25 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         copy_to_user((void *)(uintptr_t)arg3, &avail, sizeof(avail));
         return 0;
     }
-    case TCGETS: {
-        if (!kbd_vfs_is_tty(f))
+    case 0x80045430UL: { /* TIOCGPTN — get PTY number */
+        if (!pty_is_master(f))
             return (uint64_t)-(int64_t)25; /* ENOTTY */
-        return (uint64_t)(int64_t)kbd_vfs_tcgets((void *)(uintptr_t)arg3);
-    }
-    case TCSETS:
-    case TCSETSW:  /* drain is a no-op for our in-memory driver */
-    case TCSETSF: { /* flush is a no-op */
-        if (!kbd_vfs_is_tty(f))
-            return (uint64_t)-(int64_t)25; /* ENOTTY */
-        return (uint64_t)(int64_t)kbd_vfs_tcsets((const void *)(uintptr_t)arg3);
-    }
-    case TIOCSPGRP: {
-        if (!kbd_vfs_is_tty(f))
-            return (uint64_t)-(int64_t)25; /* ENOTTY */
-        if (!user_ptr_valid(arg3, sizeof(uint32_t)))
+        pty_pair_t *pair = (pty_pair_t *)f->priv;
+        uint32_t n = (uint32_t)pair->index;
+        if (!user_ptr_valid(arg3, sizeof(n)))
             return (uint64_t)-(int64_t)14; /* EFAULT */
-        uint32_t pgid;
-        copy_from_user(&pgid, (const void *)(uintptr_t)arg3, sizeof(uint32_t));
-        kbd_set_tty_pgrp(pgid);
+        copy_to_user((void *)(uintptr_t)arg3, &n, sizeof(n));
+        return 0;
+    }
+    case 0x40045431UL: { /* TIOCSPTLCK — lock/unlock PTY */
+        if (!pty_is_master(f))
+            return (uint64_t)-(int64_t)25; /* ENOTTY */
+        pty_pair_t *pair = (pty_pair_t *)f->priv;
+        uint32_t val;
+        if (!user_ptr_valid(arg3, sizeof(val)))
+            return (uint64_t)-(int64_t)14; /* EFAULT */
+        copy_from_user(&val, (const void *)(uintptr_t)arg3, sizeof(val));
+        pair->locked = val ? 1 : 0;
         return 0;
     }
     default:
