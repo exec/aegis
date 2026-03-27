@@ -355,7 +355,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ---
 
-*Last updated: 2026-03-27 — Phase 32 complete. TTY/PTY layer ✅. Shared line discipline ✅. 16 PTY pairs ✅. Sessions ✅. test_pty.py PASS.*
+*Last updated: 2026-03-27 — Phases 30-32 complete. All tests GREEN on remote (make test + test_mmap + test_proc + test_pty + test_vigil). Three bugs fixed during Phase 32 testing: (1) kernel BSS >4MB needed pd_hi[2] in vmm_init, (2) ioctl sign-extension for TIOCGPTN, (3) PTY master fd refcounting for fork. test_vigil fixed (expected cap count 8→9).*
 
 ---
 
@@ -380,6 +380,12 @@ A subsystem is ✅ only when `make test` passes with it included.
 8. **grantpt/unlockpt are security no-ops.** grantpt returns 0 (musl ioctl). unlockpt clears a lock flag. No ownership changes — capability system gates access.
 
 9. **Signal delivery from console ISR preserved.** Ctrl-C/Z/\ on the physical console still deliver signals immediately from the keyboard ISR for responsiveness. PTY slaves deliver signals from tty_read in syscall context.
+
+10. **Kernel BSS must stay under 6MB.** `vmm_init` maps pd_hi[0..2] (0-6MB). If BSS grows past 6MB (e.g., larger PTY pool), add pd_hi[3]. Currently ~4.1MB.
+
+11. **ioctl request codes must be compared as uint32_t.** musl passes ioctl requests as `int`; bit-31-set values (e.g., TIOCGPTN=0x80045430) are sign-extended to 0xFFFFFFFF80045430 in uint64_t arg2. `sys_ioctl` uses `switch ((uint32_t)arg2)`.
+
+12. **PTY master/slave fds are refcounted.** `master_refs`/`slave_refs` track dup/fork inheritance. `master_open`/`slave_open` only cleared when refcount hits 0.
 
 ---
 
