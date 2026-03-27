@@ -24,6 +24,7 @@ typedef struct {
 #define CAP_KIND_NET_SOCKET 7u   /* may call sys_socket / socket syscalls */
 #define CAP_KIND_NET_ADMIN  8u   /* may call sys_netcfg (set IP/mask/gw) */
 #define CAP_KIND_THREAD_CREATE 9u /* may call clone(CLONE_VM) */
+#define CAP_KIND_PROC_READ  10u  /* may read /proc/[other-pid] */
 
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)

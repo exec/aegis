@@ -1,6 +1,7 @@
 /* sys_process.c — Process lifecycle syscalls: exit, fork, execve, waitpid */
 #include "sys_impl.h"
 #include "futex.h"
+#include "vma.h"
 
 #define MAX_PROCESSES 64
 static uint32_t s_fork_count = 1;  /* starts at 1 for init */
@@ -236,6 +237,8 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     __builtin_memcpy(child->mmap_free, parent->mmap_free,
                      parent->mmap_free_count * sizeof(mmap_free_t));
     child->mmap_free_count = parent->mmap_free_count;
+    vma_share(child, parent);
+    __builtin_memcpy(child->exe_path, parent->exe_path, sizeof(parent->exe_path));
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     child->pid       = proc_alloc_pid();
     child->ppid      = parent->pid;
@@ -453,6 +456,8 @@ sys_fork(syscall_frame_t *frame)
     __builtin_memcpy(child->mmap_free, parent->mmap_free,
                      parent->mmap_free_count * sizeof(mmap_free_t));
     child->mmap_free_count = parent->mmap_free_count;
+    vma_clone(child, parent);
+    __builtin_memcpy(child->exe_path, parent->exe_path, sizeof(parent->exe_path));
 #ifdef __aarch64__
     /* ARM64: musl sets TPIDR_EL0 directly, not via arch_prctl.
      * Read the current TPIDR_EL0 value and save to child. */
@@ -695,6 +700,7 @@ retry:;
                 /* Free zombie resources. */
                 kva_free_pages(child->task.stack_base, child->task.stack_pages);
                 vmm_free_user_pml4(child->pml4_phys);
+                vma_free(child);
                 kva_free_pages(child, 1);
 
                 /* Clear waiting_for on the caller — no longer blocked. */
@@ -848,6 +854,13 @@ sys_execve(syscall_frame_t *frame,
     proc->brk       = 0;
     proc->mmap_base = 0x0000700000000000ULL;
     proc->mmap_free_count = 0;
+    vma_clear(proc);
+    {
+        uint64_t pi;
+        for (pi = 0; pi < sizeof(proc->exe_path) - 1 && path[pi]; pi++)
+            proc->exe_path[pi] = path[pi];
+        proc->exe_path[pi] = '\0';
+    }
     proc->task.fs_base = 0;
 
     /* Reset capability table to baseline on exec — exec is a capability boundary.
@@ -863,6 +876,7 @@ sys_execve(syscall_frame_t *frame,
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ, CAP_RIGHTS_READ);
 
         /* Apply pre-registered exec caps, then zero them (consumed on exec). */
         {
@@ -909,6 +923,10 @@ sys_execve(syscall_frame_t *frame,
                               VMM_FLAG_WRITABLE);
         }
     }
+
+    /* Record user stack VMA */
+    vma_insert(proc, USER_STACK_BASE_EXEC, USER_STACK_NPAGES * 4096ULL,
+               0x01 | 0x02, VMA_STACK);
 
     /* 8. Build ABI initial stack at USER_STACK_TOP_EXEC.
      *

@@ -15,6 +15,7 @@ pub struct CapSlot {
 }
 
 const ENOCAP: u32 = 130;
+// CAP_KIND_PROC_READ = 10 — defined in cap.h; Rust validates generically.
 
 /* Must match CAP_TABLE_SIZE in kernel/cap/cap.h */
 const CAP_TABLE_SIZE: u32 = 16;
