@@ -79,11 +79,60 @@ void net_get_config(ip4_addr_t *ip, ip4_addr_t *mask, ip4_addr_t *gw)
 static uint8_t s_ip_buf[1500];
 static uint16_t s_ip_id;
 
+/* ── Loopback queue ──────────────────────────────────────────────────────
+ * Loopback packets are queued here and drained by ip_loopback_poll()
+ * (called from PIT at 100Hz). Synchronous delivery would cause re-entry:
+ *   ip_send(SYN) → ip_rx → tcp_rx → ip_send(SYN-ACK) → ip_rx → ...
+ * clobbering static buffers. Deferred delivery breaks the recursion. */
+#define LO_RING_SIZE 8
+#define LO_PKT_MAX  1500
+static uint8_t  s_lo_ring[LO_RING_SIZE][LO_PKT_MAX];
+static uint16_t s_lo_len[LO_RING_SIZE];
+static uint32_t s_lo_head;   /* next write slot */
+static uint32_t s_lo_tail;   /* next read slot */
+static netdev_t *s_lo_dev;   /* device context for ip_rx callback */
+
+void ip_loopback_poll(void)
+{
+    while (s_lo_tail != s_lo_head) {
+        uint32_t idx = s_lo_tail & (LO_RING_SIZE - 1);
+        ip_rx(s_lo_dev, (void *)0, s_lo_ring[idx], s_lo_len[idx]);
+        s_lo_tail++;
+    }
+}
+
 int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
             const void *payload, uint16_t len)
 {
     if (!dev)        return -1;
     if (len > 1480)  return -1; /* EMSGSIZE — no fragmentation in v1 */
+
+    /* Loopback: if destination is ourselves or 127.0.0.0/8, queue the
+     * packet for deferred delivery instead of sending it to the NIC. */
+    if ((s_my_ip != 0 && dst_ip == s_my_ip) ||
+        (ntohl(dst_ip) >> 24) == 127) {
+        if (s_lo_head - s_lo_tail >= LO_RING_SIZE)
+            return -1;  /* loopback queue full — drop */
+        uint32_t idx = s_lo_head & (LO_RING_SIZE - 1);
+        uint16_t total = (uint16_t)(sizeof(ip_hdr_t) + len);
+        ip_hdr_t *hdr  = (ip_hdr_t *)s_lo_ring[idx];
+        hdr->ver_ihl    = 0x45;
+        hdr->dscp_ecn   = 0;
+        hdr->total_len  = htons(total);
+        hdr->id         = htons(s_ip_id++);
+        hdr->flags_frag = 0;
+        hdr->ttl        = 64;
+        hdr->proto      = proto;
+        hdr->checksum   = 0;
+        hdr->src        = s_my_ip ? s_my_ip : dst_ip;
+        hdr->dst        = dst_ip;
+        hdr->checksum   = net_checksum_finish(net_checksum(hdr, sizeof(ip_hdr_t)));
+        _ip_memcpy(s_lo_ring[idx] + sizeof(ip_hdr_t), payload, len);
+        s_lo_len[idx] = total;
+        s_lo_dev = dev;
+        s_lo_head++;
+        return 0;
+    }
 
     /* Determine next-hop MAC. */
     mac_addr_t next_hop_mac;

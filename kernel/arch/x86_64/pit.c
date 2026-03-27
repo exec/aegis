@@ -6,6 +6,7 @@
 #include "../drivers/xhci.h"
 #include "netdev.h"
 #include "../../net/tcp.h"
+#include "../../net/ip.h"
 
 #define PIT_CHANNEL0 0x40
 #define PIT_CMD      0x43
@@ -52,6 +53,7 @@ pit_handler(void)
     sched_tick();
     xhci_poll();    /* poll USB event ring for HID reports (no-op if inactive) */
     netdev_poll_all();  /* poll registered network devices (virtio-net etc.) */
+    ip_loopback_poll(); /* drain loopback queue (127.0.0.1, self-addressed) */
     tcp_tick();         /* Phase 25: TCP retransmit timer */
     /* Yield to QEMU's SLIRP event loop via port I/O (causes VM-exit on TCG).
      * The doorbell write in virtio_net_poll triggers virtio processing but not

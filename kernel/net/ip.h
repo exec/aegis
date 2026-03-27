@@ -63,4 +63,9 @@ void ip_rx(netdev_t *dev, const void *frame,
  *   4. Prints [NET] ICMP: echo reply from 10.0.2.2 on success. */
 void net_init(void);
 
+/* ip_loopback_poll — drain the loopback queue. Called from the PIT handler
+ * at 100Hz alongside netdev_poll_all and tcp_tick. Delivers queued loopback
+ * packets (127.0.0.0/8 and self-addressed) to ip_rx for processing. */
+void ip_loopback_poll(void);
+
 #endif /* IP_H */
