@@ -4,6 +4,7 @@ import subprocess, time, sys, os, socket, select, tempfile
 
 QEMU         = "qemu-system-x86_64"
 ISO          = "build/aegis.iso"
+DISK         = "build/disk.img"
 BOOT_TIMEOUT = 900    # seconds; generous for loaded machines
 CMD_TIMEOUT  = 120    # seconds per command after prompt appears
 
@@ -36,9 +37,9 @@ def build_iso():
         os.setegid(real_gid)
         os.seteuid(real_uid)
 
-    r = subprocess.run(["make", "INIT=shell", "iso"], preexec_fn=drop_euid)
+    r = subprocess.run(["make", "INIT=vigil", "iso"], preexec_fn=drop_euid)
     if r.returncode != 0:
-        print("[FAIL] make INIT=shell iso failed")
+        print("[FAIL] make INIT=vigil iso failed")
         sys.exit(1)
 
 
@@ -92,14 +93,20 @@ def _read_until_prompt(proc, deadline):
 
 def _boot_qemu():
     """Launch QEMU and return (proc, mon_sock, mon_path). Waits for monitor socket."""
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    disk_path = os.path.join(ROOT, DISK)
     mon_path = tempfile.mktemp(suffix=".sock", prefix="aegis_mon_")
     cmd = [
         QEMU,
-        "-machine", "pc", "-cpu", "Broadwell",
+        "-machine", "q35", "-cpu", "Broadwell",
         "-cdrom", ISO, "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
-        "-no-reboot", "-m", "128M",
+        "-no-reboot", "-m", "256M",
+        "-drive", "file=%s,if=none,id=nvme0,format=raw" % disk_path,
+        "-device", "nvme,drive=nvme0,serial=aegis0",
+        "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",
+        "-netdev", "user,id=n0",
         "-monitor", "unix:%s,server,nowait" % mon_path,
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
@@ -138,6 +145,38 @@ def _teardown_qemu(proc, mon_sock, mon_path):
         pass
 
 
+def _read_until_prompt_needle(proc, needle, deadline):
+    """Like _read_until_prompt but waits for an arbitrary needle instead of '# '."""
+    import fcntl
+    fd = proc.stdout.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+    buf = b""
+    while time.time() < deadline:
+        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        buf += chunk
+        if needle in buf:
+            return buf.decode(errors="replace")
+    return buf.decode(errors="replace")
+
+
+def _login(proc, mon_sock):
+    """Wait for login prompt and authenticate. Returns after shell prompt appears."""
+    _read_until_prompt_needle(proc, b"login: ", time.time() + BOOT_TIMEOUT)
+    _type_string(mon_sock, "root\n")
+    _read_until_prompt_needle(proc, b"assword", time.time() + 10)
+    _type_string(mon_sock, "forevervigilant\n")
+    _read_until_prompt(proc, time.time() + 10)
+
+
 def _run_cmd(proc, mon_sock, cmd_str, timeout=None):
     """Type a shell command, wait for the next prompt, return output between prompts."""
     if timeout is None:
@@ -151,7 +190,7 @@ def test_ls_shows_new_bins():
     """ls /bin lists wc, grep, sort — verifies stat works and new binaries are present."""
     proc, mon_sock, mon_path = _boot_qemu()
 
-    _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    _login(proc, mon_sock)
 
     out = _run_cmd(proc, mon_sock, "ls /bin")
     _teardown_qemu(proc, mon_sock, mon_path)
@@ -168,7 +207,7 @@ def test_wc_counts_bytes():
     """echo hello | wc -c prints 6 — verifies wc binary and pipe work."""
     proc, mon_sock, mon_path = _boot_qemu()
 
-    _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    _login(proc, mon_sock)
 
     # "echo hello\n" is 6 bytes; wc -c counts bytes
     out = _run_cmd(proc, mon_sock, "echo hello | wc -c")
@@ -185,7 +224,7 @@ def test_grep_matches():
     """echo hello | grep hello prints hello — verifies grep binary works."""
     proc, mon_sock, mon_path = _boot_qemu()
 
-    _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    _login(proc, mon_sock)
 
     out = _run_cmd(proc, mon_sock, "echo hello | grep hello")
     _teardown_qemu(proc, mon_sock, mon_path)
@@ -201,7 +240,7 @@ def test_cat_motd_stat():
     """cat /etc/motd prints the MOTD — verifies fstat on initrd files works."""
     proc, mon_sock, mon_path = _boot_qemu()
 
-    _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    _login(proc, mon_sock)
 
     out = _run_cmd(proc, mon_sock, "cat /etc/motd")
     _teardown_qemu(proc, mon_sock, mon_path)
@@ -215,7 +254,12 @@ def test_cat_motd_stat():
 
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(ROOT)
+    disk_path = os.path.join(ROOT, DISK)
+    if not os.path.exists(disk_path):
+        print(f"SKIP: {DISK} not found — run 'make disk' first")
+        sys.exit(0)
     build_iso()
     tests = [
         test_ls_shows_new_bins,

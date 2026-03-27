@@ -4,6 +4,7 @@ import subprocess, time, sys, os, socket, select, tempfile, fcntl
 
 QEMU         = "qemu-system-x86_64"
 ISO          = "build/aegis.iso"
+DISK         = "build/disk.img"
 BOOT_TIMEOUT = 900    # generous: slow/loaded host machines can take 600+ s to boot
 CMD_TIMEOUT  = 120    # per-command wait after the shell prompt appears
 
@@ -51,9 +52,9 @@ def build_iso():
         os.setegid(real_gid)
         os.seteuid(real_uid)
 
-    r = subprocess.run(["make", "INIT=shell", "iso"], preexec_fn=drop_euid)
+    r = subprocess.run(["make", "INIT=vigil", "iso"], preexec_fn=drop_euid)
     if r.returncode != 0:
-        print("[FAIL] make INIT=shell iso failed")
+        print("[FAIL] make INIT=vigil iso failed")
         sys.exit(1)
 
 
@@ -112,6 +113,28 @@ def _read_until_prompt(proc, deadline):
     return buf.decode(errors="replace")
 
 
+def _read_until_prompt_needle(proc, needle, deadline):
+    """Like _read_until_prompt but waits for an arbitrary needle instead of '# '."""
+    fd = proc.stdout.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+    buf = b""
+    while time.time() < deadline:
+        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        buf += chunk
+        if needle in buf:
+            return buf.decode(errors="replace")
+    return buf.decode(errors="replace")
+
+
 def run_shell_session(commands):
     """Boot QEMU shell, inject commands via PS/2 keyboard, collect serial output.
 
@@ -119,14 +142,20 @@ def run_shell_session(commands):
     keyboard driver inside the guest receives them.  Writing to QEMU's stdin
     only affects the serial console, which the shell does not read from.
     """
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    disk_path = os.path.join(ROOT, DISK)
     mon_path = tempfile.mktemp(suffix=".sock", prefix="aegis_mon_")
     cmd = [
         QEMU,
-        "-machine", "pc", "-cpu", "Broadwell",
+        "-machine", "q35", "-cpu", "Broadwell",
         "-cdrom", ISO, "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
-        "-no-reboot", "-m", "128M",
+        "-no-reboot", "-m", "256M",
+        "-drive", "file=%s,if=none,id=nvme0,format=raw" % disk_path,
+        "-device", "nvme,drive=nvme0,serial=aegis0",
+        "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",
+        "-netdev", "user,id=n0",
         "-monitor", "unix:%s,server,nowait" % mon_path,
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
@@ -152,14 +181,17 @@ def run_shell_session(commands):
 
     all_output = []
 
-    # Wait for initial shell prompt '\n# '.
-    # BOOT_TIMEOUT must exceed the actual boot time (600+ s on loaded hosts).
-    # If the boot deadline fires before the shell prompt arrives, the injected
-    # command races against the still-arriving boot output: _read_until_prompt
-    # for the command sees '\n# ' from the first shell prompt instead of from
-    # after the command output, returning too early and missing the command result.
-    boot_out = _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    # Wait for login prompt, authenticate, then wait for shell prompt
+    boot_out = _read_until_prompt_needle(proc, b"login: ", time.time() + BOOT_TIMEOUT)
     all_output.append(boot_out)
+    _type_string(mon_sock, "root\n")
+
+    pw_out = _read_until_prompt_needle(proc, b"assword", time.time() + 10)
+    all_output.append(pw_out)
+    _type_string(mon_sock, "forevervigilant\n")
+
+    shell_out = _read_until_prompt(proc, time.time() + 10)
+    all_output.append(shell_out)
 
     # Inject each command and collect output until next prompt
     for line in commands:
@@ -216,7 +248,12 @@ def test_stderr_redirect():
 
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(ROOT)
+    disk_path = os.path.join(ROOT, DISK)
+    if not os.path.exists(disk_path):
+        print(f"SKIP: {DISK} not found — run 'make disk' first")
+        sys.exit(0)
     build_iso()
     tests = [
         test_pipe_ls_cat,
