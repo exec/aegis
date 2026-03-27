@@ -563,6 +563,56 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
     arch_vmm_invlpg(virt);
 }
 
+int
+vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
+{
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    /* Walk-overwrite pattern. Return -1 if any level is absent. */
+    uint64_t *pml4  = vmm_window_map(pml4_phys);
+    uint64_t  pml4e = pml4[pml4_idx];
+    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return -1; }
+
+    uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
+    uint64_t  pdpte = pdpt[pdpt_idx];
+    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return -1; }
+
+    uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
+    uint64_t  pde = pd[pd_idx];
+    if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
+        vmm_window_unmap(); return -1;
+    }
+
+    uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
+    uint64_t  old = pt[pt_idx];
+
+    /* If page was never mapped (no physical address), skip. */
+    if (!(old & VMM_FLAG_PRESENT) && flags == 0) {
+        vmm_window_unmap();
+        return 0;  /* PROT_NONE on unmapped page is a no-op */
+    }
+    if (!(old & VMM_FLAG_PRESENT)) {
+        vmm_window_unmap();
+        return -1;  /* can't set real prot on unmapped page */
+    }
+
+    /* Preserve physical address, replace flags. */
+    uint64_t phys = ARCH_PTE_ADDR(old);
+    if (flags == 0) {
+        /* PROT_NONE: store phys with no PRESENT bit.
+         * CPU ignores the PTE but we keep the address for munmap. */
+        pt[pt_idx] = phys;
+    } else {
+        pt[pt_idx] = phys | arch_pte_from_flags(flags);
+    }
+    vmm_window_unmap();
+    arch_vmm_invlpg(virt);
+    return 0;
+}
+
 /* vmm_copy_user_pages — full copy of all user-half (PML4 entries 0-255) pages
  * from src_pml4 to dst_pml4.
  * For each present user leaf PTE in src_pml4: allocates a new frame via pmm,

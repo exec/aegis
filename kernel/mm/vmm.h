@@ -99,6 +99,13 @@ uint64_t vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt);
  * Silent no-op if the page is not mapped. */
 void vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt);
 
+/* vmm_set_user_prot — change PTE flags for a single user page in pml4_phys.
+ * Walks the 4-level page table to the leaf PTE, preserves the physical address,
+ * and overwrites the flag bits. Issues invlpg for virt.
+ * flags=0 clears PRESENT (PROT_NONE). Returns 0 on success, -1 if the page
+ * is not mapped (caller should skip silently, matching Linux mprotect). */
+int vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags);
+
 /* vmm_zero_page — zero the physical page at phys using the mapped-window slot.
  * Required for MAP_ANONYMOUS: musl's heap allocator depends on zeroed pages.
  * Uses the internal vmm_window_map/vmm_window_unmap pair. */
