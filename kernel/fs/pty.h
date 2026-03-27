@@ -16,7 +16,9 @@ typedef struct {
     uint32_t output_head, output_tail;
     tty_t    tty;                         /* slave's TTY */
     uint8_t  master_open;
+    uint8_t  master_refs;                 /* refcount for master fd (dup/fork) */
     uint8_t  slave_open;
+    uint8_t  slave_refs;                  /* refcount for slave fd */
     uint8_t  locked;                      /* cleared by unlockpt */
     uint8_t  in_use;
     uint8_t  index;                       /* 0-15 */

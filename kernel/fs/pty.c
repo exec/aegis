@@ -45,11 +45,13 @@ ring_pull(uint8_t *buf, uint32_t *tail)
 
 static int  master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
 static int  master_write_fn(void *priv, const void *buf, uint64_t len);
+static void master_dup_fn(void *priv);
 static void master_close_fn(void *priv);
 static int  master_stat_fn(void *priv, k_stat_t *st);
 
 static int  slave_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
 static int  slave_write_fn(void *priv, const void *buf, uint64_t len);
+static void slave_dup_fn(void *priv);
 static void slave_close_fn(void *priv);
 static int  slave_stat_fn(void *priv, k_stat_t *st);
 
@@ -58,7 +60,7 @@ static const vfs_ops_t s_master_ops = {
 	.write   = master_write_fn,
 	.close   = master_close_fn,
 	.readdir = (void *)0,
-	.dup     = (void *)0,
+	.dup     = master_dup_fn,
 	.stat    = master_stat_fn,
 };
 
@@ -67,7 +69,7 @@ static const vfs_ops_t s_slave_ops = {
 	.write   = slave_write_fn,
 	.close   = slave_close_fn,
 	.readdir = (void *)0,
-	.dup     = (void *)0,
+	.dup     = slave_dup_fn,
 	.stat    = slave_stat_fn,
 };
 
@@ -235,13 +237,24 @@ master_write_fn(void *priv, const void *buf, uint64_t len)
 }
 
 static void
+master_dup_fn(void *priv)
+{
+	pty_pair_t *pair = (pty_pair_t *)priv;
+	pair->master_refs++;
+}
+
+static void
 master_close_fn(void *priv)
 {
 	pty_pair_t *pair = (pty_pair_t *)priv;
-	pair->master_open = 0;
-	if (!pair->slave_open) {
-		pair->in_use = 0;
+	if (pair->master_refs > 1) {
+		pair->master_refs--;
+		return;
 	}
+	pair->master_open = 0;
+	pair->master_refs = 0;
+	if (!pair->slave_open)
+		pair->in_use = 0;
 }
 
 static int
@@ -301,10 +314,22 @@ slave_write_fn(void *priv, const void *buf, uint64_t len)
 }
 
 static void
+slave_dup_fn(void *priv)
+{
+	pty_pair_t *pair = (pty_pair_t *)priv;
+	pair->slave_refs++;
+}
+
+static void
 slave_close_fn(void *priv)
 {
 	pty_pair_t *pair = (pty_pair_t *)priv;
+	if (pair->slave_refs > 1) {
+		pair->slave_refs--;
+		return;
+	}
 	pair->slave_open = 0;
+	pair->slave_refs = 0;
 	if (!pair->master_open) {
 		pair->in_use = 0;
 	}
@@ -343,6 +368,7 @@ ptmx_open(int flags, vfs_file_t *out)
 	pair->index = (uint8_t)i;
 	pair->in_use = 1;
 	pair->master_open = 1;
+		pair->master_refs = 1;
 	pair->locked = 1; /* cleared by unlockpt (grantpt/unlockpt ioctl) */
 
 	tty_init_defaults(&pair->tty);
@@ -376,6 +402,7 @@ pts_open(uint32_t index, int flags, vfs_file_t *out)
 		return -13; /* EACCES */
 
 	pair->slave_open = 1;
+		pair->slave_refs = 1;
 	try_acquire_ctty(pair);
 
 	out->ops    = &s_slave_ops;
