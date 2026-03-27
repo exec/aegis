@@ -5,3 +5,9 @@ kernel/cap/target/
 *.elf
 .worktrees/
 reference/
+kernel/*_bin.c
+kernel/*_blob.c
+.init_stamp_*
+user/vigil/vigil
+user/vigictl/vigictl
+user/dhcp/dhcp

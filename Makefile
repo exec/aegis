@@ -58,8 +58,6 @@ else
 INIT_ELF_SRC = user/hello/hello.elf
 endif
 
-INIT_BIN_C = kernel/init_bin.c
-INIT_STAMP  = .init_stamp_$(INIT)
 
 # ── Source lists ─────────────────────────────────────────────────────────────
 ARCH_SRCS = \
@@ -141,34 +139,38 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_random.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
-    $(INIT_BIN_C)
 
-# Programs embedded in initrd as binary C arrays
-PROG_BIN_SRCS = \
-    kernel/shell_bin.c \
-    kernel/ls_bin.c \
-    kernel/cat_bin.c \
-    kernel/echo_bin.c \
-    kernel/pwd_bin.c \
-    kernel/uname_bin.c \
-    kernel/clear_bin.c \
-    kernel/true_bin.c \
-    kernel/false_bin.c \
-    kernel/wc_bin.c \
-    kernel/grep_bin.c \
-    kernel/sort_bin.c \
-    kernel/mkdir_bin.c \
-    kernel/touch_bin.c \
-    kernel/rm_bin.c \
-    kernel/cp_bin.c \
-    kernel/mv_bin.c \
-    kernel/whoami_bin.c \
-    kernel/oksh_bin.c \
-    kernel/login_bin.c \
-    kernel/vigil_bin.c \
-    kernel/vigictl_bin.c \
-    kernel/httpd_blob.c \
-    kernel/dhcp_blob.c
+# Programs embedded in initrd via objcopy --input binary
+OBJCOPY = x86_64-linux-gnu-objcopy
+
+USER_ELFS = \
+    user/shell/shell.elf \
+    user/ls/ls.elf \
+    user/cat/cat.elf \
+    user/echo/echo.elf \
+    user/pwd/pwd.elf \
+    user/uname/uname.elf \
+    user/clear/clear.elf \
+    user/true/true.elf \
+    user/false/false.elf \
+    user/wc/wc.elf \
+    user/grep/grep.elf \
+    user/sort/sort.elf \
+    user/mkdir/mkdir.elf \
+    user/touch/touch.elf \
+    user/rm/rm.elf \
+    user/cp/cp.elf \
+    user/mv/mv.elf \
+    user/whoami/whoami.elf \
+    user/oksh/oksh.elf \
+    user/login/login.elf \
+    user/vigil/vigil \
+    user/vigictl/vigictl \
+    user/httpd/httpd.elf \
+    user/dhcp/dhcp
+
+BLOB_OBJS = $(patsubst %,$(BUILD)/blobs/%.o,$(notdir $(basename $(USER_ELFS)))) $(BUILD)/blobs/init.o
+
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -181,12 +183,11 @@ FS_OBJS        = $(patsubst kernel/%.c,$(BUILD)/%.o,$(FS_SRCS))
 DRIVER_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(DRIVER_SRCS))
 NET_OBJS       = $(patsubst kernel/%.c,$(BUILD)/%.o,$(NET_SRCS))
 USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
-PROG_BIN_OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(PROG_BIN_SRCS))
 
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
-           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
+           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(BLOB_OBJS)
 
-.PHONY: all iso disk run run-fb shell oksh login test clean
+.PHONY: all iso disk run run-fb shell oksh login test clean gdb sym curl_bin
 
 all: $(BUILD)/aegis.elf
 
@@ -212,25 +213,6 @@ $(CAP_LIB): kernel/cap/src/lib.rs kernel/cap/Cargo.toml
 
 # ── INIT binary (hello or shell) ──────────────────────────────────────────────
 # Stamp file detects INIT variable changes and forces rebuild of init_bin.c
-$(INIT_STAMP):
-	@rm -f .init_stamp_*
-	@touch $@
-
-.PHONY: $(INIT_STAMP)
-
-user/hello/hello.elf:
-	$(MAKE) -C user/hello
-
-user/shell/shell.elf:
-	$(MAKE) -C user/shell
-
-$(INIT_BIN_C): $(INIT_STAMP) $(INIT_ELF_SRC)
-	@ELF=$(notdir $(INIT_ELF_SRC)); \
-	 NAME=$$(basename $$ELF .elf); \
-	 cd $(dir $(INIT_ELF_SRC)) && xxd -i $$ELF | \
-	 sed "s/$${NAME}_elf/init_elf/g; s/unsigned char $${NAME}\b/unsigned char init_elf/g; s/unsigned int $${NAME}_len/unsigned int init_elf_len/g" > ../../$(INIT_BIN_C) && \
-	 echo "const char init_name[] = \"$$NAME\";" >> ../../$(INIT_BIN_C)
-
 # ── Program ELF binaries ──────────────────────────────────────────────────────
 user/ls/ls.elf:
 	$(MAKE) -C user/ls
@@ -295,102 +277,184 @@ user/vigil/vigil: user/vigil/main.c
 user/vigictl/vigictl: user/vigictl/main.c
 	$(MAKE) -C user/vigictl
 
-# ── Program binary C arrays ───────────────────────────────────────────────────
-kernel/shell_bin.c: user/shell/shell.elf
-	cd user/shell && xxd -i shell.elf > ../../kernel/shell_bin.c
+# ── Binary blob embedding (objcopy) ──────────────────────────────────────────
+# Each user ELF → linkable .o with _binary_<name>_bin_start/end symbols.
+# Copy to build/blobs/<name>.bin, cd there, objcopy — so symbol names are clean.
 
-kernel/ls_bin.c: user/ls/ls.elf
-	cd user/ls && xxd -i ls.elf > ../../kernel/ls_bin.c
+$(BUILD)/blobs/shell.o: user/shell/shell.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/shell.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  shell.bin shell.o
 
-kernel/cat_bin.c: user/cat/cat.elf
-	cd user/cat && xxd -i cat.elf > ../../kernel/cat_bin.c
+$(BUILD)/blobs/ls.o: user/ls/ls.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/ls.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  ls.bin ls.o
 
-kernel/echo_bin.c: user/echo/echo.elf
-	cd user/echo && xxd -i echo.elf > ../../kernel/echo_bin.c
+$(BUILD)/blobs/cat.o: user/cat/cat.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/cat.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  cat.bin cat.o
 
-kernel/pwd_bin.c: user/pwd/pwd.elf
-	cd user/pwd && xxd -i pwd.elf > ../../kernel/pwd_bin.c
+$(BUILD)/blobs/echo.o: user/echo/echo.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/echo.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  echo.bin echo.o
 
-kernel/uname_bin.c: user/uname/uname.elf
-	cd user/uname && xxd -i uname.elf > ../../kernel/uname_bin.c
+$(BUILD)/blobs/pwd.o: user/pwd/pwd.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/pwd.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  pwd.bin pwd.o
 
-kernel/clear_bin.c: user/clear/clear.elf
-	cd user/clear && xxd -i clear.elf > ../../kernel/clear_bin.c
+$(BUILD)/blobs/uname.o: user/uname/uname.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/uname.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  uname.bin uname.o
 
-# true and false: rename symbols to avoid C keyword conflicts
-# true.elf -> true_bin_elf / true_bin_elf_len
-# false.elf -> false_bin_elf / false_bin_elf_len
-kernel/true_bin.c: user/true/true.elf
-	cd user/true && xxd -i true.elf | \
-	  sed 's/unsigned char true_elf/unsigned char true_bin_elf/g; s/unsigned int true_elf_len/unsigned int true_bin_elf_len/g' \
-	  > ../../kernel/true_bin.c
+$(BUILD)/blobs/clear.o: user/clear/clear.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/clear.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  clear.bin clear.o
 
-kernel/false_bin.c: user/false/false.elf
-	cd user/false && xxd -i false.elf | \
-	  sed 's/unsigned char false_elf/unsigned char false_bin_elf/g; s/unsigned int false_elf_len/unsigned int false_bin_elf_len/g' \
-	  > ../../kernel/false_bin.c
+$(BUILD)/blobs/true.o: user/true/true.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/true.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  true.bin true.o
 
-kernel/wc_bin.c: user/wc/wc.elf
-	cd user/wc && xxd -i wc.elf > ../../kernel/wc_bin.c
+$(BUILD)/blobs/false.o: user/false/false.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/false.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  false.bin false.o
 
-kernel/grep_bin.c: user/grep/grep.elf
-	cd user/grep && xxd -i grep.elf > ../../kernel/grep_bin.c
+$(BUILD)/blobs/wc.o: user/wc/wc.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/wc.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  wc.bin wc.o
 
-kernel/sort_bin.c: user/sort/sort.elf
-	cd user/sort && xxd -i sort.elf > ../../kernel/sort_bin.c
+$(BUILD)/blobs/grep.o: user/grep/grep.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/grep.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  grep.bin grep.o
 
-kernel/mkdir_bin.c: user/mkdir/mkdir.elf
-	cd user/mkdir && xxd -i mkdir.elf > ../../kernel/mkdir_bin.c
+$(BUILD)/blobs/sort.o: user/sort/sort.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/sort.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  sort.bin sort.o
 
-kernel/touch_bin.c: user/touch/touch.elf
-	cd user/touch && xxd -i touch.elf > ../../kernel/touch_bin.c
+$(BUILD)/blobs/mkdir.o: user/mkdir/mkdir.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/mkdir.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  mkdir.bin mkdir.o
 
-kernel/rm_bin.c: user/rm/rm.elf
-	cd user/rm && xxd -i rm.elf > ../../kernel/rm_bin.c
+$(BUILD)/blobs/touch.o: user/touch/touch.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/touch.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  touch.bin touch.o
 
-kernel/cp_bin.c: user/cp/cp.elf
-	cd user/cp && xxd -i cp.elf > ../../kernel/cp_bin.c
+$(BUILD)/blobs/rm.o: user/rm/rm.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/rm.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  rm.bin rm.o
 
-kernel/mv_bin.c: user/mv/mv.elf
-	cd user/mv && xxd -i mv.elf > ../../kernel/mv_bin.c
+$(BUILD)/blobs/cp.o: user/cp/cp.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/cp.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  cp.bin cp.o
 
-kernel/whoami_bin.c: user/whoami/whoami.elf
-	cd user/whoami && xxd -i whoami.elf > ../../kernel/whoami_bin.c
+$(BUILD)/blobs/mv.o: user/mv/mv.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/mv.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  mv.bin mv.o
 
-kernel/oksh_bin.c: user/oksh/oksh.elf
-	cd user/oksh && xxd -i oksh.elf > ../../kernel/oksh_bin.c
+$(BUILD)/blobs/whoami.o: user/whoami/whoami.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/whoami.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  whoami.bin whoami.o
 
-kernel/login_bin.c: user/login/login.elf
-	cd user/login && xxd -i login.elf > ../../kernel/login_bin.c
+$(BUILD)/blobs/oksh.o: user/oksh/oksh.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/oksh.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  oksh.bin oksh.o
 
-kernel/vigil_bin.c: user/vigil/vigil
-	cd user/vigil && xxd -i vigil | \
-	  sed 's/unsigned char vigil/unsigned char vigil_elf/g; s/unsigned int vigil_len/unsigned int vigil_elf_len/g' \
-	  > ../../kernel/vigil_bin.c
+$(BUILD)/blobs/login.o: user/login/login.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/login.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  login.bin login.o
 
-kernel/vigictl_bin.c: user/vigictl/vigictl
-	cd user/vigictl && xxd -i vigictl | \
-	  sed 's/unsigned char vigictl/unsigned char vigictl_elf/g; s/unsigned int vigictl_len/unsigned int vigictl_elf_len/g' \
-	  > ../../kernel/vigictl_bin.c
+$(BUILD)/blobs/vigil.o: user/vigil/vigil
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/vigil.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  vigil.bin vigil.o
 
-build/httpd_bin.elf: kernel/httpd_bin.c
-	musl-gcc -static -Wall -O2 -o $@ $<
+$(BUILD)/blobs/vigictl.o: user/vigictl/vigictl
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/vigictl.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  vigictl.bin vigictl.o
 
-# Embed compiled httpd ELF into kernel initrd blob.
-# The xxd-generated names use the filename (httpd_bin.elf → httpd_bin_elf /
-# httpd_bin_elf_len) which match the extern declarations in initrd.c.
-kernel/httpd_blob.c: build/httpd_bin.elf
-	cd build && xxd -i httpd_bin.elf > ../kernel/httpd_blob.c
+$(BUILD)/blobs/httpd.o: user/httpd/httpd.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/httpd.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  httpd.bin httpd.o
 
-user/dhcp/dhcp: user/dhcp/main.c
-	$(MAKE) -C user/dhcp
+$(BUILD)/blobs/dhcp.o: user/dhcp/dhcp
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/dhcp.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  dhcp.bin dhcp.o
 
-build/dhcp_bin.elf: user/dhcp/dhcp
-	cp user/dhcp/dhcp build/dhcp_bin.elf
-
-# Embed compiled dhcp ELF into kernel initrd blob.
-kernel/dhcp_blob.c: build/dhcp_bin.elf
-	cd build && xxd -i dhcp_bin.elf > ../kernel/dhcp_blob.c
+$(BUILD)/blobs/init.o: $(INIT_ELF_SRC)
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/init.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  init.bin init.o
 
 # BearSSL source (fetch if absent)
 references/bearssl-0.6/inc/bearssl.h:
@@ -404,11 +468,10 @@ build/bearssl-install/lib/libbearssl.a: references/bearssl-0.6/inc/bearssl.h
 build/curl/curl: build/bearssl-install/lib/libbearssl.a
 	bash tools/build-curl.sh
 
-.PHONY: curl_bin
 curl_bin: build/curl/curl
 
 # ── Final link ────────────────────────────────────────────────────────────────
-$(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
+$(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
 $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
@@ -436,8 +499,8 @@ DISK_USER_BINS = \
 	user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
 	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
 	user/mkdir/mkdir.elf user/touch/touch.elf \
-	build/httpd_bin.elf \
-	build/dhcp_bin.elf \
+	user/httpd/httpd.elf \
+	user/dhcp/dhcp \
 	build/curl/curl
 
 disk: $(DISK)
@@ -454,7 +517,7 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite build/httpd_bin.elf /bin/httpd\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/httpd/httpd.elf /bin/httpd\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
@@ -564,14 +627,6 @@ test: iso
 # ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(BUILD)
-	rm -f kernel/init_bin.c kernel/hello_bin.c
-	rm -f kernel/shell_bin.c kernel/ls_bin.c kernel/cat_bin.c kernel/echo_bin.c
-	rm -f kernel/pwd_bin.c kernel/uname_bin.c kernel/clear_bin.c
-	rm -f kernel/true_bin.c kernel/false_bin.c
-	rm -f kernel/wc_bin.c kernel/grep_bin.c kernel/sort_bin.c
-	rm -f kernel/mkdir_bin.c kernel/touch_bin.c kernel/rm_bin.c
-	rm -f kernel/cp_bin.c kernel/mv_bin.c
-	rm -f kernel/whoami_bin.c kernel/oksh_bin.c kernel/login_bin.c
 	rm -f .init_stamp_*
 	$(MAKE) -C user/init clean 2>/dev/null; true
 	$(MAKE) -C user/hello clean

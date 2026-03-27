@@ -41,7 +41,6 @@ static const char s_dhcp_policy[] = "respawn\nmax_restarts=10\n";
 static const char s_dhcp_caps[]   = "NET_ADMIN NET_SOCKET\n";
 
 /* Compile-time size constants for static string entries. */
-static const uint32_t     s_motd_size          = sizeof(s_motd)          - 1;
 static const unsigned int s_passwd_size        = sizeof(s_passwd)        - 1;
 static const unsigned int s_shadow_size        = sizeof(s_shadow)        - 1;
 static const unsigned int s_profile_size       = sizeof(s_profile)       - 1;
@@ -55,110 +54,109 @@ static const unsigned int s_dhcp_run_size    = sizeof(s_dhcp_run)    - 1;
 static const unsigned int s_dhcp_policy_size = sizeof(s_dhcp_policy) - 1;
 static const unsigned int s_dhcp_caps_size   = sizeof(s_dhcp_caps)   - 1;
 
-/* Binary ELF blobs embedded by the Makefile via objcopy.
- * These symbols are resolved at link time; their lengths are not
- * compile-time constants, so they cannot appear in static initializers.
- * We store pointers to the length variables and dereference them at
- * open time instead. */
-extern const unsigned char shell_elf[];
-extern const unsigned int  shell_elf_len;
-extern const unsigned char ls_elf[];
-extern const unsigned int  ls_elf_len;
-extern const unsigned char cat_elf[];
-extern const unsigned int  cat_elf_len;
-extern const unsigned char echo_elf[];
-extern const unsigned int  echo_elf_len;
-extern const unsigned char pwd_elf[];
-extern const unsigned int  pwd_elf_len;
-extern const unsigned char uname_elf[];
-extern const unsigned int  uname_elf_len;
-extern const unsigned char clear_elf[];
-extern const unsigned int  clear_elf_len;
-extern const unsigned char true_bin_elf[];
-extern const unsigned int  true_bin_elf_len;
-extern const unsigned char false_bin_elf[];
-extern const unsigned int  false_bin_elf_len;
-extern const unsigned char wc_elf[];
-extern const unsigned int  wc_elf_len;
-extern const unsigned char grep_elf[];
-extern const unsigned int  grep_elf_len;
-extern const unsigned char sort_elf[];
-extern const unsigned int  sort_elf_len;
-extern const unsigned char mkdir_elf[];
-extern const unsigned int  mkdir_elf_len;
-extern const unsigned char touch_elf[];
-extern const unsigned int  touch_elf_len;
-extern const unsigned char rm_elf[];
-extern const unsigned int  rm_elf_len;
-extern const unsigned char cp_elf[];
-extern const unsigned int  cp_elf_len;
-extern const unsigned char mv_elf[];
-extern const unsigned int  mv_elf_len;
-extern const unsigned char whoami_elf[];
-extern const unsigned int  whoami_elf_len;
-extern const unsigned char oksh_elf[];
-extern const unsigned int  oksh_elf_len;
-extern const unsigned char login_elf[];
-extern const unsigned int  login_elf_len;
-extern const unsigned char vigil_elf[];
-extern const unsigned int  vigil_elf_len;
-extern const unsigned char vigictl_elf[];
-extern const unsigned int  vigictl_elf_len;
-extern const unsigned char httpd_bin_elf[];
-extern const unsigned int  httpd_bin_elf_len;
-extern const unsigned char dhcp_bin_elf[];
-extern const unsigned int  dhcp_bin_elf_len;
+/* Binary blobs embedded via objcopy --input binary.
+ * Symbols: _binary_<name>_start, _binary_<name>_end.
+ * Size = end - start (computed at open time). */
+extern const unsigned char _binary_shell_bin_start[];
+extern const unsigned char _binary_shell_bin_end[];
+extern const unsigned char _binary_ls_bin_start[];
+extern const unsigned char _binary_ls_bin_end[];
+extern const unsigned char _binary_cat_bin_start[];
+extern const unsigned char _binary_cat_bin_end[];
+extern const unsigned char _binary_echo_bin_start[];
+extern const unsigned char _binary_echo_bin_end[];
+extern const unsigned char _binary_pwd_bin_start[];
+extern const unsigned char _binary_pwd_bin_end[];
+extern const unsigned char _binary_uname_bin_start[];
+extern const unsigned char _binary_uname_bin_end[];
+extern const unsigned char _binary_clear_bin_start[];
+extern const unsigned char _binary_clear_bin_end[];
+extern const unsigned char _binary_true_bin_start[];
+extern const unsigned char _binary_true_bin_end[];
+extern const unsigned char _binary_false_bin_start[];
+extern const unsigned char _binary_false_bin_end[];
+extern const unsigned char _binary_wc_bin_start[];
+extern const unsigned char _binary_wc_bin_end[];
+extern const unsigned char _binary_grep_bin_start[];
+extern const unsigned char _binary_grep_bin_end[];
+extern const unsigned char _binary_sort_bin_start[];
+extern const unsigned char _binary_sort_bin_end[];
+extern const unsigned char _binary_mkdir_bin_start[];
+extern const unsigned char _binary_mkdir_bin_end[];
+extern const unsigned char _binary_touch_bin_start[];
+extern const unsigned char _binary_touch_bin_end[];
+extern const unsigned char _binary_rm_bin_start[];
+extern const unsigned char _binary_rm_bin_end[];
+extern const unsigned char _binary_cp_bin_start[];
+extern const unsigned char _binary_cp_bin_end[];
+extern const unsigned char _binary_mv_bin_start[];
+extern const unsigned char _binary_mv_bin_end[];
+extern const unsigned char _binary_whoami_bin_start[];
+extern const unsigned char _binary_whoami_bin_end[];
+extern const unsigned char _binary_oksh_bin_start[];
+extern const unsigned char _binary_oksh_bin_end[];
+extern const unsigned char _binary_login_bin_start[];
+extern const unsigned char _binary_login_bin_end[];
+extern const unsigned char _binary_vigil_bin_start[];
+extern const unsigned char _binary_vigil_bin_end[];
+extern const unsigned char _binary_vigictl_bin_start[];
+extern const unsigned char _binary_vigictl_bin_end[];
+extern const unsigned char _binary_httpd_bin_start[];
+extern const unsigned char _binary_httpd_bin_end[];
+extern const unsigned char _binary_dhcp_bin_start[];
+extern const unsigned char _binary_dhcp_bin_end[];
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
  * Using a pointer-to-size avoids the "initializer element is not constant"
  * error that arises when placing extern uint variables in static initializers. */
 typedef struct {
-    const char         *name;
-    const char         *data;
-    const unsigned int *size_ptr;  /* points to xxx_elf_len symbol */
+    const char          *name;
+    const unsigned char *start;  /* blob start (_binary_<prog>_start or inline string) */
+    const unsigned char *end;    /* blob end (_binary_<prog>_end or start + strlen) */
 } initrd_entry_t;
 
 static const initrd_entry_t s_files[] = {
-    { "/etc/motd",  s_motd,                (const unsigned int *)0 },  /* size set via sizeof */
-    { "/bin/sh",    (const char *)shell_elf,     &shell_elf_len     },
-    { "/bin/ls",    (const char *)ls_elf,        &ls_elf_len        },
-    { "/bin/cat",   (const char *)cat_elf,       &cat_elf_len       },
-    { "/bin/echo",  (const char *)echo_elf,      &echo_elf_len      },
-    { "/bin/pwd",   (const char *)pwd_elf,       &pwd_elf_len       },
-    { "/bin/uname", (const char *)uname_elf,     &uname_elf_len     },
-    { "/bin/clear", (const char *)clear_elf,     &clear_elf_len     },
-    { "/bin/true",  (const char *)true_bin_elf,  &true_bin_elf_len  },
-    { "/bin/false", (const char *)false_bin_elf, &false_bin_elf_len },
-    { "/bin/wc",    (const char *)wc_elf,        &wc_elf_len        },
-    { "/bin/grep",  (const char *)grep_elf,      &grep_elf_len      },
-    { "/bin/sort",  (const char *)sort_elf,      &sort_elf_len      },
-    { "/bin/mkdir", (const char *)mkdir_elf,     &mkdir_elf_len     },
-    { "/bin/touch", (const char *)touch_elf,     &touch_elf_len     },
-    { "/bin/rm",    (const char *)rm_elf,        &rm_elf_len        },
-    { "/bin/cp",    (const char *)cp_elf,        &cp_elf_len        },
-    { "/bin/mv",     (const char *)mv_elf,        &mv_elf_len        },
-    { "/bin/whoami", (const char *)whoami_elf,   &whoami_elf_len    },
-    { "/bin/oksh",   (const char *)oksh_elf,     &oksh_elf_len      },
-    { "/bin/login",   (const char *)login_elf,    &login_elf_len     },
-    { "/bin/vigil",   (const char *)vigil_elf,   &vigil_elf_len   },
-    { "/bin/vigictl", (const char *)vigictl_elf, &vigictl_elf_len },
-    { "/bin/httpd",   (const char *)httpd_bin_elf, &httpd_bin_elf_len },
-    { "/bin/dhcp",                        (const char *)dhcp_bin_elf, &dhcp_bin_elf_len },
-    { "/etc/vigil/services/dhcp/run",     s_dhcp_run,    &s_dhcp_run_size    },
-    { "/etc/vigil/services/dhcp/policy",  s_dhcp_policy, &s_dhcp_policy_size },
-    { "/etc/vigil/services/dhcp/caps",    s_dhcp_caps,   &s_dhcp_caps_size   },
-    { "/etc/passwd",  s_passwd,                   &s_passwd_size  },
-    { "/etc/shadow",  s_shadow,                   &s_shadow_size  },
-    { "/etc/profile", s_profile,                  &s_profile_size },
-    { "/etc/vigil/services/getty/run",    s_vigil_run,    &s_vigil_run_size    },
-    { "/etc/vigil/services/getty/policy", s_vigil_policy, &s_vigil_policy_size },
-    { "/etc/vigil/services/getty/caps",   s_vigil_caps,   &s_vigil_caps_size   },
-    { "/etc/vigil/services/httpd/run",    s_httpd_run,    &s_httpd_run_size    },
-    { "/etc/vigil/services/httpd/policy", s_httpd_policy, &s_httpd_policy_size },
-    { "/etc/vigil/services/httpd/caps",   s_httpd_caps,   &s_httpd_caps_size   },
-    { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
+    { "/etc/motd",  (const unsigned char *)s_motd, (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
+    { "/bin/sh",      _binary_shell_bin_start,     _binary_shell_bin_end },
+    { "/bin/ls",      _binary_ls_bin_start,        _binary_ls_bin_end },
+    { "/bin/cat",     _binary_cat_bin_start,       _binary_cat_bin_end },
+    { "/bin/echo",    _binary_echo_bin_start,      _binary_echo_bin_end },
+    { "/bin/pwd",     _binary_pwd_bin_start,       _binary_pwd_bin_end },
+    { "/bin/uname",   _binary_uname_bin_start,     _binary_uname_bin_end },
+    { "/bin/clear",   _binary_clear_bin_start,     _binary_clear_bin_end },
+    { "/bin/true",    _binary_true_bin_start,     _binary_true_bin_end },
+    { "/bin/false",   _binary_false_bin_start,    _binary_false_bin_end },
+    { "/bin/wc",      _binary_wc_bin_start,        _binary_wc_bin_end },
+    { "/bin/grep",    _binary_grep_bin_start,      _binary_grep_bin_end },
+    { "/bin/sort",    _binary_sort_bin_start,      _binary_sort_bin_end },
+    { "/bin/mkdir",   _binary_mkdir_bin_start,     _binary_mkdir_bin_end },
+    { "/bin/touch",   _binary_touch_bin_start,     _binary_touch_bin_end },
+    { "/bin/rm",      _binary_rm_bin_start,        _binary_rm_bin_end },
+    { "/bin/cp",      _binary_cp_bin_start,        _binary_cp_bin_end },
+    { "/bin/mv",      _binary_mv_bin_start,        _binary_mv_bin_end },
+    { "/bin/whoami",  _binary_whoami_bin_start,    _binary_whoami_bin_end },
+    { "/bin/oksh",    _binary_oksh_bin_start,      _binary_oksh_bin_end },
+    { "/bin/login",   _binary_login_bin_start,     _binary_login_bin_end },
+    { "/bin/vigil",   _binary_vigil_bin_start,     _binary_vigil_bin_end },
+    { "/bin/vigictl", _binary_vigictl_bin_start,   _binary_vigictl_bin_end },
+    { "/bin/httpd",   _binary_httpd_bin_start,     _binary_httpd_bin_end },
+    { "/bin/dhcp",    _binary_dhcp_bin_start,      _binary_dhcp_bin_end },
+    { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
+    { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
+    { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },
+    { "/etc/passwd", (const unsigned char *)s_passwd, (const unsigned char *)s_passwd + s_passwd_size },
+    { "/etc/shadow", (const unsigned char *)s_shadow, (const unsigned char *)s_shadow + s_shadow_size },
+    { "/etc/profile", (const unsigned char *)s_profile, (const unsigned char *)s_profile + s_profile_size },
+    { "/etc/vigil/services/getty/run", (const unsigned char *)s_vigil_run, (const unsigned char *)s_vigil_run + s_vigil_run_size },
+    { "/etc/vigil/services/getty/policy", (const unsigned char *)s_vigil_policy, (const unsigned char *)s_vigil_policy + s_vigil_policy_size },
+    { "/etc/vigil/services/getty/caps", (const unsigned char *)s_vigil_caps, (const unsigned char *)s_vigil_caps + s_vigil_caps_size },
+    { "/etc/vigil/services/httpd/run", (const unsigned char *)s_httpd_run, (const unsigned char *)s_httpd_run + s_httpd_run_size },
+    { "/etc/vigil/services/httpd/policy", (const unsigned char *)s_httpd_policy, (const unsigned char *)s_httpd_policy + s_httpd_policy_size },
+    { "/etc/vigil/services/httpd/caps", (const unsigned char *)s_httpd_caps, (const unsigned char *)s_httpd_caps + s_httpd_caps_size },
+    { (const char *)0, (const unsigned char *)0, (const unsigned char *)0 }  /* sentinel */
 };
+
 
 static const uint32_t s_nfiles = 37;
 
@@ -166,10 +164,15 @@ static const uint32_t s_nfiles = 37;
 static uint32_t
 entry_size(const initrd_entry_t *e)
 {
-    if (e->size_ptr == (const unsigned int *)0)
-        return s_motd_size;   /* /etc/motd — only entry with NULL size_ptr */
-    return (uint32_t)*e->size_ptr;
+    return (uint32_t)(e->end - e->start);
 }
+
+
+
+
+
+
+
 
 void
 initrd_iter_etc(initrd_etc_cb_t cb, void *ud)
@@ -182,7 +185,7 @@ initrd_iter_etc(initrd_etc_cb_t cb, void *ud)
             e->name[2] != 't' || e->name[3] != 'c' || e->name[4] != '/')
             continue;
         cb(e->name + 5,  /* short name: skip "/etc/" prefix */
-           (const uint8_t *)e->data,
+           (const uint8_t *)e->start,
            entry_size(e),
            ud);
     }
@@ -198,7 +201,7 @@ initrd_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
     if (off >= sz) return 0;
     uint64_t avail = sz - off;
     if (len > avail) len = avail;
-    __builtin_memcpy(buf, e->data + off, len);
+    __builtin_memcpy(buf, e->start + off, len);
     return (int)len;
 }
 
@@ -484,7 +487,7 @@ const void *
 initrd_get_data(const vfs_file_t *f)
 {
     if (!f->priv) return (const void *)0;
-    return (const void *)((const initrd_entry_t *)f->priv)->data;
+    const initrd_entry_t *e = (const initrd_entry_t *)f->priv; return (const void *)e->start;
 }
 
 uint32_t
