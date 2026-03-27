@@ -2,6 +2,7 @@
 #include "initrd.h"
 #include "ext2.h"
 #include "ramfs.h"
+#include "procfs.h"
 #include "printk.h"
 #include "uaccess.h"
 #include <stdint.h>
@@ -30,6 +31,7 @@ vfs_init(void)
     ramfs_populate(&s_etc_ramfs, "resolv.conf", (const uint8_t *)0, 0);
     printk("[VFS] OK: initialized\n");
     initrd_register();
+    procfs_init();
 }
 
 /* ── ext2 fd private state ────────────────────────────────────────────── */
@@ -207,6 +209,11 @@ static const vfs_ops_t s_ext2_ops = {
 int
 vfs_open(const char *path, int flags, vfs_file_t *out)
 {
+    /* /proc/ → procfs */
+    if (path[0]=='/' && path[1]=='p' && path[2]=='r' && path[3]=='o' &&
+        path[4]=='c' && (path[5]=='/' || path[5]=='\0'))
+        return procfs_open(path[5]=='/' ? path + 6 : path + 5, flags, out);
+
     /* 1. /run/ → run ramfs */
     if (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n' && path[4]=='/')
         return ramfs_open(&s_run_ramfs, path + 5, flags, out);
@@ -290,7 +297,8 @@ vfs_stat_path(const char *path, k_stat_t *out)
 
     /* Directory paths */
     if (streq(path, "/")    || streq(path, "/etc")  || streq(path, "/bin") ||
-        streq(path, "/dev") || streq(path, "/root") || streq(path, "/run")) {
+        streq(path, "/dev") || streq(path, "/root") || streq(path, "/run") ||
+        streq(path, "/proc")) {
         __builtin_memset(out, 0, sizeof(*out));
         out->st_dev   = 1;
         out->st_ino   = 1;
@@ -298,6 +306,11 @@ vfs_stat_path(const char *path, k_stat_t *out)
         out->st_mode  = S_IFDIR | 0555;
         return 0;
     }
+
+    /* /proc → procfs stat */
+    if (path[0]=='/' && path[1]=='p' && path[2]=='r' && path[3]=='o' &&
+        path[4]=='c' && (path[5]=='/' || path[5]=='\0'))
+        return procfs_stat(path, out);
 
     /* /dev/ device specials */
     if (streq(path, "/dev/console") || streq(path, "/dev/tty")    ||
