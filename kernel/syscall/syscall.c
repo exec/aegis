@@ -83,6 +83,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 209: num = 55;  break;  /* getsockopt */
     case 210: num = 48;  break;  /* shutdown */
     case 278: num = 318; break;  /* getrandom */
+    case  98: num = 202; break;  /* futex */
     /* Unrecognized numbers fall through — dispatch returns ENOSYS */
     }
 #endif
@@ -170,6 +171,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 232: return sys_epoll_wait(arg1, arg2, arg3, arg4);
     case 500: return sys_netcfg(arg1, arg2, arg3, arg4);
     case 318: return sys_getrandom(arg1, arg2, arg3);
+    case 202: return sys_futex(arg1, arg2, arg3, arg4, arg5, arg6);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

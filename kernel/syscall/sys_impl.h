@@ -207,3 +207,7 @@ uint64_t sys_uname(uint64_t buf_uptr);
 
 /* ── sys_random.c ──────────────────────────────────────────────────────── */
 uint64_t sys_getrandom(uint64_t buf, uint64_t buflen, uint64_t flags);
+
+/* ── futex.c ───────────────────────────────────────────────────────────── */
+uint64_t sys_futex(uint64_t a1, uint64_t a2, uint64_t a3,
+                   uint64_t a4, uint64_t a5, uint64_t a6);

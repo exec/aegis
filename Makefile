@@ -146,6 +146,7 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_signal.c \
     kernel/syscall/sys_socket.c \
     kernel/syscall/sys_random.c \
+    kernel/syscall/futex.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
 
