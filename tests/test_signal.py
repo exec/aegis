@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase 17 signal smoke tests. Boots the shell ISO and tests signal delivery."""
-import subprocess, time, sys, os, socket, select, tempfile
+import subprocess, time, sys, os, socket, select, tempfile, fcntl
 
 QEMU         = "qemu-system-x86_64"
 ISO          = "build/aegis.iso"
@@ -145,29 +145,67 @@ def test_ctrl_c_kills_cat():
     """Run bare 'cat' (blocks on stdin), send Ctrl-C, verify shell prompt returns."""
     proc, mon_sock, mon_path = _boot_qemu()
 
+    # Use a single accumulating buffer for the entire session.
+    # _read_until_prompt creates its own buffer, so bytes consumed there
+    # are lost. Instead, accumulate globally and count prompt occurrences.
+    fd = proc.stdout.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+    buf = b""
+    def drain_until(needle, timeout):
+        nonlocal buf
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r, _, _ = select.select([fd], [], [], 0.5)
+            if r:
+                try:
+                    chunk = os.read(fd, 4096)
+                    if chunk:
+                        buf += chunk
+                except BlockingIOError:
+                    pass
+            if needle in buf:
+                return True
+        return needle in buf
+
     # Wait for initial shell prompt
-    _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    if not drain_until(b"# ", BOOT_TIMEOUT):
+        _teardown_qemu(proc, mon_sock, mon_path)
+        assert False, "boot prompt never appeared"
 
-    # Type 'cat' with no args and press Enter — cat blocks reading stdin.
+    # Type 'cat' with no args — cat blocks reading stdin.
     _type_string(mon_sock, "cat\n")
+    time.sleep(3)
 
-    # Give cat time to start, become foreground, and block on stdin read
-    time.sleep(2)
+    # Record position before Ctrl-C
+    pos_before = len(buf)
 
-    # Send Ctrl-C via QEMU monitor (SIGINT to foreground PID via kbd driver)
+    # Send Ctrl-C
     _send_key(mon_sock, "ctrl-c")
 
-    # Give the kernel time to deliver SIGINT and the shell to print a new prompt
-    time.sleep(1)
-
-    # Wait for shell prompt to reappear — shell must still be alive.
-    out = _read_until_prompt(proc, time.time() + CMD_TIMEOUT)
+    # Wait for a NEW prompt after the Ctrl-C (look for "# " AFTER current position)
+    deadline = time.time() + 15
+    found = False
+    while time.time() < deadline:
+        r, _, _ = select.select([fd], [], [], 0.5)
+        if r:
+            try:
+                chunk = os.read(fd, 4096)
+                if chunk:
+                    buf += chunk
+            except BlockingIOError:
+                pass
+        if b"# " in buf[pos_before:]:
+            found = True
+            break
 
     _teardown_qemu(proc, mon_sock, mon_path)
 
-    assert "# " in out, (
+    out = buf[pos_before:].decode(errors="replace")
+    assert found, (
         f"FAIL test_ctrl_c_kills_cat: shell prompt did not return after Ctrl-C\n"
-        f"output:\n{out}"
+        f"output after ctrl-c:\n{out}"
     )
     print("PASS test_ctrl_c_kills_cat")
 
