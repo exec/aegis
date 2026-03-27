@@ -232,6 +232,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->uid              = 0;
     proc->gid              = 0;
     proc->pgid             = proc->pid;
+    proc->sid              = proc->pid;  /* init is its own session leader */
     proc->umask            = 022U;
     proc->stop_signum      = 0;
     proc->cwd[0]           = '/';

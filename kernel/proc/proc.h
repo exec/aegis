@@ -50,6 +50,7 @@ typedef struct aegis_process {
     uint32_t      uid;          /* user ID; 0 = root */
     uint32_t      gid;          /* group ID; 0 = root */
     uint32_t      pgid;         /* process group ID; init = own pid      */
+    uint32_t      sid;          /* session ID; == pid for session leaders */
     uint32_t      umask;        /* file creation mask; init = 022        */
     uint32_t      stop_signum;  /* signal that caused TASK_STOPPED; 0 = not stopped */
     char          cwd[256];     /* current working directory; init = "/" */

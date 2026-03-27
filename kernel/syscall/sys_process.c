@@ -245,6 +245,7 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     child->uid       = parent->uid;
     child->gid       = parent->gid;
     child->pgid      = parent->pgid;
+    child->sid       = parent->sid;
     child->umask     = parent->umask;
 
     /* Thread-group membership. */
@@ -475,6 +476,7 @@ sys_fork(syscall_frame_t *frame)
     child->thread_count    = 1;
     child->ppid            = parent->pid;
     child->pgid            = parent->pgid;
+    child->sid             = parent->sid;
     child->uid             = parent->uid;
     child->gid             = parent->gid;
     child->umask           = parent->umask;
@@ -1090,8 +1092,8 @@ done:
 }
 
 /* sys_setpgid — syscall 109: set pgid of process pid to pgid.
- * Aegis policy: may only set pgid = pid (form own singleton group).
- * pid=0 means current process. pgid=0 means use target's pid. */
+ * pid=0 means current process. pgid=0 means use target's pid.
+ * Allows creating own group (pgid == pid) or joining existing group in same session. */
 uint64_t
 sys_setpgid(uint64_t pid_arg, uint64_t pgid_arg)
 {
@@ -1100,29 +1102,37 @@ sys_setpgid(uint64_t pid_arg, uint64_t pgid_arg)
     uint32_t pgid = (uint32_t)pgid_arg;
 
     aegis_process_t *target = caller;
-    if (pid != 0) {
-        target = (void *)0;
-        aegis_task_t *t = sched_current()->next;
-        while (t != sched_current()) {
-            if (t->is_user) {
-                aegis_process_t *p = (aegis_process_t *)t;
-                if (p->pid == pid) {
-                    target = p;
-                    break;
-                }
-            }
-            t = t->next;
-        }
+    if (pid != 0 && pid != caller->pid) {
+        target = proc_find_by_pid(pid);
         if (!target)
             return (uint64_t)-(int64_t)3; /* ESRCH */
+        /* Can only setpgid on self or direct child */
+        if (target->ppid != caller->pid)
+            return (uint64_t)-(int64_t)1; /* EPERM */
     }
 
     if (pgid == 0)
         pgid = target->pid;
 
-    /* Aegis policy: may only form own singleton group */
-    if (pgid != target->pid)
-        return (uint64_t)-(int64_t)1; /* EPERM */
+    /* Always allow: pgid == target->pid (create own group) */
+    if (pgid != target->pid) {
+        /* Verify pgid belongs to a process in the same session */
+        int found = 0;
+        aegis_task_t *t = sched_current();
+        aegis_task_t *start = t;
+        do {
+            if (t->is_user) {
+                aegis_process_t *p = (aegis_process_t *)t;
+                if (p->pgid == pgid && p->sid == target->sid) {
+                    found = 1;
+                    break;
+                }
+            }
+            t = t->next;
+        } while (t != start);
+        if (!found)
+            return (uint64_t)-(int64_t)1; /* EPERM */
+    }
 
     target->pgid = pgid;
     return 0;
@@ -1136,12 +1146,16 @@ sys_getpgrp(void)
     return (uint64_t)proc->pgid;
 }
 
-/* sys_setsid — syscall 112: set pgid = pid; return pid.
- * No real session object in Phase 25.5. */
+/* sys_setsid — syscall 112: create new session.
+ * Fails with EPERM if caller is already a process group leader. */
 uint64_t
 sys_setsid(void)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
+    /* POSIX: EPERM if already a process group leader */
+    if (proc->pgid == proc->pid)
+        return (uint64_t)-(int64_t)1; /* EPERM */
+    proc->sid  = proc->pid;
     proc->pgid = proc->pid;
     return (uint64_t)proc->pid;
 }
