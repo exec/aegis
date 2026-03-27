@@ -2,6 +2,9 @@
 #include "../mm/vmm.h"
 #include "kva.h"
 #include "../core/printk.h"
+#include "vma.h"
+#include "proc.h"
+#include "sched.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -148,6 +151,26 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
                               va_base + j * 4096UL,
                               kva_page_phys(dst + j * 4096UL),
                               map_flags);
+        }
+
+        /* Record VMA for this PT_LOAD segment.
+         * During proc_spawn, sched_current() is the idle task — VMAs for
+         * init are a known gap.  During sys_execve, sched_current() IS
+         * the calling process, so VMAs are recorded correctly. */
+        {
+            aegis_task_t *cur = sched_current();
+            if (cur && cur->is_user) {
+                aegis_process_t *p = (aegis_process_t *)cur;
+                uint32_t seg_prot = 0x01;  /* PROT_READ always */
+                if (ph->p_flags & PF_W)
+                    seg_prot |= 0x02;      /* PROT_WRITE */
+                if (ph->p_flags & 1)       /* PF_X */
+                    seg_prot |= 0x04;      /* PROT_EXEC */
+                uint8_t seg_type = (ph->p_flags & 1) ? VMA_ELF_TEXT
+                                                      : VMA_ELF_DATA;
+                vma_insert(p, va_base, page_count * 4096UL,
+                           seg_prot, seg_type);
+            }
         }
     }
 

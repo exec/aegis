@@ -1,5 +1,6 @@
 /* sys_memory.c — Memory management syscalls: brk, mmap, munmap, mprotect */
 #include "sys_impl.h"
+#include "vma.h"
 
 /*
  * sys_brk — syscall 12
@@ -29,6 +30,8 @@ sys_brk(uint64_t arg1)
     /* Page-align upward so proc->brk is always page-aligned */
     arg1 = (arg1 + 4095UL) & ~4095UL;
 
+    uint64_t old_brk = proc->brk;
+
     if (arg1 > proc->brk) {
         /* Grow: map pages [proc->brk, arg1) into this process's PML4.
          * Zero each page before mapping — Linux brk/sbrk guarantee that
@@ -47,6 +50,22 @@ sys_brk(uint64_t arg1)
                               VMM_FLAG_WRITABLE);
         }
         proc->brk = arg1;
+
+        /* Update heap VMA */
+        if (proc->vma_table) {
+            uint32_t vi;
+            int found = 0;
+            for (vi = 0; vi < proc->vma_count; vi++) {
+                if (proc->vma_table[vi].type == VMA_HEAP) {
+                    proc->vma_table[vi].len = proc->brk - proc->vma_table[vi].base;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found)
+                vma_insert(proc, old_brk, proc->brk - old_brk,
+                           0x01 | 0x02, VMA_HEAP);
+        }
     } else if (arg1 < proc->brk) {
         /* Shrink: unmap and free pages [arg1, proc->brk) */
         uint64_t va;
@@ -58,6 +77,23 @@ sys_brk(uint64_t arg1)
             }
         }
         proc->brk = arg1;
+
+        /* Update heap VMA */
+        if (proc->vma_table) {
+            uint32_t vi;
+            for (vi = 0; vi < proc->vma_count; vi++) {
+                if (proc->vma_table[vi].type == VMA_HEAP) {
+                    if (proc->brk <= proc->vma_table[vi].base) {
+                        vma_remove(proc, proc->vma_table[vi].base,
+                                   proc->vma_table[vi].len);
+                    } else {
+                        proc->vma_table[vi].len = proc->brk -
+                                                  proc->vma_table[vi].base;
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     return proc->brk;
@@ -206,6 +242,9 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     /* Advance bump allocator only if we used it (not freelist). */
     if (base >= proc->mmap_base)
         proc->mmap_base = base + len;
+
+    vma_insert(proc, base, len, (uint32_t)(arg3 & 0x07), VMA_MMAP);
+
     return base;
 }
 
@@ -238,6 +277,8 @@ sys_munmap(uint64_t arg1, uint64_t arg2)
 
     /* Return VA range to freelist for reuse by future mmap calls. */
     mmap_free_insert(proc, arg1, len);
+
+    vma_remove(proc, arg1, len);
 
     return 0;
 }
@@ -283,6 +324,8 @@ sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot)
     uint64_t va;
     for (va = addr; va < addr + rlen; va += 4096UL)
         vmm_set_user_prot(proc->pml4_phys, va, flags);
+
+    vma_update_prot(proc, addr, rlen, (uint32_t)(prot & 0x07));
 
     return 0;
 }
