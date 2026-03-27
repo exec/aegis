@@ -183,11 +183,13 @@ _start:
     mov eax, dword (pml4_table - KERN_VMA)
     mov cr3, eax
 
-    ; ── Enable long mode via EFER MSR ───────────────────────────────────
+    ; ── Enable long mode + NX via EFER MSR ──────────────────────────────
     ; MSR 0xC0000080 = EFER; bit 8 = LME (Long Mode Enable)
+    ;                        bit 11 = NXE (No-Execute Enable)
+    ; NXE is required for VMM_FLAG_NX (PTE bit 63) used by mmap/mprotect.
     mov ecx, 0xC0000080
     rdmsr
-    or  eax, (1 << 8)               ; EFER.LME
+    or  eax, (1 << 8) | (1 << 11)   ; EFER.LME + EFER.NXE
     wrmsr
 
     ; ── Load GDT ────────────────────────────────────────────────────────
