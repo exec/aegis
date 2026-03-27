@@ -180,6 +180,11 @@ uint64_t
 sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
           uint64_t ptid, uint64_t ctid, uint64_t tls)
 {
+    printk("[CLONE] flags=%x child_stack=%x ptid=%x ctid=%x tls=%x\n",
+           (uint32_t)flags, (uint32_t)(child_stack >> 12),
+           (uint32_t)(ptid >> 12), (uint32_t)(ctid >> 12),
+           (uint32_t)(tls >> 12));
+
     /* Strip low byte (signal number — ignored). */
     uint32_t cl = (uint32_t)(flags & ~0xFFu);
 
@@ -371,6 +376,8 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     /* 8. Add child to run queue. */
     sched_add(&child->task);
     s_fork_count++;
+    printk("[CLONE] child pid=%u tgid=%u ksp=%x\n",
+           child->pid, child->tgid, (uint32_t)(child->task.sp >> 12));
 
     /* 9. CLONE_PARENT_SETTID: write child tid to parent's *ptid. */
     if (cl & CLONE_PARENT_SETTID) {
