@@ -172,10 +172,13 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     if (len == 0)
         return (uint64_t)-(int64_t)22;   /* EINVAL */
 
-    /* TEMP: bypass freelist for debugging */
-    uint64_t base = proc->mmap_base;
-    if (base + len > USER_ADDR_MAX || base + len < base)
-        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+    /* Try freelist first; fall back to bump allocator. */
+    uint64_t base = mmap_free_alloc(proc, len);
+    if (base == 0) {
+        base = proc->mmap_base;
+        if (base + len > USER_ADDR_MAX || base + len < base)
+            return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+    }
     uint64_t va;
     for (va = base; va < base + len; va += 4096UL) {
         uint64_t phys = pmm_alloc_page();
