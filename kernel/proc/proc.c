@@ -318,7 +318,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->mmap_base = 0x0000700000000000ULL;
 
     /* FS base starts at zero; arch_prctl(ARCH_SET_FS) sets it at musl startup. */
-    proc->fs_base = 0;
+    proc->task.fs_base = 0;
 
     /* Register init as the terminal foreground process group so that
      * TIOCGPGRP returns proc->pgid immediately on first access.
@@ -348,13 +348,13 @@ uint64_t arch_get_current_pml4(void) {
 
 uint64_t arch_get_current_fs_base(void) {
     aegis_task_t *t = sched_current();
-    if (t && t->is_user)
-        return ((aegis_process_t *)t)->fs_base;
+    if (t)
+        return t->fs_base;
     return 0;
 }
 
 void arch_save_current_fs_base(uint64_t val) {
     aegis_task_t *t = sched_current();
-    if (t && t->is_user)
-        ((aegis_process_t *)t)->fs_base = val;
+    if (t)
+        t->fs_base = val;
 }

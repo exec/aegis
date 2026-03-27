@@ -17,6 +17,8 @@ typedef struct aegis_task_t {
     uint64_t             stack_pages;      /* kva pages allocated for this task's kernel stack */
     uint32_t             state;        /* TASK_RUNNING=0 TASK_BLOCKED=1 TASK_ZOMBIE=2 */
     uint32_t             waiting_for;  /* PID this task waits for; 0=any child */
+    uint64_t             fs_base;          /* per-thread TLS base (IA32_FS_BASE / TPIDR_EL0) */
+    uint64_t             clear_child_tid;  /* user VA: write 0 + futex_wake on exit */
     struct aegis_task_t *next;             /* circular linked list */
 } aegis_task_t;
 

@@ -225,7 +225,7 @@ sched_exit(void)
             s_current = woken_parent;
             arch_set_kernel_stack(s_current->kernel_stack_top);
             if (s_current->is_user)
-                arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+                arch_set_fs_base(s_current->fs_base);
             ctx_switch(zombie_task, s_current);
             /* unreachable — zombie never resumes after direct switch */
         } else {
@@ -303,7 +303,7 @@ sched_block(void)
 
     /* Set FS.base for the incoming task before ctx_switch. */
     if (s_current->is_user)
-        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+        arch_set_fs_base(s_current->fs_base);
 
     ctx_switch(old, s_current);
 
@@ -321,10 +321,8 @@ sched_block(void)
      * Without this, a user task that was blocked while another user task
      * ran and set a different FS_BASE would resume with the wrong FS_BASE,
      * corrupting TLS access (__errno_location, stack canary, etc.). */
-    if (s_current->is_user) {
-        aegis_process_t *p = (aegis_process_t *)s_current;
-        arch_set_fs_base(p->fs_base);
-    }
+    if (s_current->is_user)
+        arch_set_fs_base(s_current->fs_base);
 }
 
 void
@@ -358,7 +356,7 @@ sched_stop(aegis_task_t *task)
     arch_set_kernel_stack(s_current->kernel_stack_top);
 
     if (s_current->is_user)
-        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+        arch_set_fs_base(s_current->fs_base);
 
     ctx_switch(old, s_current);
 
@@ -367,10 +365,8 @@ sched_stop(aegis_task_t *task)
     if (s_current->is_user)
         vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
-    if (s_current->is_user) {
-        aegis_process_t *p = (aegis_process_t *)s_current;
-        arch_set_fs_base(p->fs_base);
-    }
+    if (s_current->is_user)
+        arch_set_fs_base(s_current->fs_base);
 }
 
 void
@@ -393,7 +389,7 @@ sched_yield_to_next(void)
 
     /* Set FS.base for the incoming task before ctx_switch. */
     if (s_current->is_user)
-        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+        arch_set_fs_base(s_current->fs_base);
 
     ctx_switch(old, s_current);
 
@@ -411,10 +407,8 @@ sched_yield_to_next(void)
      * Without this, a user task that was blocked while another user task
      * ran and set a different FS_BASE would resume with the wrong FS_BASE,
      * corrupting TLS access (__errno_location, stack canary, etc.). */
-    if (s_current->is_user) {
-        aegis_process_t *p = (aegis_process_t *)s_current;
-        arch_set_fs_base(p->fs_base);
-    }
+    if (s_current->is_user)
+        arch_set_fs_base(s_current->fs_base);
 }
 
 void
@@ -480,7 +474,7 @@ sched_tick(void)
      * Must be paired with the arch_set_fs_base after ctx_switch (for the
      * outgoing task's subsequent resume). */
     if (s_current->is_user)
-        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+        arch_set_fs_base(s_current->fs_base);
 
     /*
      * CR3 switch policy in sched_tick (Phase 5):
@@ -514,8 +508,6 @@ sched_tick(void)
      * This must run AFTER ctx_switch returns (s_current is now the new task).
      * proc_enter_user handles only the first entry; preempted tasks resume
      * via isr_common_stub which does not reload FS.base. IF=0 here (PIT ISR). */
-    if (s_current->is_user) {
-        aegis_process_t *p = (aegis_process_t *)s_current;
-        arch_set_fs_base(p->fs_base);
-    }
+    if (s_current->is_user)
+        arch_set_fs_base(s_current->fs_base);
 }

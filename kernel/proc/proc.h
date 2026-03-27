@@ -27,7 +27,6 @@ typedef struct {
     cap_slot_t    exec_caps[CAP_TABLE_SIZE]; /* caps to grant post-execve; zeroed after apply */
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
-    uint64_t      fs_base;                /* FS segment base for TLS; set by arch_prctl */
     uint32_t      pid;          /* unique process ID; 1 = init */
     uint32_t      ppid;         /* parent PID; 0 = no parent   */
     uint32_t      uid;          /* user ID; 0 = root */

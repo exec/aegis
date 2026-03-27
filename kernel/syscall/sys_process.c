@@ -86,17 +86,15 @@ uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
 uint64_t
 sys_arch_prctl(uint64_t arg1, uint64_t arg2)
 {
-    aegis_process_t *proc = (aegis_process_t *)sched_current();
-
     if (arg1 == ARCH_SET_FS) {
-        proc->fs_base = arg2;
+        sched_current()->fs_base = arg2;
         arch_set_fs_base(arg2);
         return 0;
     }
     if (arg1 == ARCH_GET_FS) {
         if (!user_ptr_valid(arg2, sizeof(uint64_t)))
             return (uint64_t)-(int64_t)14;   /* EFAULT */
-        copy_to_user((void *)(uintptr_t)arg2, &proc->fs_base,
+        copy_to_user((void *)(uintptr_t)arg2, &sched_current()->fs_base,
                      sizeof(uint64_t));
         return 0;
     }
@@ -167,10 +165,10 @@ sys_fork(syscall_frame_t *frame)
     {
         uint64_t tpidr;
         __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tpidr));
-        child->fs_base = tpidr;
+        child->task.fs_base = tpidr;
     }
 #else
-    child->fs_base         = parent->fs_base;
+    child->task.fs_base    = parent_task->fs_base;
 #endif
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     child->pid             = proc_alloc_pid();
@@ -553,7 +551,7 @@ sys_execve(syscall_frame_t *frame,
     /* 5. Reset heap/mmap/TLS state */
     proc->brk       = 0;
     proc->mmap_base = 0x0000700000000000ULL;
-    proc->fs_base   = 0;
+    proc->task.fs_base = 0;
 
     /* Reset capability table to baseline on exec — exec is a capability boundary.
      * Login's AUTH/SETUID caps must not propagate to the exec'd shell. */

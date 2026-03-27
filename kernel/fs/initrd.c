@@ -24,7 +24,7 @@ static const char s_profile[] =
 static const char s_hosts[] =
     "127.0.0.1 localhost\n"
     "10.0.2.15 aegis\n"
-    "104.18.26.120 example.com\n";
+    "104.18.27.120 example.com\n";
 
 /* Default vigil service config — allows vigil to find its getty service even
  * on a disk that was built before vigil was added (or on no disk at all).
