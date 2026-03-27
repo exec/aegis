@@ -27,6 +27,9 @@ static uint32_t s_fork_count = 1;  /* starts at 1 for init */
 uint64_t
 sys_exit(uint64_t arg1)
 {
+    printk("[EXIT] pid=%u status=%u\n",
+           sched_current()->is_user ? ((aegis_process_t *)sched_current())->pid : 0,
+           (uint32_t)(arg1 & 0xFF));
     if (sched_current()->is_user) {
         aegis_process_t *proc = (aegis_process_t *)sched_current();
         proc->exit_status = arg1 & 0xFF;
