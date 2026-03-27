@@ -9,6 +9,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define MMAP_FREE_MAX 64
+
+typedef struct {
+    uint64_t base;
+    uint64_t len;
+} mmap_free_t;
+
 /*
  * aegis_process_t — user process control block.
  *
@@ -28,6 +35,8 @@ typedef struct {
     cap_slot_t    exec_caps[CAP_TABLE_SIZE]; /* caps to grant post-execve; zeroed after apply */
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
+    mmap_free_t   mmap_free[MMAP_FREE_MAX]; /* VA freelist for munmap→mmap reuse */
+    uint32_t      mmap_free_count;          /* number of entries in mmap_free[]  */
     uint32_t      pid;          /* unique process ID; 1 = init */
     uint32_t      tgid;         /* thread group ID (= leader's PID) */
     uint32_t      thread_count; /* live threads in this group (leader tracks) */

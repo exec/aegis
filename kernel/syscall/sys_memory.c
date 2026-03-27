@@ -63,6 +63,74 @@ sys_brk(uint64_t arg1)
     return proc->brk;
 }
 
+/* ── mmap VA freelist helpers ─────────────────────────────────────────── */
+
+static void
+mmap_free_insert(aegis_process_t *proc, uint64_t base, uint64_t len)
+{
+    uint32_t i;
+    for (i = 0; i < proc->mmap_free_count; i++) {
+        mmap_free_t *e = &proc->mmap_free[i];
+        if (e->base + e->len == base) {
+            e->len += len;
+            uint32_t j;
+            for (j = 0; j < proc->mmap_free_count; j++) {
+                if (j == i) continue;
+                if (e->base + e->len == proc->mmap_free[j].base) {
+                    e->len += proc->mmap_free[j].len;
+                    proc->mmap_free[j] = proc->mmap_free[--proc->mmap_free_count];
+                    break;
+                }
+            }
+            return;
+        }
+        if (base + len == e->base) {
+            e->base = base;
+            e->len += len;
+            uint32_t j;
+            for (j = 0; j < proc->mmap_free_count; j++) {
+                if (j == i) continue;
+                if (proc->mmap_free[j].base + proc->mmap_free[j].len == e->base) {
+                    proc->mmap_free[j].len += e->len;
+                    proc->mmap_free[i] = proc->mmap_free[--proc->mmap_free_count];
+                    break;
+                }
+            }
+            return;
+        }
+    }
+    if (proc->mmap_free_count < MMAP_FREE_MAX) {
+        proc->mmap_free[proc->mmap_free_count].base = base;
+        proc->mmap_free[proc->mmap_free_count].len  = len;
+        proc->mmap_free_count++;
+    }
+}
+
+static uint64_t
+mmap_free_alloc(aegis_process_t *proc, uint64_t len)
+{
+    uint32_t best = (uint32_t)-1;
+    uint64_t best_len = (uint64_t)-1;
+    uint32_t i;
+    for (i = 0; i < proc->mmap_free_count; i++) {
+        if (proc->mmap_free[i].len >= len && proc->mmap_free[i].len < best_len) {
+            best = i;
+            best_len = proc->mmap_free[i].len;
+            if (best_len == len) break;
+        }
+    }
+    if (best == (uint32_t)-1)
+        return 0;
+    uint64_t base = proc->mmap_free[best].base;
+    if (proc->mmap_free[best].len == len) {
+        proc->mmap_free[best] = proc->mmap_free[--proc->mmap_free_count];
+    } else {
+        proc->mmap_free[best].base += len;
+        proc->mmap_free[best].len  -= len;
+    }
+    return base;
+}
+
 /*
  * sys_mmap — syscall 9
  *
@@ -104,13 +172,13 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     if (len == 0)
         return (uint64_t)-(int64_t)22;   /* EINVAL */
 
-    uint64_t base = proc->mmap_base;
-
-    /* Guard: mmap_base must stay in user address space (below 0x800000000000).
-     * Without this check, a large enough mapping would overflow mmap_base into
-     * the kernel-half VA range, corrupting shared kernel page tables. */
-    if (base + len > USER_ADDR_MAX || base + len < base)
-        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+    /* Try freelist first; fall back to bump allocator. */
+    uint64_t base = mmap_free_alloc(proc, len);
+    if (base == 0) {
+        base = proc->mmap_base;
+        if (base + len > USER_ADDR_MAX || base + len < base)
+            return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+    }
     uint64_t va;
     for (va = base; va < base + len; va += 4096UL) {
         uint64_t phys = pmm_alloc_page();
@@ -135,9 +203,9 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
                           VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_NX);
     }
 
-    if (proc->mmap_base + len > USER_ADDR_MAX || proc->mmap_base + len < proc->mmap_base)
-        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
-    proc->mmap_base += len;
+    /* Advance bump allocator only if we used it (not freelist). */
+    if (base >= proc->mmap_base)
+        proc->mmap_base = base + len;
     return base;
 }
 
@@ -167,6 +235,10 @@ sys_munmap(uint64_t arg1, uint64_t arg2)
             pmm_free_page(phys);
         }
     }
+
+    /* Return VA range to freelist for reuse by future mmap calls. */
+    mmap_free_insert(proc, arg1, len);
+
     return 0;
 }
 

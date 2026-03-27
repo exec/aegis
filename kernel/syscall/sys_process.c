@@ -233,6 +233,9 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     /* 5. Scalar fields. */
     child->brk       = parent->brk;
     child->mmap_base = parent->mmap_base;
+    __builtin_memcpy(child->mmap_free, parent->mmap_free,
+                     parent->mmap_free_count * sizeof(mmap_free_t));
+    child->mmap_free_count = parent->mmap_free_count;
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     child->pid       = proc_alloc_pid();
     child->ppid      = parent->pid;
@@ -447,6 +450,9 @@ sys_fork(syscall_frame_t *frame)
 
     child->brk             = parent->brk;
     child->mmap_base       = parent->mmap_base;
+    __builtin_memcpy(child->mmap_free, parent->mmap_free,
+                     parent->mmap_free_count * sizeof(mmap_free_t));
+    child->mmap_free_count = parent->mmap_free_count;
 #ifdef __aarch64__
     /* ARM64: musl sets TPIDR_EL0 directly, not via arch_prctl.
      * Read the current TPIDR_EL0 value and save to child. */
@@ -841,6 +847,7 @@ sys_execve(syscall_frame_t *frame,
     /* 5. Reset heap/mmap/TLS state */
     proc->brk       = 0;
     proc->mmap_base = 0x0000700000000000ULL;
+    proc->mmap_free_count = 0;
     proc->task.fs_base = 0;
 
     /* Reset capability table to baseline on exec — exec is a capability boundary.
