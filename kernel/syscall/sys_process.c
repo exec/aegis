@@ -934,8 +934,6 @@ sys_execve(syscall_frame_t *frame,
 
     /* 6a. If PT_INTERP present, load the interpreter at INTERP_BASE */
     has_interp = (er.interp[0] != '\0');
-    if (has_interp)
-        printk("[EXEC] PT_INTERP: %s\n", er.interp);
     if (has_interp) {
         const uint8_t *interp_data;
         uint64_t interp_size;
@@ -962,16 +960,12 @@ sys_execve(syscall_frame_t *frame,
             interp_size = vf.size;
         }
 
-        printk("[EXEC] interp loaded, size=%u, calling elf_load at base 0x%x\n",
-               (uint32_t)interp_size, (uint32_t)INTERP_BASE);
         if (elf_load(proc->pml4_phys, interp_data, (size_t)interp_size,
                      INTERP_BASE, &interp_er) != 0) {
             if (interp_buf) kva_free_pages(interp_buf, interp_pages);
             ret = (uint64_t)-(int64_t)8; goto done;  /* ENOEXEC */
         }
         if (interp_buf) kva_free_pages(interp_buf, interp_pages);
-        printk("[EXEC] interp entry=0x%x brk=0x%x\n",
-               (uint32_t)interp_er.entry, (uint32_t)interp_er.brk);
     }
 
     /* 7. Allocate + map 4 user stack pages (16 KB) */
