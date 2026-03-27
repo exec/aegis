@@ -25,8 +25,8 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
                   CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
         return (uint64_t)-(int64_t)ENOCAP;
 
-    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops ||
-        !proc->fds[arg1].ops->write)
+    if (arg1 >= PROC_MAX_FDS || !proc->fd_table->fds[arg1].ops ||
+        !proc->fd_table->fds[arg1].ops->write)
         return (uint64_t)-9;   /* EBADF */
 
     if (!user_ptr_valid(arg2, arg3))
@@ -42,8 +42,8 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
      *   - zero or negative: break and return that value. */
     uint64_t total = 0;
     while (total < arg3) {
-        int r = proc->fds[arg1].ops->write(
-                    proc->fds[arg1].priv,
+        int r = proc->fd_table->fds[arg1].ops->write(
+                    proc->fd_table->fds[arg1].priv,
                     (const void *)(uintptr_t)(arg2 + total),
                     arg3 - total);
         if (r <= 0)
@@ -77,8 +77,8 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
                   CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
         return (uint64_t)-(int64_t)ENOCAP;
 
-    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops ||
-        !proc->fds[arg1].ops->write)
+    if (arg1 >= PROC_MAX_FDS || !proc->fd_table->fds[arg1].ops ||
+        !proc->fd_table->fds[arg1].ops->write)
         return (uint64_t)-9;   /* EBADF */
 
     /* Reject unreasonable iovcnt before multiplying to avoid overflow. */
@@ -115,8 +115,8 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
             copy_from_user(staging,
                            (const void *)(uintptr_t)(iov.iov_base + vec_written),
                            chunk);
-            int r = proc->fds[arg1].ops->write(
-                        proc->fds[arg1].priv,
+            int r = proc->fd_table->fds[arg1].ops->write(
+                        proc->fd_table->fds[arg1].priv,
                         staging,
                         chunk);
             if (r <= 0) {
@@ -151,7 +151,7 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 
     if (arg1 >= PROC_MAX_FDS)
         return (uint64_t)-9;   /* EBADF */
-    vfs_file_t *f = &proc->fds[arg1];
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops)
         return (uint64_t)-9;   /* EBADF */
     if (!f->ops->read)
@@ -200,7 +200,7 @@ sys_close(uint64_t arg1)
     if (arg1 >= PROC_MAX_FDS)
         return (uint64_t)-9;   /* EBADF */
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    vfs_file_t *f = &proc->fds[arg1];
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops)
         return (uint64_t)-9;   /* EBADF */
     f->ops->close(f->priv);

@@ -196,12 +196,11 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->task.is_user          = 1;
     proc->task.stack_pages      = (uint32_t)STACK_PAGES;
 
-    /* Zero the fd table — all slots start as free (ops == NULL).
-     * kva_alloc_pages does not zero pages; explicit init required. */
-    {
-        uint64_t i;
-        for (i = 0; i < PROC_MAX_FDS; i++)
-            proc->fds[i].ops = (const vfs_ops_t *)0;
+    /* Allocate refcounted fd table — all slots start as free (ops == NULL). */
+    proc->fd_table = fd_table_alloc();
+    if (!proc->fd_table) {
+        printk("[PROC] FAIL: OOM allocating fd_table\n");
+        for (;;) {}
     }
 
     /* Zero cap table — all slots start empty.
@@ -303,13 +302,13 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
-    proc->fds[1] = *console_open();
+    proc->fd_table->fds[1] = *console_open();
 
     /* Pre-open fd 0 (stdin) to keyboard device. */
-    proc->fds[0] = *kbd_vfs_open();
+    proc->fd_table->fds[0] = *kbd_vfs_open();
 
     /* Pre-open fd 2 (stderr) to console device. */
-    proc->fds[2] = *console_open();
+    proc->fd_table->fds[2] = *console_open();
 
     /* Initialise heap break to top of ELF segments. */
     proc->brk = brk_start;

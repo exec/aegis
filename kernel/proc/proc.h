@@ -3,6 +3,7 @@
 
 #include "sched.h"
 #include "vfs.h"
+#include "fd_table.h"
 #include "cap.h"
 #include "signal.h"
 #include <stdint.h>
@@ -22,7 +23,7 @@
 typedef struct {
     aegis_task_t  task;                    /* MUST be first — scheduler casts to aegis_task_t * */
     uint64_t      pml4_phys;              /* physical address of this process's PML4 */
-    vfs_file_t    fds[PROC_MAX_FDS];      /* Phase 10 — ops==NULL means slot free */
+    fd_table_t   *fd_table;               /* shared, refcounted fd table (Phase 29) */
     cap_slot_t    caps[CAP_TABLE_SIZE];   /* Phase 11 — capability table */
     cap_slot_t    exec_caps[CAP_TABLE_SIZE]; /* caps to grant post-execve; zeroed after apply */
     uint64_t      brk;                    /* current heap limit (user VA); grows up */

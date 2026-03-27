@@ -5,6 +5,7 @@
 #include "printk.h"
 #include "vmm.h"
 #include "proc.h"
+#include "fd_table.h"
 #include "ext2.h"
 #include <stddef.h>
 
@@ -140,26 +141,21 @@ sched_exit(void)
 
     if (s_current->is_user) {
         aegis_process_t *dying = (aegis_process_t *)s_current;
-        int fd_i;
         /* dying->exit_status was set by sys_exit before calling sched_exit. */
 
-        /* Close all open fds before entering zombie state.
+        /* Release the shared fd table (closes all fds if refcount drops to 0).
          *
          * Required for pipe correctness: write-end close fires sched_wake()
          * on any blocked reader, which must happen while the task is still
          * TASK_RUNNING (not TASK_ZOMBIE) so the woken task can be properly
          * scheduled.
          *
-         * Ordering invariant: this loop runs before vmm_free_user_pml4
+         * Ordering invariant: this runs before vmm_free_user_pml4
          * (wherever it is called). pipe_t lives in kva (kernel VA, always
          * accessible). Any future fd type whose close op touches user memory
-         * must also rely on this ordering — do not move this loop later. */
-        for (fd_i = 0; fd_i < PROC_MAX_FDS; fd_i++) {
-            if (dying->fds[fd_i].ops) {
-                dying->fds[fd_i].ops->close(dying->fds[fd_i].priv);
-                dying->fds[fd_i].ops = NULL;
-            }
-        }
+         * must also rely on this ordering — do not move this call later. */
+        fd_table_unref(dying->fd_table);
+        dying->fd_table = (fd_table_t *)0;
 
         /* Mark self zombie — stays in run queue until waitpid reaps. */
         s_current->state = TASK_ZOMBIE;

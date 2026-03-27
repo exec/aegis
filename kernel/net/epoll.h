@@ -63,7 +63,7 @@ void epoll_notify(uint32_t sock_id, uint32_t events);
 int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
                     int maxevents, uint32_t timeout_ticks);
 
-/* epoll_open_fd: create an fd for this epoll instance in proc->fds[]. */
+/* epoll_open_fd: create an fd for this epoll instance in proc->fd_table->fds[]. */
 int epoll_open_fd(uint32_t epoll_id, aegis_process_t *proc);
 
 /* epoll_id_from_fd: reverse-look up epoll_id from a fd. Returns EPOLL_NONE on error. */

@@ -183,12 +183,12 @@ int epoll_open_fd(uint32_t epoll_id, aegis_process_t *proc)
 {
     uint32_t fd;
     for (fd = 0; fd < PROC_MAX_FDS; fd++) {
-        if (!proc->fds[fd].ops) {
-            proc->fds[fd].ops    = &s_epoll_ops;
-            proc->fds[fd].priv   = (void *)(uintptr_t)epoll_id;
-            proc->fds[fd].offset = 0;
-            proc->fds[fd].size   = 0;
-            proc->fds[fd].flags  = 0;
+        if (!proc->fd_table->fds[fd].ops) {
+            proc->fd_table->fds[fd].ops    = &s_epoll_ops;
+            proc->fd_table->fds[fd].priv   = (void *)(uintptr_t)epoll_id;
+            proc->fd_table->fds[fd].offset = 0;
+            proc->fd_table->fds[fd].size   = 0;
+            proc->fd_table->fds[fd].flags  = 0;
             return (int)fd;
         }
     }
@@ -198,6 +198,6 @@ int epoll_open_fd(uint32_t epoll_id, aegis_process_t *proc)
 uint32_t epoll_id_from_fd(int fd, aegis_process_t *proc)
 {
     if (fd < 0 || (uint32_t)fd >= PROC_MAX_FDS) return EPOLL_NONE;
-    if (proc->fds[fd].ops != &s_epoll_ops) return EPOLL_NONE;
-    return (uint32_t)(uintptr_t)proc->fds[fd].priv;
+    if (proc->fd_table->fds[fd].ops != &s_epoll_ops) return EPOLL_NONE;
+    return (uint32_t)(uintptr_t)proc->fd_table->fds[fd].priv;
 }

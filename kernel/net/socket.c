@@ -155,13 +155,13 @@ int sock_open_fd(uint32_t sock_id, aegis_process_t *proc)
 {
     uint32_t fd;
     for (fd = 0; fd < PROC_MAX_FDS; fd++) {
-        if (!proc->fds[fd].ops) {
-            proc->fds[fd].ops    = &s_sock_ops;
-            proc->fds[fd].priv   = (void *)(uintptr_t)sock_id;
-            proc->fds[fd].offset = 0;
-            proc->fds[fd].size   = 0;
-            proc->fds[fd].flags  = 0;
-            proc->fds[fd]._pad   = 0;
+        if (!proc->fd_table->fds[fd].ops) {
+            proc->fd_table->fds[fd].ops    = &s_sock_ops;
+            proc->fd_table->fds[fd].priv   = (void *)(uintptr_t)sock_id;
+            proc->fd_table->fds[fd].offset = 0;
+            proc->fd_table->fds[fd].size   = 0;
+            proc->fd_table->fds[fd].flags  = 0;
+            proc->fd_table->fds[fd]._pad   = 0;
             return (int)fd;
         }
     }
@@ -171,7 +171,7 @@ int sock_open_fd(uint32_t sock_id, aegis_process_t *proc)
 uint32_t sock_id_from_fd(int fd, aegis_process_t *proc)
 {
     if (fd < 0 || (uint32_t)fd >= PROC_MAX_FDS) return SOCK_NONE;
-    if (!proc->fds[fd].ops) return SOCK_NONE;
-    if (proc->fds[fd].ops != &s_sock_ops) return SOCK_NONE;
-    return (uint32_t)(uintptr_t)proc->fds[fd].priv;
+    if (!proc->fd_table->fds[fd].ops) return SOCK_NONE;
+    if (proc->fd_table->fds[fd].ops != &s_sock_ops) return SOCK_NONE;
+    return (uint32_t)(uintptr_t)proc->fd_table->fds[fd].priv;
 }

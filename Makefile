@@ -124,6 +124,7 @@ NET_SRCS = \
     kernel/net/epoll.c
 
 FS_SRCS = \
+    kernel/fs/fd_table.c \
     kernel/fs/vfs.c \
     kernel/fs/initrd.c \
     kernel/fs/console.c \

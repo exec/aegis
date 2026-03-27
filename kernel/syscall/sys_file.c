@@ -73,7 +73,7 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     }
     uint64_t fd;
     for (fd = 0; fd < PROC_MAX_FDS; fd++)
-        if (!proc->fds[fd].ops) break;
+        if (!proc->fd_table->fds[fd].ops) break;
     if (fd == PROC_MAX_FDS)
         return (uint64_t)-24;  /* EMFILE */
 
@@ -93,14 +93,14 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         }
     }
 
-    int r = vfs_open(kpath, (int)arg2, &proc->fds[fd]);
+    int r = vfs_open(kpath, (int)arg2, &proc->fd_table->fds[fd]);
     if (r < 0)
         return (uint64_t)(int64_t)r;
     /* Store open flags in the fd slot for F_GETFL */
-    proc->fds[fd].flags = (uint32_t)arg2;
+    proc->fd_table->fds[fd].flags = (uint32_t)arg2;
     /* Propagate O_CLOEXEC from open flags to fd flags */
     if (arg2 & VFS_O_CLOEXEC)
-        proc->fds[fd].flags |= VFS_FD_CLOEXEC;
+        proc->fd_table->fds[fd].flags |= VFS_FD_CLOEXEC;
     return fd;
 }
 
@@ -168,7 +168,7 @@ sys_getdents64(uint64_t fd_num, uint64_t dirp, uint64_t count)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     if (fd_num >= PROC_MAX_FDS) return (uint64_t)-(int64_t)EBADF;
-    vfs_file_t *f = &proc->fds[fd_num];
+    vfs_file_t *f = &proc->fd_table->fds[fd_num];
     if (!f->ops) return (uint64_t)-(int64_t)EBADF;
     if (!f->ops->readdir) return (uint64_t)-(int64_t)ENOTDIR;
     if (!user_ptr_valid(dirp, count)) return (uint64_t)-(int64_t)14; /* EFAULT */
@@ -301,7 +301,7 @@ sys_fstat(uint64_t arg1, uint64_t arg2)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
-    vfs_file_t *f = &proc->fds[arg1];
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
 
     k_stat_t ks;
@@ -394,7 +394,7 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
-    vfs_file_t *f = &proc->fds[arg1];
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
 
     switch (arg2) {
@@ -467,17 +467,17 @@ sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
-    vfs_file_t *f = &proc->fds[arg1];
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
 
     switch (arg2) {
     case 1: /* F_GETFD — return FD_CLOEXEC (1) if set, 0 otherwise */
-        return (proc->fds[arg1].flags & VFS_FD_CLOEXEC) ? 1 : 0;
+        return (proc->fd_table->fds[arg1].flags & VFS_FD_CLOEXEC) ? 1 : 0;
     case 2: /* F_SETFD — set or clear FD_CLOEXEC based on arg3 bit 0 (FD_CLOEXEC=1) */
         if (arg3 & 1)
-            proc->fds[arg1].flags |= VFS_FD_CLOEXEC;
+            proc->fd_table->fds[arg1].flags |= VFS_FD_CLOEXEC;
         else
-            proc->fds[arg1].flags &= ~VFS_FD_CLOEXEC;
+            proc->fd_table->fds[arg1].flags &= ~VFS_FD_CLOEXEC;
         return 0;
     case 3: /* F_GETFL */ return (uint64_t)f->flags;
     case 4: /* F_SETFL */
@@ -496,12 +496,12 @@ sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     case 1030: { /* F_DUPFD_CLOEXEC (0x406) — same as F_DUPFD + set FD_CLOEXEC */
         uint32_t new_fd;
         for (new_fd = (uint32_t)arg3; new_fd < PROC_MAX_FDS; new_fd++) {
-            if (!proc->fds[new_fd].ops) break;
+            if (!proc->fd_table->fds[new_fd].ops) break;
         }
         if (new_fd >= PROC_MAX_FDS) return (uint64_t)-(int64_t)24; /* EMFILE */
-        proc->fds[new_fd] = *f; /* struct copy */
-        proc->fds[new_fd].flags &= ~VFS_FD_CLOEXEC;   /* clear first */
-        if (arg2 == 1030) proc->fds[new_fd].flags |= VFS_FD_CLOEXEC;
+        proc->fd_table->fds[new_fd] = *f; /* struct copy */
+        proc->fd_table->fds[new_fd].flags &= ~VFS_FD_CLOEXEC;   /* clear first */
+        if (arg2 == 1030) proc->fd_table->fds[new_fd].flags |= VFS_FD_CLOEXEC;
         if (f->ops->dup) f->ops->dup(f->priv);
         return (uint64_t)new_fd;
     }
@@ -523,9 +523,9 @@ uint64_t
 sys_lseek(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops)
+    if (arg1 >= PROC_MAX_FDS || !proc->fd_table->fds[arg1].ops)
         return (uint64_t)-9;   /* EBADF */
-    vfs_file_t *f = &proc->fds[arg1];
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
 
     /* Non-seekable fd (no size): return ESPIPE */
     if (f->size == 0)
@@ -583,7 +583,7 @@ sys_pipe2(uint64_t arg1, uint64_t arg2)
     int rfd = -1, wfd = -1;
     int i;
     for (i = 0; i < PROC_MAX_FDS; i++) {
-        if (!proc->fds[i].ops) {
+        if (!proc->fd_table->fds[i].ops) {
             if (rfd < 0) { rfd = i; }
             else         { wfd = i; break; }
         }
@@ -600,23 +600,23 @@ sys_pipe2(uint64_t arg1, uint64_t arg2)
     p->write_refs = 1;
 
     /* Install read end */
-    proc->fds[rfd].ops    = &g_pipe_read_ops;
-    proc->fds[rfd].priv   = p;
-    proc->fds[rfd].offset = 0;
-    proc->fds[rfd].size   = 0;
-    proc->fds[rfd].flags  = 0;
+    proc->fd_table->fds[rfd].ops    = &g_pipe_read_ops;
+    proc->fd_table->fds[rfd].priv   = p;
+    proc->fd_table->fds[rfd].offset = 0;
+    proc->fd_table->fds[rfd].size   = 0;
+    proc->fd_table->fds[rfd].flags  = 0;
 
     /* Install write end */
-    proc->fds[wfd].ops    = &g_pipe_write_ops;
-    proc->fds[wfd].priv   = p;
-    proc->fds[wfd].offset = 0;
-    proc->fds[wfd].size   = 0;
-    proc->fds[wfd].flags  = 0;
+    proc->fd_table->fds[wfd].ops    = &g_pipe_write_ops;
+    proc->fd_table->fds[wfd].priv   = p;
+    proc->fd_table->fds[wfd].offset = 0;
+    proc->fd_table->fds[wfd].size   = 0;
+    proc->fd_table->fds[wfd].flags  = 0;
 
     /* Propagate O_CLOEXEC to both pipe ends */
     if (pipe_flags & VFS_O_CLOEXEC) {
-        proc->fds[rfd].flags |= VFS_FD_CLOEXEC;
-        proc->fds[wfd].flags |= VFS_FD_CLOEXEC;
+        proc->fd_table->fds[rfd].flags |= VFS_FD_CLOEXEC;
+        proc->fd_table->fds[wfd].flags |= VFS_FD_CLOEXEC;
     }
 
     /* Write [rfd, wfd] to user pipefd array */
@@ -638,22 +638,22 @@ uint64_t
 sys_dup(uint64_t arg1)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops)
+    if (arg1 >= PROC_MAX_FDS || !proc->fd_table->fds[arg1].ops)
         return (uint64_t)-9;    /* EBADF */
 
     int newfd = -1;
     int i;
     for (i = 0; i < PROC_MAX_FDS; i++) {
-        if (!proc->fds[i].ops) { newfd = i; break; }
+        if (!proc->fd_table->fds[i].ops) { newfd = i; break; }
     }
     if (newfd < 0)
         return (uint64_t)-24;   /* EMFILE */
 
     /* Copy fd struct by value, then bump refcount via dup hook. */
-    proc->fds[newfd] = proc->fds[arg1];
-    proc->fds[newfd].flags &= ~VFS_FD_CLOEXEC;  /* POSIX: dup clears FD_CLOEXEC */
-    if (proc->fds[newfd].ops->dup)
-        proc->fds[newfd].ops->dup(proc->fds[newfd].priv);
+    proc->fd_table->fds[newfd] = proc->fd_table->fds[arg1];
+    proc->fd_table->fds[newfd].flags &= ~VFS_FD_CLOEXEC;  /* POSIX: dup clears FD_CLOEXEC */
+    if (proc->fd_table->fds[newfd].ops->dup)
+        proc->fd_table->fds[newfd].ops->dup(proc->fd_table->fds[newfd].priv);
 
     return (uint64_t)newfd;
 }
@@ -670,7 +670,7 @@ uint64_t
 sys_dup2(uint64_t arg1, uint64_t arg2)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops)
+    if (arg1 >= PROC_MAX_FDS || !proc->fd_table->fds[arg1].ops)
         return (uint64_t)-9;    /* EBADF */
     if (arg2 >= PROC_MAX_FDS)
         return (uint64_t)-9;    /* EBADF */
@@ -678,16 +678,16 @@ sys_dup2(uint64_t arg1, uint64_t arg2)
         return arg2;            /* no-op per POSIX */
 
     /* Close existing target fd */
-    if (proc->fds[arg2].ops) {
-        proc->fds[arg2].ops->close(proc->fds[arg2].priv);
-        __builtin_memset(&proc->fds[arg2], 0, sizeof(vfs_file_t));
+    if (proc->fd_table->fds[arg2].ops) {
+        proc->fd_table->fds[arg2].ops->close(proc->fd_table->fds[arg2].priv);
+        __builtin_memset(&proc->fd_table->fds[arg2], 0, sizeof(vfs_file_t));
     }
 
     /* Copy fd struct by value, then bump refcount via dup hook. */
-    proc->fds[arg2] = proc->fds[arg1];
-    proc->fds[arg2].flags &= ~VFS_FD_CLOEXEC;  /* POSIX: dup2 clears FD_CLOEXEC */
-    if (proc->fds[arg2].ops->dup)
-        proc->fds[arg2].ops->dup(proc->fds[arg2].priv);
+    proc->fd_table->fds[arg2] = proc->fd_table->fds[arg1];
+    proc->fd_table->fds[arg2].flags &= ~VFS_FD_CLOEXEC;  /* POSIX: dup2 clears FD_CLOEXEC */
+    if (proc->fd_table->fds[arg2].ops->dup)
+        proc->fd_table->fds[arg2].ops->dup(proc->fd_table->fds[arg2].priv);
 
     return arg2;
 }

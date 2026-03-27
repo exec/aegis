@@ -133,21 +133,14 @@ sys_fork(syscall_frame_t *frame)
     if (!child)
         return (uint64_t)-(int64_t)12;   /* -ENOMEM */
 
-    /* 2. Copy parent fields */
-    uint32_t ci;
-    for (ci = 0; ci < PROC_MAX_FDS; ci++)
-        child->fds[ci] = parent->fds[ci];
-
-    /* Call dup hooks after the full fd table is copied.
-     * Two-pass ordering is required: copy all fds first (struct copy by value,
-     * no ref bumps), then bump all refs. If we bumped during the copy loop,
-     * an OOM failure midway would leave ref counts inconsistent.
-     * The child now holds an additional reference to every open fd. */
-    for (ci = 0; ci < PROC_MAX_FDS; ci++) {
-        if (child->fds[ci].ops && child->fds[ci].ops->dup)
-            child->fds[ci].ops->dup(child->fds[ci].priv);
+    /* 2. Copy parent fd table (allocates new table, bumps driver refs) */
+    child->fd_table = fd_table_copy(parent->fd_table);
+    if (!child->fd_table) {
+        kva_free_pages(child, 1);
+        return (uint64_t)-(int64_t)12;   /* -ENOMEM */
     }
 
+    uint32_t ci;
     for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
         child->caps[ci] = parent->caps[ci];
 
@@ -752,10 +745,10 @@ sys_execve(syscall_frame_t *frame,
     {
         int cfd;
         for (cfd = 0; cfd < PROC_MAX_FDS; cfd++) {
-            if (proc->fds[cfd].ops &&
-                (proc->fds[cfd].flags & VFS_FD_CLOEXEC)) {
-                proc->fds[cfd].ops->close(proc->fds[cfd].priv);
-                __builtin_memset(&proc->fds[cfd], 0, sizeof(vfs_file_t));
+            if (proc->fd_table->fds[cfd].ops &&
+                (proc->fd_table->fds[cfd].flags & VFS_FD_CLOEXEC)) {
+                proc->fd_table->fds[cfd].ops->close(proc->fd_table->fds[cfd].priv);
+                __builtin_memset(&proc->fd_table->fds[cfd], 0, sizeof(vfs_file_t));
             }
         }
     }
