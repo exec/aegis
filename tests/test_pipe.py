@@ -107,7 +107,7 @@ def _read_until_prompt(proc, deadline):
         if not chunk:
             break
         buf += chunk
-        if b"\n#" in buf:
+        if b"# " in buf:
             return buf.decode(errors="replace")
     return buf.decode(errors="replace")
 

@@ -88,7 +88,7 @@ def _type_string(mon_sock, text):
 
 
 def _read_until_prompt(proc, deadline):
-    """Read serial bytes from proc.stdout until '\\n#' is seen or deadline.
+    """Read serial bytes from proc.stdout until '# ' is seen or deadline.
 
     Uses os.read() on the raw fd with O_NONBLOCK to bypass Python's
     BufferedReader (same rationale as test_pipe.py).
@@ -108,7 +108,7 @@ def _read_until_prompt(proc, deadline):
         if not chunk:
             break
         buf += chunk
-        if b"\n#" in buf:
+        if b"# " in buf:
             return buf.decode(errors="replace")
     return buf.decode(errors="replace")
 

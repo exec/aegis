@@ -61,7 +61,7 @@ def _type_string(mon_sock, text):
 
 
 def _read_until_prompt(proc, deadline):
-    """Read serial bytes from proc.stdout until '\\n# ' or '\\n#' is seen or deadline.
+    """Read serial bytes from proc.stdout until '# ' is seen or deadline.
 
     Uses os.read() on the raw file descriptor to bypass Python's BufferedReader.
     Python's buffered read(1) drains the OS pipe into an internal buffer, causing
@@ -85,7 +85,7 @@ def _read_until_prompt(proc, deadline):
         if not chunk:
             break
         buf += chunk
-        if b"\n# " in buf or b"\n#" in buf:
+        if b"# " in buf:
             return buf.decode(errors="replace")
     return buf.decode(errors="replace")
 

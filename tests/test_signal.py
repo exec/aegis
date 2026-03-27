@@ -61,13 +61,10 @@ def _type_string(mon_sock, text):
 
 
 def _read_until_prompt(proc, deadline):
-    """Read serial bytes from proc.stdout until '\\n# ' or '\\n#' is seen or deadline.
+    """Read serial bytes from proc.stdout until '# ' is seen or deadline.
 
-    The shell writes the prompt as '# ' (hash space).  In practice only the '#'
-    arrives on the serial pipe before the shell blocks in fgets() waiting for
-    keyboard input — the trailing space may not flush in the same QEMU serial
-    buffer cycle.  Matching on '\\n#' (without requiring the trailing space)
-    detects the prompt reliably without waiting for the space to arrive.
+    The shell emits 'root@aegis:/# ' after every command.  We match on '# '
+    as the simplest prompt detector.
 
     Uses os.read() on the raw file descriptor to bypass Python's BufferedReader.
     Python's buffered read(1) drains the OS pipe into an internal buffer, causing
@@ -91,7 +88,7 @@ def _read_until_prompt(proc, deadline):
         if not chunk:
             break
         buf += chunk
-        if b"\n# " in buf or b"\n#" in buf:
+        if b"# " in buf:
             return buf.decode(errors="replace")
     return buf.decode(errors="replace")
 

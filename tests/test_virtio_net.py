@@ -35,7 +35,7 @@ def build_iso():
 
 
 def _read_until_prompt_or_timeout(proc, deadline):
-    """Read serial bytes until '\n#' or deadline. Non-blocking O_NONBLOCK loop."""
+    """Read serial bytes until '# ' or deadline. Non-blocking O_NONBLOCK loop."""
     fd = proc.stdout.fileno()
     fl = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
@@ -51,7 +51,7 @@ def _read_until_prompt_or_timeout(proc, deadline):
         if not chunk:
             break
         buf += chunk
-        if b"\n#" in buf:
+        if b"# " in buf:
             return buf.decode(errors="replace")
     return buf.decode(errors="replace")
 
