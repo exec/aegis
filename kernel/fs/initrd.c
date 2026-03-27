@@ -21,6 +21,10 @@ static const char s_profile[] =
     "export PS1\n"
     "PATH=/bin\n"
     "export PATH\n";
+static const char s_hosts[] =
+    "127.0.0.1 localhost\n"
+    "10.0.2.15 aegis\n"
+    "104.18.26.120 example.com\n";
 
 /* Default vigil service config — allows vigil to find its getty service even
  * on a disk that was built before vigil was added (or on no disk at all).
@@ -41,6 +45,7 @@ static const char s_dhcp_policy[] = "respawn\nmax_restarts=10\n";
 static const char s_dhcp_caps[]   = "NET_ADMIN NET_SOCKET\n";
 
 /* Compile-time size constants for static string entries. */
+static const unsigned int s_hosts_size         = sizeof(s_hosts)         - 1;
 static const unsigned int s_passwd_size        = sizeof(s_passwd)        - 1;
 static const unsigned int s_shadow_size        = sizeof(s_shadow)        - 1;
 static const unsigned int s_profile_size       = sizeof(s_profile)       - 1;
@@ -145,6 +150,7 @@ static const initrd_entry_t s_files[] = {
     { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
     { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
     { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },
+    { "/etc/hosts",  (const unsigned char *)s_hosts,  (const unsigned char *)s_hosts + s_hosts_size },
     { "/etc/passwd", (const unsigned char *)s_passwd, (const unsigned char *)s_passwd + s_passwd_size },
     { "/etc/shadow", (const unsigned char *)s_shadow, (const unsigned char *)s_shadow + s_shadow_size },
     { "/etc/profile", (const unsigned char *)s_profile, (const unsigned char *)s_profile + s_profile_size },
@@ -158,7 +164,7 @@ static const initrd_entry_t s_files[] = {
 };
 
 
-static const uint32_t s_nfiles = 37;
+static const uint32_t s_nfiles = 38;
 
 /* Helper: return file size for an entry. */
 static uint32_t

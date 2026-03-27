@@ -14,8 +14,8 @@ cd "$BUILD_DIR"
 
 "$CURL_SRC/configure" \
   CC="musl-gcc" \
-  CFLAGS="-O2" \
-  LDFLAGS="-static -L$BEARSSL_INSTALL/lib -L$BEARSSL_INSTALL/lib64" \
+  CFLAGS="-O2 -fno-pie" \
+  LDFLAGS="-static -no-pie -L$BEARSSL_INSTALL/lib -L$BEARSSL_INSTALL/lib64" \
   PKG_CONFIG="" \
   --srcdir="$CURL_SRC" \
   --prefix="$OUT/install" \
@@ -43,10 +43,20 @@ cd "$BUILD_DIR"
   --disable-tftp \
   --disable-gopher \
   --disable-mqtt \
+  --disable-threaded-resolver \
   --with-bearssl="$BEARSSL_INSTALL" \
   --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt
 
-make -j$(nproc)
+make -j$(nproc) LDFLAGS="-static -no-pie -L$BEARSSL_INSTALL/lib -L$BEARSSL_INSTALL/lib64" V=1 2>&1 | tail -5
+
+# Libtool often ignores -static. Force a static relink if needed.
+if file src/curl | grep -q "dynamically linked"; then
+    echo "[curl] libtool produced dynamic binary, relinking statically..."
+    musl-gcc -static -no-pie -O2 -fno-pie -o src/curl \
+        src/curl-tool_main.o src/.libs/libcurltool.a lib/.libs/libcurl.a \
+        -L"$BEARSSL_INSTALL/lib" -L"$BEARSSL_INSTALL/lib64" -lbearssl
+fi
+
 cp src/curl "$OUT/curl"
 strip "$OUT/curl"
 echo "[curl] built: $OUT/curl ($(du -sh "$OUT/curl" | cut -f1))"

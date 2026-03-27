@@ -6,7 +6,7 @@
 #include "netdev.h"
 
 #define TCP_MAX_CONNS  32
-#define TCP_RBUF_SIZE  8192
+#define TCP_RBUF_SIZE  16384
 #define TCP_SBUF_SIZE  8192
 
 /* TIME_WAIT duration: 4 seconds (shortened 2MSL; non-production acceptable). */

@@ -17,7 +17,7 @@
 [SMEP] OK: supervisor mode execution prevention active
 [RNG] OK: ChaCha20 CSPRNG seeded
 [VFS] OK: initialized
-[INITRD] OK: 37 files registered
+[INITRD] OK: 38 files registered
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)
 [PCIE] OK: skipped (no ECAM)
 [CAP] OK: 8 capabilities granted to init

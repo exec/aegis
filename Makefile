@@ -149,7 +149,7 @@ USERSPACE_SRCS = \
     kernel/elf/elf.c \
 
 # Programs embedded in initrd via objcopy --input binary
-OBJCOPY = x86_64-linux-gnu-objcopy
+OBJCOPY = x86_64-elf-objcopy
 
 USER_ELFS = \
     user/shell/shell.elf \
@@ -273,6 +273,9 @@ user/mv/mv.elf:
 user/whoami/whoami.elf:
 	$(MAKE) -C user/whoami
 
+user/shell/shell.elf:
+	$(MAKE) -C user/shell
+
 user/oksh/oksh.elf:
 	$(MAKE) -C user/oksh
 
@@ -284,6 +287,12 @@ user/vigil/vigil: user/vigil/main.c
 
 user/vigictl/vigictl: user/vigictl/main.c
 	$(MAKE) -C user/vigictl
+
+user/httpd/httpd.elf:
+	$(MAKE) -C user/httpd
+
+user/dhcp/dhcp: user/dhcp/main.c
+	$(MAKE) -C user/dhcp
 
 # ── Binary blob embedding (objcopy) ──────────────────────────────────────────
 # Each user ELF → linkable .o with _binary_<name>_bin_start/end symbols.

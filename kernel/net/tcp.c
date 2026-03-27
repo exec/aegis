@@ -81,7 +81,13 @@ int tcp_send_segment(netdev_t *dev, tcp_conn_t *conn,
     hdr->ack      = (flags & TCP_ACK) ? htonl(conn->rcv_nxt) : 0;
     hdr->data_off = (uint8_t)((sizeof(tcp_hdr_t) / 4) << 4);
     hdr->flags    = flags;
-    hdr->window   = htons(4096);
+    /* Advertise available receive buffer space so the sender paces correctly. */
+    {
+        uint32_t used  = (conn->rbuf_tail - conn->rbuf_head) & (TCP_RBUF_SIZE - 1);
+        uint32_t avail = TCP_RBUF_SIZE - used;
+        if (avail > 0xFFFFu) avail = 0xFFFFu;
+        hdr->window = htons((uint16_t)avail);
+    }
     hdr->checksum = 0;
     hdr->urgent   = 0;
     if (payload && len > 0)
@@ -173,7 +179,6 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
 
     if (!conn) {
         if (flags & TCP_SYN) {
-            printk("[TCP] SYN dst_port=%u\n", (uint32_t)local_port);
             tcp_conn_t *listener = tcp_find_listener(dst_ip, local_port);
             if (!listener) {
                 _tcp_memset(&s_rst_conn, 0, sizeof(s_rst_conn));
@@ -405,6 +410,7 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
         if (s_tcp[i].state == TCP_CLOSED) {
             _tcp_memset(&s_tcp[i], 0, sizeof(s_tcp[i]));
             s_tcp[i].state       = TCP_SYN_SENT;
+            net_get_config(&s_tcp[i].local_ip, (ip4_addr_t *)0, (ip4_addr_t *)0);
             s_tcp[i].local_port  = (uint16_t)(49152u + (arch_get_ticks() & 0x3FFFu));
             s_tcp[i].remote_ip   = dst_ip;
             s_tcp[i].remote_port = dst_port;

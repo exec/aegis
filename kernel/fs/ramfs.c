@@ -73,8 +73,11 @@ static int
 ramfs_write_fn(void *priv, const void *buf, uint64_t len)
 {
     ramfs_file_t *f = (ramfs_file_t *)priv;
-    /* Validate user pointer before copy_from_user. */
-    if (!user_ptr_valid((uintptr_t)buf, len)) return -14;  /* EFAULT */
+    /* Buffer may be a user pointer (sys_write) or a kernel staging buffer
+     * (sys_writev).  The syscall layer validates user pointers before calling
+     * us, so we accept both here.  copy_from_user (stac/memcpy/clac) works
+     * correctly on kernel addresses — STAC enables user access but kernel
+     * access is always permitted. */
     if (len > RAMFS_MAX_SIZE) len = RAMFS_MAX_SIZE;
     if (!f->data) {
         f->data = (uint8_t *)kva_alloc_pages(1);
@@ -83,6 +86,8 @@ ramfs_write_fn(void *priv, const void *buf, uint64_t len)
     uint64_t done = 0;
     while (done < len) {
         uint64_t chunk = len - done;
+        /* For user pointers, cap copy to page boundary to avoid crossing
+         * an unmapped page.  For kernel pointers this is harmless. */
         {
             uint64_t page_off = (uint64_t)(uintptr_t)((const uint8_t *)buf + done) & 0xFFFULL;
             uint64_t to_end   = 0x1000ULL - page_off;
