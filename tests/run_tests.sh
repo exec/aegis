@@ -124,3 +124,8 @@ python3 tests/test_socket.py
 # runs curl https://example.com. Skipped if build/disk.img is not present.
 echo "--- test_curl ---"
 python3 tests/test_curl.py
+
+# Phase 29 thread support test — boots INIT=vigil with thread_test on ext2 disk.
+# Skipped automatically if build/disk.img is not present.
+echo "--- test_threads ---"
+python3 tests/test_threads.py
