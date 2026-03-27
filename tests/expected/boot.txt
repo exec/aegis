@@ -23,4 +23,3 @@
 [CAP] OK: 8 capabilities granted to init
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 2 tasks
-[SHELL] Aegis shell ready
