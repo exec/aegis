@@ -247,6 +247,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | BearSSL + curl build | ✅ | tools/fetch-bearssl.sh + tools/build-curl.sh; curl 8.x statically linked; ext2-only via make disk |
 | curl HTTPS e2e | ✅ | DNS + TCP + TLS 1.2 (BearSSL ChaCha20-Poly1305) + HTTP/1.1; test_curl.py PASS (-k: CA bundle loading TBD) |
 | Thread support (Phase 29) | ✅ | clone(CLONE_VM); per-thread TLS; fd_table_t refcount; futex WAIT/WAKE; tgid; clear_child_tid; test_threads.py PASS |
+| mprotect + mmap freelist (Phase 30) | ✅ | Real mprotect (W^X via NX/EFER.NXE); 64-slot VA freelist (best-fit + coalescing); test_mmap.py PASS |
 
 ### Known deviations
 
@@ -311,7 +312,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 27 | DHCP daemon, writable /etc+/root, BearSSL+curl, CSPRNG | ✅ Done |
 | 28 | **curl HTTPS e2e** — DNS resolution, TCP outbound, TLS 1.2 handshake, HTTP/1.1 response via SLIRP NAT | ✅ Done |
 | 29 | **Threads** — `clone()`+`futex`; per-thread TLS; shared address space; `CAP_KIND_THREAD_CREATE` gate; musl pthreads support | ✅ Done |
-| 30 | **mprotect + mmap improvements** — real mprotect (W^X); file-backed mmap; MAP_SHARED; munmap freelist | Not started |
+| 30 | **mprotect + mmap improvements** — real mprotect (W^X via NX); munmap VA freelist (64-slot best-fit + coalescing) | ✅ Done |
 | 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | Not started |
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | Not started |
 | 33 | **Dynamic linking** — ELF interpreter (ld.so); shared library loading gated by `CAP_KIND_VFS_READ`; dlopen/dlsym | Not started |
@@ -352,7 +353,29 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ---
 
-*Last updated: 2026-03-27 — Phase 27/28/29 complete. curl HTTPS ✅ (TLS 1.2 via BearSSL, -k for now). Threads ✅ (clone+futex+fd_table_t). Full test suite GREEN.*
+*Last updated: 2026-03-27 — Phase 27/28/29/30 complete. mprotect (W^X via NX) ✅. mmap VA freelist ✅. EFER.NXE enabled. Full test suite GREEN.*
+
+---
+
+## Phase 30 — Forward Constraints
+
+**Phase 30 status: ✅ complete. `make test` passes. `test_mmap.py` PASS.**
+
+1. **Freelist has no lock.** Safe on single-core (no preemption during syscalls). SMP requires a spinlock on `mmap_free[]` and `mmap_base`.
+
+2. **PROT_NONE pages still allocate physical frames.** A true demand-paging PROT_NONE (reserve VA only, fault-in on mprotect) is future work. Current approach wastes RAM on guard pages but is simple and correct.
+
+3. **No MAP_FIXED.** sys_mmap rejects addr!=0. MAP_FIXED (map at a specific VA) deferred.
+
+4. **File-backed mmap and MAP_SHARED deferred.** No consumers until Phase 33 (dynamic linking) and Phase 39 (IPC).
+
+5. **PROT_NONE pages leak physical frames on munmap.** `vmm_phys_of_user` only returns phys for PRESENT pages. After `mprotect(PROT_NONE)` clears PRESENT, munmap can't find the phys to free it. Guard pages are small (1 page per thread stack) so the leak is negligible.
+
+6. **Makefile lacks header dependency tracking.** Changes to `.h` files do not trigger recompilation of dependent `.c` files. Always use `rm -rf build && make` (or `make clean && make`) when modifying headers. A `-MMD`/`.d` dep file system should be added.
+
+7. **No user-mode exception → signal delivery.** CPU exceptions (page fault, GPF, etc.) from ring-3 cause kernel PANIC, not SIGSEGV. Hardware exception → signal delivery is future work (needed for proper PROT_NONE guard page behavior).
+
+8. **EFER.NXE enabled globally.** All PTEs with bit 63 set are now enforced as non-executable. Any code that sets PTE bit 63 without NXE was previously silent; now it's enforced.
 
 ---
 
