@@ -587,11 +587,13 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
         }
         if (ready > 0 || timeout_ticks == 0) return (uint64_t)ready;
         if (deadline && (uint32_t)arch_get_ticks() >= deadline) return 0;
-        /* Yield: wait for next PIT tick then retry */
-        {
-            uint64_t now = arch_get_ticks();
-            while (arch_get_ticks() == now) { /* spin one tick */ }
-        }
+        /* Yield: halt until next interrupt (PIT at 100 Hz).
+         * Using HLT instead of busy-spin is critical for SLIRP external NAT:
+         * when the vCPU halts, QEMU's main event loop runs select()/poll(),
+         * which processes SLIRP's pending outbound connections and relays
+         * data from real sockets.  A busy-spin prevents the main loop from
+         * running, starving SLIRP's external connection handling. */
+        arch_wait_for_irq();
     }
 }
 
