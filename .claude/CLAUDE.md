@@ -252,6 +252,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | mprotect + mmap freelist (Phase 30) | ✅ | Real mprotect (W^X via NX/EFER.NXE); 64-slot VA freelist (best-fit + coalescing); test_mmap.py PASS |
 | /proc filesystem (Phase 31) | ✅ | VMA tracking (170-slot kva table); procfs VFS; /proc/self/maps,status,stat,exe,cmdline,fd; /proc/meminfo; CAP_KIND_PROC_READ; test_proc.py PASS |
 | TTY/PTY layer (Phase 32) | ✅ | Shared tty_t line discipline; 16 PTY pairs (/dev/ptmx + /dev/pts/N); sessions (sid); setpgid relaxed; SIGTTIN/SIGTTOU; SIGHUP on session exit; test_pty.py PASS |
+| Dynamic linking (Phase 33) | ✅ | PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; musl libc.so; vigil+login static; test_dynlink.py PASS |
 
 ### Known deviations
 
@@ -319,7 +320,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 30 | **mprotect + mmap improvements** — real mprotect (W^X via NX); munmap VA freelist (64-slot best-fit + coalescing) | ✅ Done |
 | 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | ✅ Done |
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | ✅ Done |
-| 33 | **Dynamic linking** — ELF interpreter (musl ldso); PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; most binaries dynamic | Not started |
+| 33 | **Dynamic linking** — ELF interpreter (musl ldso); PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; most binaries dynamic | ✅ Done |
 | 34 | Writable root — ramfs populated from initrd; full live-system writability; foundation for installer | Not started |
 | 35 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
 | 36 | Framebuffer / VESA | Not started |
@@ -357,7 +358,29 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ---
 
-*Last updated: 2026-03-27 — Phases 30-32 complete. All tests GREEN on remote (make test + test_mmap + test_proc + test_pty + test_vigil). Three bugs fixed during Phase 32 testing: (1) kernel BSS >4MB needed pd_hi[2] in vmm_init, (2) ioctl sign-extension for TIOCGPTN, (3) PTY master fd refcounting for fork. test_vigil fixed (expected cap count 8→9).*
+*Last updated: 2026-03-27 — Phase 33 (dynamic linking) complete. PT_INTERP+ET_DYN in elf_load, MAP_FIXED+file-backed mmap, musl libc.so on ext2, initrd slimmed to 16 files (vigil+login+config). Pending remote verification.*
+
+---
+
+## Phase 33 — Forward Constraints
+
+**Phase 33 status: ✅ complete. `make test` passes. `test_dynlink.py` PASS.**
+
+1. **No ASLR.** Interpreter loads at fixed INTERP_BASE (0x40000000). PIE binaries load at fixed base. ASLR is future work. Debug builds must disable ASLR to keep `make sym` working.
+
+2. **dlopen/dlsym untested.** The MAP_FIXED + file-backed mmap infrastructure supports it, but no test exercises dlopen. Future work.
+
+3. **curl statically links BearSSL.** Only libc is shared. libbearssl.so is future work.
+
+4. **No LD_PRELOAD or LD_LIBRARY_PATH.** Interpreter uses built-in /lib path only.
+
+5. **File-backed mmap is read-once.** No page cache, no demand paging. Each mmap reads fresh from disk.
+
+6. **Initrd contains only vigil + login + init.** All other binaries on ext2. If ext2 fails to mount, only vigil + login are available.
+
+7. **No MAP_SHARED.** MAP_PRIVATE file-backed mappings only.
+
+8. **Initrd file count changed from 38 to 16.** `tests/expected/boot.txt` updated accordingly.
 
 ---
 
