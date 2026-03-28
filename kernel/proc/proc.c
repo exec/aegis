@@ -83,6 +83,8 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     }
     uint64_t entry_rip = er.entry;
     uint64_t brk_start = er.brk;
+    printk("[PROC] init entry=0x%lx brk=0x%lx elf_len=%u\n",
+           entry_rip, brk_start, (unsigned)elf_len);
 
     /* Allocate and map user stack page.
      * vmm_zero_page ensures the initial stack contents are zero.
