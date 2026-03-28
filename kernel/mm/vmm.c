@@ -4,6 +4,7 @@
 #include "pmm.h"
 #include "printk.h"
 #include "spinlock.h"
+#include "tlb.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -624,12 +625,20 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
     }
 
     uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
-    if (pt[pt_idx] & VMM_FLAG_PRESENT)
+    int did_unmap = 0;
+    if (pt[pt_idx] & VMM_FLAG_PRESENT) {
         pt[pt_idx] = 0;
+        did_unmap = 1;
+    }
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
 
     spin_unlock_irqrestore(&vmm_window_lock, fl);
+
+    /* TLB shootdown: other CPUs may have this VA cached.
+     * Called outside vmm_window_lock to avoid deadlock. */
+    if (did_unmap)
+        tlb_shootdown(pml4_phys, virt, virt + VMM_PAGE_SIZE);
 }
 
 int
@@ -684,6 +693,10 @@ vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
     spin_unlock_irqrestore(&vmm_window_lock, fl);
+
+    /* TLB shootdown: other CPUs may have stale permissions cached.
+     * Called outside vmm_window_lock to avoid deadlock. */
+    tlb_shootdown(pml4_phys, virt, virt + VMM_PAGE_SIZE);
     return 0;
 }
 

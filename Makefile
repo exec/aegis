@@ -86,6 +86,7 @@ ARCH_SRCS = \
     kernel/arch/x86_64/lapic.c \
     kernel/arch/x86_64/ioapic.c \
     kernel/arch/x86_64/smp.c \
+    kernel/arch/x86_64/tlb.c \
     kernel/arch/x86_64/gdt.c \
     kernel/arch/x86_64/tss.c \
     kernel/arch/x86_64/arch_syscall.c \

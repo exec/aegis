@@ -130,6 +130,9 @@ ISR_NOERR 0x2F ; IRQ15 — secondary ATA / spurious slave
 ; LAPIC timer vector 0x30 — periodic timer interrupt from local APIC.
 ISR_NOERR 0x30
 
+; TLB shootdown IPI vector 0xFE — sent by tlb_shootdown() to flush remote TLBs.
+ISR_NOERR 0xFE
+
 ; isr_common_stub — save GPRs, switch to master PML4, dispatch, restore, iretq.
 ;
 ; Calling convention: SystemV AMD64 ABI — rdi = first argument (cpu_state_t *).
@@ -254,6 +257,11 @@ isr_stubs:
 global isr_stub_lapic_timer
 isr_stub_lapic_timer:
     dq isr_0x30
+
+; TLB shootdown IPI stub — idt.c references as: extern void *isr_stub_tlb_shootdown;
+global isr_stub_tlb_shootdown
+isr_stub_tlb_shootdown:
+    dq isr_0xFE
 
 ; LAPIC spurious vector stub — idt.c references as: extern void *isr_stub_spurious;
 global isr_stub_spurious

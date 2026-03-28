@@ -6,6 +6,7 @@
 #include "acpi.h"
 #include "lapic.h"
 #include "ioapic.h"
+#include "tlb.h"
 #include "printk.h"
 #include "arch.h"
 
@@ -17,6 +18,9 @@ extern void *isr_stubs[48];
 
 /* LAPIC timer vector stub (vector 0x30) defined in isr.asm */
 extern void *isr_stub_lapic_timer;
+
+/* TLB shootdown IPI vector stub (vector 0xFE) defined in isr.asm */
+extern void *isr_stub_tlb_shootdown;
 
 /* LAPIC spurious vector stub (vector 0xFF) defined in isr.asm */
 extern void *isr_stub_spurious;
@@ -50,6 +54,10 @@ idt_init(void)
 
     /* Vector 0x30 — LAPIC timer interrupt (periodic, ~100Hz). */
     idt_gate_set(0x30, isr_stub_lapic_timer);
+
+    /* Vector 0xFE — TLB shootdown IPI from tlb_shootdown().  The handler
+     * does its own LAPIC EOI; isr_dispatch skips the normal EOI path. */
+    idt_gate_set(0xFE, isr_stub_tlb_shootdown);
 
     /* Vector 0xFF — LAPIC spurious interrupt.  Per Intel spec, no EOI must
      * be sent for spurious interrupts; isr_dispatch returns immediately. */
@@ -134,6 +142,10 @@ isr_dispatch(cpu_state_t *s)
         if (s->cs == 0x08)
             panic_backtrace(s->rbp);
         for (;;) {}
+    } else if (s->vector == 0xFE) {
+        /* TLB shootdown IPI — handler does its own LAPIC EOI. */
+        tlb_shootdown_handler();
+        return;
     } else if (s->vector == 0xFF) {
         /* LAPIC spurious interrupt — per Intel spec, do NOT send EOI. */
         return;
