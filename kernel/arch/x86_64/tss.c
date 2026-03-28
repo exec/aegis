@@ -1,4 +1,5 @@
 #include "tss.h"
+#include "smp.h"
 #include "../core/printk.h"
 
 /* Verify the TSS is exactly 104 bytes as per x86-64 spec. */
@@ -16,14 +17,6 @@ static aegis_tss_t s_tss;
 static uint8_t s_df_stack[4096] __attribute__((aligned(16)));
 
 /*
- * g_kernel_rsp — kernel stack RSP for SYSCALL entry stub.
- * Updated by arch_set_kernel_stack() alongside tss.rsp0.
- * Exported (no static) so syscall_entry.asm can reference it.
- *
- * g_user_rsp — scratch global for SYSCALL stack switch.
- * Stores user RSP transiently between "mov [g_user_rsp], rsp"
- * and the push to the kernel stack. Single-core only.
- *
  * g_master_pml4 — physical address of the master (kernel) PML4.
  * Set by arch_set_master_pml4() after vmm_init() and referenced from
  * isr.asm and syscall_entry.asm to restore the master PML4 at the start
@@ -31,8 +24,6 @@ static uint8_t s_df_stack[4096] __attribute__((aligned(16)));
  * syscall dispatch, scheduler) runs with the master PML4 where TCBs and
  * kernel stacks are accessible via the identity map.
  */
-uint64_t g_kernel_rsp  = 0;
-uint64_t g_user_rsp    = 0;
 uint64_t g_master_pml4 = 0;
 
 aegis_tss_t *
@@ -54,8 +45,10 @@ arch_tss_init(void)
 void
 arch_set_kernel_stack(uint64_t rsp0)
 {
-	s_tss.rsp0   = rsp0;
-	g_kernel_rsp = rsp0;
+	s_tss.rsp0 = rsp0;
+	/* syscall_entry.asm reads gs:24 (percpu.kernel_stack) for the SYSCALL
+	 * stack switch.  Keep it in sync with TSS.RSP0. */
+	percpu_self()->kernel_stack = rsp0;
 }
 
 void

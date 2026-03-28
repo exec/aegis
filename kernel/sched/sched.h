@@ -2,6 +2,7 @@
 #define AEGIS_SCHED_H
 
 #include <stdint.h>
+#include "smp.h"
 
 #define TASK_RUNNING  0U
 #define TASK_BLOCKED  1U
@@ -47,8 +48,14 @@ void sched_add(aegis_task_t *task);
  * TCB and kernel stack are freed via deferred kva_free_pages at the next sched_exit call. */
 void sched_exit(void);
 
-/* Return a pointer to the currently running task. */
-aegis_task_t *sched_current(void);
+/* Returns the currently running task for this CPU via per-CPU GS.base. */
+static inline aegis_task_t *
+sched_current(void)
+{
+    aegis_task_t *t;
+    __asm__ volatile("movq %%gs:16, %0" : "=r"(t));
+    return t;
+}
 
 /* sched_block — mark current task TASK_BLOCKED and yield.
  * Unlinks current from the run queue; switches to next RUNNING task.
@@ -57,13 +64,13 @@ aegis_task_t *sched_current(void);
 void sched_block(void);
 
 /* sched_wake — mark task TASK_RUNNING and re-add to run queue.
- * Inserts before s_current so the woken task runs next tick.
+ * Inserts before current so the woken task runs next tick.
  * Called from sched_exit when the parent is found waiting. IF=0. */
 void sched_wake(aegis_task_t *task);
 
 /* sched_stop — transition a task to TASK_STOPPED.
  * If task == sched_current() (self-stop): mirrors sched_block exactly —
- * sets state, advances s_current to next TASK_RUNNING, updates TSS/FS.base,
+ * sets state, advances to next TASK_RUNNING via percpu, updates TSS/FS.base,
  * calls ctx_switch. Execution resumes when SIGCONT calls sched_resume and
  * sched_tick next schedules this task.
  * If task != sched_current(): sets task->state = TASK_STOPPED only;
@@ -74,7 +81,7 @@ void sched_stop(aegis_task_t *task);
  * Mirrors sched_wake: task->state = TASK_RUNNING. No list re-insertion needed. */
 void sched_resume(aegis_task_t *task);
 
-/* sched_yield_to_next — advance s_current to the next RUNNING task
+/* sched_yield_to_next — advance percpu current to the next RUNNING task
  * and ctx_switch. Used by the zombie path in sched_exit.
  * The zombie's kernel stack is still live during ctx_switch; the caller
  * must not touch task state after sched_yield_to_next returns (it returns

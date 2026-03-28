@@ -43,6 +43,15 @@ extern uint32_t g_cpu_count;
 
 void smp_percpu_init_bsp(void);
 
+/* Return pointer to the current CPU's percpu_t via gs:0 (self pointer). */
+static inline percpu_t *
+percpu_self(void)
+{
+    percpu_t *p;
+    __asm__ volatile("movq %%gs:0, %0" : "=r"(p));
+    return p;
+}
+
 static inline struct aegis_task_t *
 percpu_current(void)
 {

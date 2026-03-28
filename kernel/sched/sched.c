@@ -8,6 +8,7 @@
 #include "fd_table.h"
 #include "ext2.h"
 #include "spinlock.h"
+#include "smp.h"
 #include <stddef.h>
 
 /* Compile-time guard: ctx_switch.asm assumes sp is at offset 0 of TCB.
@@ -18,7 +19,6 @@ _Static_assert(offsetof(aegis_task_t, sp) == 0,
 #define STACK_PAGES  4                     /* 16KB per task */
 #define STACK_SIZE   (STACK_PAGES * 4096UL)
 
-static aegis_task_t *s_current = (void *)0;
 static uint32_t      s_next_tid = 0;
 static uint32_t      s_task_count = 0;
 
@@ -27,7 +27,7 @@ static spinlock_t sched_lock = SPINLOCK_INIT;
 void
 sched_init(void)
 {
-    s_current    = (void *)0;
+    percpu_set_current((aegis_task_t *)0);
     s_next_tid   = 0;
     s_task_count = 0;
 }
@@ -91,13 +91,14 @@ sched_spawn(void (*fn)(void))
     task->waiting_for      = 0;
 
     /* Add to circular list */
-    if (!s_current) {
+    aegis_task_t *cur = sched_current();
+    if (!cur) {
         task->next = task;
-        s_current  = task;
+        percpu_set_current(task);
     } else {
         /* Insert after current */
-        task->next      = s_current->next;
-        s_current->next = task;
+        task->next = cur->next;
+        cur->next  = task;
     }
 
     s_task_count++;
@@ -109,12 +110,13 @@ void
 sched_add(aegis_task_t *task)
 {
     irqflags_t fl = spin_lock_irqsave(&sched_lock);
-    if (!s_current) {
+    aegis_task_t *cur = sched_current();
+    if (!cur) {
         task->next = task;
-        s_current  = task;
+        percpu_set_current(task);
     } else {
-        task->next      = s_current->next;
-        s_current->next = task;
+        task->next = cur->next;
+        cur->next  = task;
     }
     s_task_count++;
     spin_unlock_irqrestore(&sched_lock, fl);
@@ -150,8 +152,9 @@ sched_exit(void)
      * (pd_hi is shared). The switch is retained as a defensive measure. */
     vmm_switch_to(vmm_get_master_pml4());
 
-    if (s_current->is_user) {
-        aegis_process_t *dying = (aegis_process_t *)s_current;
+    aegis_task_t *s_cur = sched_current();
+    if (s_cur->is_user) {
+        aegis_process_t *dying = (aegis_process_t *)s_cur;
         /* dying->exit_status was set by sys_exit before calling sched_exit. */
 
         /* Release the shared fd table (closes all fds if refcount drops to 0).
@@ -169,7 +172,7 @@ sched_exit(void)
         dying->fd_table = (fd_table_t *)0;
 
         /* Mark self zombie — stays in run queue until waitpid reaps. */
-        s_current->state = TASK_ZOMBIE;
+        s_cur->state = TASK_ZOMBIE;
 
         /* Notify parent of child exit via SIGCHLD.
          * signal_send_pid sets SIGCHLD pending on the parent and calls
@@ -184,8 +187,8 @@ sched_exit(void)
          * signal_send_pid may have transitioned the parent BLOCKED→RUNNING;
          * check TASK_RUNNING here. */
         aegis_task_t *woken_parent = (void *)0;
-        aegis_task_t *t = s_current->next;
-        while (t != s_current) {
+        aegis_task_t *t = s_cur->next;
+        while (t != s_cur) {
             if (t->is_user && t->state == TASK_RUNNING) {
                 aegis_process_t *p = (aegis_process_t *)t;
                 if (p->pid == dying->ppid &&
@@ -202,8 +205,8 @@ sched_exit(void)
          * Without the state check, this scan would never trigger shutdown
          * because the just-zombified task is still in the queue with is_user=1. */
         int live_users = 0;
-        t = s_current->next;
-        while (t != s_current) {
+        t = s_cur->next;
+        while (t != s_cur) {
             if (t->is_user && t->state != TASK_ZOMBIE)
                 live_users = 1;
             t = t->next;
@@ -228,13 +231,13 @@ sched_exit(void)
          * preempted and the parent is never scheduled.  Switching directly
          * to the parent eliminates the PIT dependency for this path. */
         if (woken_parent) {
-            aegis_task_t *zombie_task = s_current;
-            s_current = woken_parent;
-            arch_set_kernel_stack(s_current->kernel_stack_top);
-            if (s_current->is_user)
-                arch_set_fs_base(s_current->fs_base);
+            aegis_task_t *zombie_task = s_cur;
+            percpu_set_current(woken_parent);
+            arch_set_kernel_stack(woken_parent->kernel_stack_top);
+            if (woken_parent->is_user)
+                arch_set_fs_base(woken_parent->fs_base);
             spin_unlock_irqrestore(&sched_lock, fl);
-            ctx_switch(zombie_task, s_current);
+            ctx_switch(zombie_task, woken_parent);
             /* unreachable — zombie never resumes after direct switch */
         } else {
             spin_unlock_irqrestore(&sched_lock, fl);
@@ -248,25 +251,26 @@ sched_exit(void)
 
     /* IF=0 throughout (IA32_SFMASK cleared IF on SYSCALL entry) —
      * no preemption can occur during list manipulation. */
-    aegis_task_t *prev = s_current;
-    while (prev->next != s_current)
+    aegis_task_t *prev = s_cur;
+    while (prev->next != s_cur)
         prev = prev->next;
 
-    aegis_task_t *dying_k = s_current;
-    s_current             = dying_k->next;
-    prev->next            = s_current;
+    aegis_task_t *dying_k = s_cur;
+    aegis_task_t *next_k  = dying_k->next;
+    prev->next            = next_k;
     s_task_count--;
 
-    if (s_current == dying_k) {  /* last task — everything has exited */
+    if (next_k == dying_k) {  /* last task — everything has exited */
         arch_request_shutdown();
         for (;;) arch_halt();
     }
 
-    arch_set_kernel_stack(s_current->kernel_stack_top);
+    percpu_set_current(next_k);
+    arch_set_kernel_stack(next_k->kernel_stack_top);
 
     /* If the next task is a user task, switch to its PML4. */
-    if (s_current->is_user)
-        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+    if (next_k->is_user)
+        vmm_switch_to(((aegis_process_t *)next_k)->pml4_phys);
 
     /* Record dying kernel task for deferred cleanup at the next sched_exit entry.
      * Must be set AFTER all list manipulation and BEFORE ctx_switch:
@@ -276,7 +280,7 @@ sched_exit(void)
     g_prev_dying_stack_pages = dying_k->stack_pages;
     g_prev_dying_tcb         = dying_k;
     spin_unlock_irqrestore(&sched_lock, fl);
-    ctx_switch(dying_k, s_current);
+    ctx_switch(dying_k, next_k);
     __builtin_unreachable();
 }
 
@@ -285,7 +289,7 @@ sched_block(void)
 {
     irqflags_t fl = spin_lock_irqsave(&sched_lock);
 
-    aegis_task_t *old = s_current;
+    aegis_task_t *old = sched_current();
 
     old->state = TASK_BLOCKED;
 
@@ -302,23 +306,24 @@ sched_block(void)
      * transitions state back to TASK_RUNNING; no re-insertion is needed.
      */
 
-    /* Advance s_current past the blocked task; skip non-RUNNING tasks.
+    /* Advance past the blocked task; skip non-RUNNING tasks.
      * task_idle guarantees the loop terminates. */
-    s_current = old->next;
-    while (s_current->state != TASK_RUNNING)
-        s_current = s_current->next;
+    aegis_task_t *next = old->next;
+    while (next->state != TASK_RUNNING)
+        next = next->next;
+    percpu_set_current(next);
 
-    /* Update TSS RSP0 and g_kernel_rsp for the incoming task before
-     * ctx_switch so the next syscall from this task uses its own kernel
-     * stack, not the stack of whatever task ran last. */
-    arch_set_kernel_stack(s_current->kernel_stack_top);
+    /* Update TSS RSP0 and percpu.kernel_stack for the incoming task
+     * before ctx_switch so the next syscall from this task uses its own
+     * kernel stack, not the stack of whatever task ran last. */
+    arch_set_kernel_stack(next->kernel_stack_top);
 
     /* Set FS.base for the incoming task before ctx_switch. */
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (next->is_user)
+        arch_set_fs_base(next->fs_base);
 
     spin_unlock_irqrestore(&sched_lock, fl);
-    ctx_switch(old, s_current);
+    ctx_switch(old, next);
 
     /* Restore CR3 for the incoming user task after ctx_switch returns.
      * sched_exit switches to master PML4 before context-switching to this
@@ -326,16 +331,17 @@ sched_block(void)
      * that was unblocked by sched_exit would resume with master PML4 loaded,
      * causing any copy_to_user call (e.g. sys_waitpid wstatus write) to #PF
      * because user stack pages are only mapped in the process's user PML4. */
-    if (s_current->is_user)
-        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+    aegis_task_t *resumed = sched_current();
+    if (resumed->is_user)
+        vmm_switch_to(((aegis_process_t *)resumed)->pml4_phys);
 
     /* Restore FS.base for the incoming user task after ctx_switch returns.
      * sched_tick does this in its path; sched_block must mirror it.
      * Without this, a user task that was blocked while another user task
      * ran and set a different FS_BASE would resume with the wrong FS_BASE,
      * corrupting TLS access (__errno_location, stack canary, etc.). */
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (resumed->is_user)
+        arch_set_fs_base(resumed->fs_base);
 }
 
 void
@@ -354,7 +360,8 @@ sched_stop(aegis_task_t *task)
 {
     irqflags_t fl = spin_lock_irqsave(&sched_lock);
 
-    if (task != s_current) {
+    aegis_task_t *cur = sched_current();
+    if (task != cur) {
         /* Stopping a different task: just flip state. */
         task->state = TASK_STOPPED;
         spin_unlock_irqrestore(&sched_lock, fl);
@@ -362,30 +369,32 @@ sched_stop(aegis_task_t *task)
     }
 
     /* Self-stop: mirrors sched_block exactly, but sets TASK_STOPPED. */
-    aegis_task_t *old = s_current;
+    aegis_task_t *old = cur;
     old->state = TASK_STOPPED;
 
-    /* Advance s_current past the stopped task; skip non-RUNNING tasks.
+    /* Advance past the stopped task; skip non-RUNNING tasks.
      * task_idle guarantees the loop terminates. */
-    s_current = old->next;
-    while (s_current->state != TASK_RUNNING)
-        s_current = s_current->next;
+    aegis_task_t *next = old->next;
+    while (next->state != TASK_RUNNING)
+        next = next->next;
+    percpu_set_current(next);
 
-    arch_set_kernel_stack(s_current->kernel_stack_top);
+    arch_set_kernel_stack(next->kernel_stack_top);
 
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (next->is_user)
+        arch_set_fs_base(next->fs_base);
 
     spin_unlock_irqrestore(&sched_lock, fl);
-    ctx_switch(old, s_current);
+    ctx_switch(old, next);
 
     /* After ctx_switch returns (SIGCONT has resumed us), restore CR3 + FS.base.
      * Mirrors sched_block tail exactly. */
-    if (s_current->is_user)
-        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+    aegis_task_t *resumed = sched_current();
+    if (resumed->is_user)
+        vmm_switch_to(((aegis_process_t *)resumed)->pml4_phys);
 
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (resumed->is_user)
+        arch_set_fs_base(resumed->fs_base);
 }
 
 void
@@ -401,17 +410,19 @@ sched_resume(aegis_task_t *task)
 void
 sched_yield_to_next(void)
 {
-    aegis_task_t *old = s_current;
+    aegis_task_t *old = sched_current();
+    aegis_task_t *next = old;
     do {
-        s_current = s_current->next;
-    } while (s_current->state != TASK_RUNNING);
-    arch_set_kernel_stack(s_current->kernel_stack_top);
+        next = next->next;
+    } while (next->state != TASK_RUNNING);
+    percpu_set_current(next);
+    arch_set_kernel_stack(next->kernel_stack_top);
 
     /* Set FS.base for the incoming task before ctx_switch. */
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (next->is_user)
+        arch_set_fs_base(next->fs_base);
 
-    ctx_switch(old, s_current);
+    ctx_switch(old, next);
 
     /* Restore CR3 for the incoming user task after ctx_switch returns.
      * sched_exit calls vmm_switch_to(master_pml4) at its top, then calls
@@ -419,22 +430,24 @@ sched_yield_to_next(void)
      * that resumes here would have master PML4 loaded; any subsequent
      * copy_to_user (e.g. sys_waitpid wstatus write) would #PF because the
      * user stack pages are only mapped in the process's user PML4. */
-    if (s_current->is_user)
-        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+    aegis_task_t *resumed = sched_current();
+    if (resumed->is_user)
+        vmm_switch_to(((aegis_process_t *)resumed)->pml4_phys);
 
     /* Restore FS.base for the incoming user task after ctx_switch returns.
      * sched_tick does this in its path; sched_yield_to_next must mirror it.
      * Without this, a user task that was blocked while another user task
      * ran and set a different FS_BASE would resume with the wrong FS_BASE,
      * corrupting TLS access (__errno_location, stack canary, etc.). */
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (resumed->is_user)
+        arch_set_fs_base(resumed->fs_base);
 }
 
 void
 sched_start(void)
 {
-    if (!s_current) {
+    aegis_task_t *first = sched_current();
+    if (!first) {
         printk("[SCHED] FAIL: sched_start called with no tasks\n");
         for (;;) {}
     }
@@ -456,47 +469,44 @@ sched_start(void)
      *
      * sched_start() never returns.
      */
-    arch_set_kernel_stack(s_current->kernel_stack_top);
+    arch_set_kernel_stack(first->kernel_stack_top);
     /* sched_start always enters the first task (kbd, a kernel task).
      * No CR3 switch here: if the first task is a user task, proc_enter_user
      * handles the PML4 switch before iretq (same as the timer-preemption
      * first-entry path). */
 
     aegis_task_t dummy;
-    ctx_switch(&dummy, s_current);
+    ctx_switch(&dummy, first);
     __builtin_unreachable();
-}
-
-aegis_task_t *
-sched_current(void)
-{
-    return s_current;
 }
 
 void
 sched_tick(void)
 {
-    if (!s_current)                        /* no tasks spawned yet */
+    aegis_task_t *cur = sched_current();
+    if (!cur)                              /* no tasks spawned yet */
         return;
-    if (s_current->next == s_current)      /* single task: nowhere to switch */
+    if (cur->next == cur)                  /* single task: nowhere to switch */
         return;
 
     spin_lock(&sched_lock);
 
-    aegis_task_t *old = s_current;
+    aegis_task_t *old = cur;
     /* Skip blocked/zombie tasks. task_idle guarantees termination. */
+    aegis_task_t *next = old;
     do {
-        s_current = s_current->next;
-    } while (s_current->state != TASK_RUNNING);
+        next = next->next;
+    } while (next->state != TASK_RUNNING);
+    percpu_set_current(next);
 
-    arch_set_kernel_stack(s_current->kernel_stack_top);
+    arch_set_kernel_stack(next->kernel_stack_top);
 
     /* Set FS.base for the incoming task before ctx_switch so that the task
      * enters user space (or resumes) with the correct TLS pointer.
      * Must be paired with the arch_set_fs_base after ctx_switch (for the
      * outgoing task's subsequent resume). */
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    if (next->is_user)
+        arch_set_fs_base(next->fs_base);
 
     /*
      * CR3 switch policy in sched_tick (Phase 5):
@@ -523,14 +533,15 @@ sched_tick(void)
      */
 
     /* ctx_switch is declared in arch.h with a forward struct declaration.
-     * It saves old->sp, loads s_current->sp, and returns into new task. */
+     * It saves old->sp, loads next->sp, and returns into new task. */
     spin_unlock(&sched_lock);
-    ctx_switch(old, s_current);
+    ctx_switch(old, next);
 
     /* Restore the incoming user process's FS base.
-     * This must run AFTER ctx_switch returns (s_current is now the new task).
+     * This must run AFTER ctx_switch returns (sched_current() is now the new task).
      * proc_enter_user handles only the first entry; preempted tasks resume
      * via isr_common_stub which does not reload FS.base. IF=0 here (PIT ISR). */
-    if (s_current->is_user)
-        arch_set_fs_base(s_current->fs_base);
+    aegis_task_t *resumed = sched_current();
+    if (resumed->is_user)
+        arch_set_fs_base(resumed->fs_base);
 }

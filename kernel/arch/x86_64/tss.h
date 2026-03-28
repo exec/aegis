@@ -26,7 +26,7 @@ aegis_tss_t *arch_tss_get(void);
 /* Initialize TSS fields; set iomap_base = 104. Prints [TSS] OK. */
 void arch_tss_init(void);
 
-/* Update TSS.RSP0 and g_kernel_rsp to rsp0.
+/* Update TSS.RSP0 and percpu.kernel_stack to rsp0.
  * Called by scheduler before every ctx_switch so the CPU uses the
  * correct kernel stack top when the next ring-3 interrupt fires. */
 void arch_set_kernel_stack(uint64_t rsp0);

@@ -31,8 +31,9 @@ bits 64
 section .text
 
 extern syscall_dispatch
-extern g_kernel_rsp
-extern g_user_rsp
+; Per-CPU data accessed via GS segment (set up by SWAPGS):
+;   gs:24 = percpu.kernel_stack     (kernel RSP for this CPU)
+;   gs:32 = percpu.user_rsp_scratch (scratch slot to save user RSP)
 extern signal_deliver_sysret
 extern signal_check_pending
 
@@ -41,13 +42,14 @@ global proc_enter_user
 
 syscall_entry:
     ; ── Step 1: switch to kernel stack ──────────────────────────────────────
-    ; RSP is still user RSP — stash it in g_user_rsp, load kernel stack.
-    mov  [rel g_user_rsp], rsp
-    mov  rsp, [rel g_kernel_rsp]
+    ; GS.base is user value (TLS). SWAPGS loads percpu_t pointer into GS.base.
+    swapgs
+    mov  [gs:32], rsp               ; save user RSP to percpu.user_rsp_scratch
+    mov  rsp, [gs:24]               ; load kernel stack from percpu.kernel_stack
 
     ; ── Step 2: save restore frame on kernel stack ───────────────────────────
     ; Pushed deepest-first so the pop order on return is r11, rcx, rsp.
-    push qword [rel g_user_rsp]   ; user RSP  (deepest = [rsp+16] after all pushes)
+    push qword [gs:32]             ; push saved user RSP onto kernel stack
     push rcx                       ; return RIP
     push r11                       ; RFLAGS    (top, popped first on return)
 
@@ -162,6 +164,7 @@ syscall_entry:
     pop  rcx          ; return RIP
     pop  rsp          ; user RSP  (pop rsp sets RSP=[RSP], not RSP+8)
 
+    swapgs            ; restore user GS.base before returning to ring 3
     o64 sysret       ; sysretq: restore RIP from RCX, RFLAGS from R11, RSP, enter ring 3
 
 ; proc_enter_user — switch to user PML4 and iretq into ring 3.
@@ -189,6 +192,7 @@ syscall_entry:
 proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — safe, on KSTACK_VA (shared)
+    swapgs            ; switch to user GS.base before entering ring 3
     iretq
 
 ; fork_child_return was removed in Phase 15 fix.
