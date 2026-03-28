@@ -115,7 +115,7 @@ static void enumerate_function(uint8_t bus, uint8_t dev, uint8_t fn)
             d->bar[i] = decode_bar(bus, dev, fn, &i);
     }
 
-    printk("[PCIE] found %04x:%04x class=%02x at %02x:%02x.%x\n",
+    printk("[PCIE] found %x:%x class=%x at %x:%x.%x\n",
            (unsigned)d->vendor_id, (unsigned)d->device_id,
            (unsigned)d->class_code, (unsigned)bus, (unsigned)dev, (unsigned)fn);
 }
@@ -184,7 +184,7 @@ void pcie_init(void)
         }
     }
 
-    printk("[PCIE] OK: enumeration complete, %d devices\n", s_device_count);
+    printk("[PCIE] OK: enumeration complete, %u devices\n", (unsigned)s_device_count);
 }
 
 int pcie_device_count(void)

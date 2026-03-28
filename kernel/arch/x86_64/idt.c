@@ -103,7 +103,7 @@ panic_backtrace(uint64_t rbp)
         uint64_t retaddr = ((uint64_t *)rbp)[1];
         if (retaddr < 0xFFFFFFFF80000000ULL || retaddr == 0)
             break;
-        printk("[PANIC]   [%d] 0x%lx\n", i, retaddr);
+        printk("[PANIC]   [%u] 0x%lx\n", i, retaddr);
         rbp = ((uint64_t *)rbp)[0];
     }
 }

@@ -366,7 +366,7 @@ virtio_net_init(void)
     netdev_register(&s_dev);
 
     /* Step 9: announce. */
-    printk("[NET] OK: virtio-net eth0 mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+    printk("[NET] OK: virtio-net eth0 mac=%x:%x:%x:%x:%x:%x\n",
            s_dev.mac[0], s_dev.mac[1], s_dev.mac[2],
            s_dev.mac[3], s_dev.mac[4], s_dev.mac[5]);
 }
