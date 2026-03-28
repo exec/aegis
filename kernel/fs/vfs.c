@@ -345,6 +345,16 @@ vfs_stat_path(const char *path, k_stat_t *out)
         return 0;
     }
 
+    if (streq(path, "/dev/mouse")) {
+        __builtin_memset(out, 0, sizeof(*out));
+        out->st_mode  = S_IFCHR | 0444;
+        out->st_ino   = 8;
+        out->st_rdev  = makedev(13, 0);
+        out->st_dev   = 1;
+        out->st_nlink = 1;
+        return 0;
+    }
+
     if (streq(path, "/dev/ptmx")) {
         __builtin_memset(out, 0, sizeof(*out));
         out->st_mode  = S_IFCHR | 0666;

@@ -198,7 +198,7 @@ static const vfs_ops_t initrd_ops = {
 typedef struct { const char *name; uint8_t type; } dir_entry_t;
 
 static const dir_entry_t s_dev_entries[] = {
-    { "tty",     8 }, { "urandom", 8 }, { "random", 8 },
+    { "tty",     8 }, { "urandom", 8 }, { "random", 8 }, { "mouse", 8 },
     { (const char *)0, 0 }
 };
 static const dir_entry_t s_root_dir_entries[] = {
@@ -326,6 +326,71 @@ static vfs_file_t s_urandom_file = {
     .size   = 0,
 };
 
+/* ── /dev/mouse VFS device ──────────────────────────────────────────────── */
+
+#include "../drivers/usb_mouse.h"
+
+static int
+mouse_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
+{
+    (void)priv; (void)off;
+    uint32_t count = 0;
+    uint32_t max_events = (uint32_t)(len / sizeof(mouse_event_t));
+
+    if (max_events == 0) return 0;
+
+    /* First event: block if necessary */
+    mouse_event_t evt;
+    mouse_read_blocking(&evt);
+    __builtin_memcpy((uint8_t *)buf + count * sizeof(mouse_event_t),
+                     &evt, sizeof(mouse_event_t));
+    count++;
+
+    /* Drain remaining available events without blocking */
+    while (count < max_events && mouse_poll(&evt)) {
+        __builtin_memcpy((uint8_t *)buf + count * sizeof(mouse_event_t),
+                         &evt, sizeof(mouse_event_t));
+        count++;
+    }
+
+    return (int)(count * sizeof(mouse_event_t));
+}
+
+static void
+mouse_close_fn(void *priv)
+{
+    (void)priv;
+}
+
+static int
+mouse_stat_fn(void *priv, k_stat_t *st)
+{
+    (void)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_mode  = S_IFCHR | 0444;
+    st->st_ino   = 8;
+    st->st_rdev  = makedev(13, 0);
+    st->st_dev   = 1;
+    st->st_nlink = 1;
+    return 0;
+}
+
+static const vfs_ops_t s_mouse_ops = {
+    .read    = mouse_read_fn,
+    .write   = (void *)0,
+    .close   = mouse_close_fn,
+    .readdir = (void *)0,
+    .dup     = (void *)0,
+    .stat    = mouse_stat_fn,
+};
+
+static vfs_file_t s_mouse_file = {
+    .ops    = &s_mouse_ops,
+    .priv   = (void *)0,
+    .offset = 0,
+    .size   = 0,
+};
+
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
 void
@@ -362,6 +427,16 @@ initrd_open(const char *path, vfs_file_t *out)
         while (*a && *b && *a == *b) { a++; b++; }
         if (*a == *b) {
             *out = s_urandom_file;  /* same backing — modern Linux semantics */
+            return 0;
+        }
+    }
+
+    /* /dev/mouse: USB HID mouse event device */
+    {
+        const char *a = path, *b = "/dev/mouse";
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == *b) {
+            *out = s_mouse_file;
             return 0;
         }
     }
