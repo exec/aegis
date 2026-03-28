@@ -571,7 +571,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 36+37 code complete (untested). Blocked by pre-existing q35 boot bug (RIP=0x0 without NVMe — needs GDB investigation). test_integrated passes 24/25 on x86 box. Next: debug q35 boot issue, then test Phase 36 mouse + Phase 37 lumen.*
+*Last updated: 2026-03-28 — Phase 38 SMP complete (38a-38d). LAPIC+IOAPIC, spinlocks (~30), SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown. Boot oracle panics on DO box (#PF in sched_current after IOAPIC disables PIC on -machine pc). Root cause: QEMU -machine pc provides MADT I/O APIC entry, our ioapic_init disables PIC, breaking PIT routing. Fix: skip ioapic_init on -machine pc or check for IO APIC before disabling PIC. Phase 36 mouse + Phase 37 lumen also untested. Next session: fix boot oracle, test SMP with -smp 4 on q35.*
 
 ---
 
