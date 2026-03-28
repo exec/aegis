@@ -29,4 +29,8 @@ int mouse_poll(mouse_event_t *out);
  * Called from VFS read path in syscall context. */
 void mouse_read_blocking(mouse_event_t *out);
 
+/* Inject a mouse event from any source (PS/2, USB, etc.) into the
+ * shared ring buffer. Called from ISR context. */
+void mouse_inject(uint8_t buttons, int16_t dx, int16_t dy);
+
 #endif /* USB_MOUSE_H */

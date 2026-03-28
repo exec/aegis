@@ -9,6 +9,7 @@
 [PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
 [PIT] OK: timer at 100 Hz
 [KBD] OK: PS/2 keyboard ready
+[MOUSE] OK: PS/2 mouse ready
 [GDT] OK: ring 3 descriptors installed
 [TSS] OK: RSP0 initialized
 [SYSCALL] OK: SYSCALL/SYSRET enabled

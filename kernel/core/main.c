@@ -14,6 +14,7 @@
 #include "../fs/ext2.h"
 #include "../fs/gpt.h"
 #include "../drivers/xhci.h"
+#include "ps2_mouse.h"
 #include "../drivers/virtio_net.h"
 #include "../drivers/fb.h"
 #include "../drivers/ramdisk.h"
@@ -62,6 +63,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     pic_init();             /* remap 8259A — [PIC] OK                        */
     pit_init();             /* 100 Hz timer — [PIT] OK                       */
     kbd_init();             /* PS/2 keyboard — [KBD] OK                      */
+    ps2_mouse_init();       /* PS/2 mouse — [MOUSE] OK                       */
     arch_gdt_init();        /* ring-3 GDT + TSS descriptors — [GDT] OK       */
     arch_tss_init();        /* TSS RSP0 for ring-3 → ring-0 transitions      */
     arch_syscall_init();    /* enable SYSCALL/SYSRET MSRs — [SYSCALL] OK     */

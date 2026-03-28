@@ -82,6 +82,7 @@ ARCH_SRCS = \
     kernel/arch/x86_64/pic.c \
     kernel/arch/x86_64/pit.c \
     kernel/arch/x86_64/kbd.c \
+    kernel/arch/x86_64/ps2_mouse.c \
     kernel/arch/x86_64/gdt.c \
     kernel/arch/x86_64/tss.c \
     kernel/arch/x86_64/arch_syscall.c \

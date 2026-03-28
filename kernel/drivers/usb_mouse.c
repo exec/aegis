@@ -60,6 +60,17 @@ mouse_poll(mouse_event_t *out)
 }
 
 void
+mouse_inject(uint8_t buttons, int16_t dx, int16_t dy)
+{
+    mouse_event_t evt;
+    evt.buttons = buttons;
+    evt.dx      = dx;
+    evt.dy      = dy;
+    evt.scroll  = 0;
+    buf_push(&evt);
+}
+
+void
 mouse_read_blocking(mouse_event_t *out)
 {
     __asm__ volatile("sti");

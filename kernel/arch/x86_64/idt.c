@@ -2,6 +2,7 @@
 #include "pic.h"
 #include "pit.h"
 #include "kbd.h"
+#include "ps2_mouse.h"
 #include "acpi.h"
 #include "printk.h"
 #include "arch.h"
@@ -127,6 +128,7 @@ isr_dispatch(cpu_state_t *s)
 
         if      (s->vector == 0x20) { pit_handler(); }
         else if (s->vector == 0x21) { kbd_handler(); }
+        else if (s->vector == 0x2C) { ps2_mouse_handler(); }
         else if (irq == acpi_get_sci_irq() && irq != 0) { acpi_sci_handler(); }
 
         /* Sanity-check the iretq frame for ring-3 interrupts.
