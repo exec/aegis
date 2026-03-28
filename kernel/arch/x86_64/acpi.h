@@ -64,8 +64,20 @@ extern uint8_t  g_mcfg_start_bus;
 extern uint8_t  g_mcfg_end_bus;
 extern int      g_madt_found;    /* 1 if MADT was located */
 
-/* Initialize ACPI: parse RSDP -> RSDT/XSDT -> find MCFG + MADT.
+/* Initialize ACPI: parse RSDP -> RSDT/XSDT -> find MCFG + MADT + FADT.
+ * Enables power button SCI if FADT is found.
  * Prints [ACPI] OK or FAIL to serial. */
 void acpi_init(void);
+
+/* acpi_power_button_init — enable SCI for power button events.
+ * Called automatically from acpi_init if FADT is present. */
+void acpi_power_button_init(void);
+
+/* acpi_sci_handler — handle SCI interrupt (called from isr_dispatch).
+ * Checks for power button press; if so, syncs ext2 and powers off. */
+void acpi_sci_handler(void);
+
+/* acpi_get_sci_irq — return SCI IRQ number (from FADT), 0 if unknown. */
+uint16_t acpi_get_sci_irq(void);
 
 #endif /* ACPI_H */

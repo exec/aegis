@@ -1,17 +1,16 @@
-/* acpi.c — ACPI table parser (MCFG + MADT)
+/* acpi.c — ACPI table parser (MCFG + MADT + FADT)
  *
- * Phase 19 scope: locate MCFG to get PCIe ECAM base, locate MADT for
- * future interrupt routing. No AML interpreter. No power management.
- *
- * Phase 20 fix: phys_to_virt() now uses kva_alloc_pages + vmm_map_page
- * to access ACPI tables at any physical address, not just the first 4MB.
- * kva_init() runs before acpi_init() so this is safe.
+ * Phase 19: MCFG for PCIe ECAM, MADT for interrupt routing.
+ * Phase 35: FADT for power button shutdown (SCI interrupt + PM1a registers).
+ * No AML interpreter — _S5_ sleep type is extracted by scanning DSDT bytecode.
  */
 #include "acpi.h"
 #include "arch.h"
 #include "printk.h"
 #include "vmm.h"
 #include "kva.h"
+#include "pic.h"
+#include "ext2.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -19,6 +18,16 @@ uint64_t g_mcfg_base      = 0;
 uint8_t  g_mcfg_start_bus = 0;
 uint8_t  g_mcfg_end_bus   = 0;
 int      g_madt_found     = 0;
+
+/* ── ACPI power management (from FADT + DSDT) ──────────────────────── */
+static uint16_t s_sci_int     = 0;     /* SCI interrupt (IRQ number) */
+static uint32_t s_pm1a_evt    = 0;     /* PM1a Event Block I/O port */
+static uint32_t s_pm1a_cnt    = 0;     /* PM1a Control Block I/O port */
+static uint32_t s_pm1b_cnt    = 0;     /* PM1b Control Block (0 = absent) */
+static uint8_t  s_pm1_evt_len = 0;     /* PM1 Event Block length (usually 4) */
+static uint16_t s_slp_typa    = 0;     /* SLP_TYPa value for S5 (from DSDT) */
+static uint16_t s_slp_typb    = 0;     /* SLP_TYPb value for S5 */
+static int      s_acpi_pm_ok  = 0;     /* 1 if power management is ready */
 
 /* -----------------------------------------------------------------------
  * Single-page KVA window for temporary ACPI table access.
@@ -107,6 +116,88 @@ static int acpi_checksum_phys(uint64_t phys, uint32_t len)
     return sum == 0;
 }
 
+/* ── FADT + DSDT parsing for power management ──────────────────────── */
+
+static void
+scan_dsdt_s5(uint64_t dsdt_phys)
+{
+    uint32_t dsdt_len = phys_read32(dsdt_phys + 4);
+    if (dsdt_len < 40 || dsdt_len > 0x100000)
+        return;  /* sanity */
+
+    /* Scan DSDT bytecode (skip 36-byte SDT header) for "_S5_" */
+    uint64_t p   = dsdt_phys + 36;
+    uint64_t end = dsdt_phys + dsdt_len;
+
+    while (p < end - 4) {
+        uint8_t b0 = phys_read8(p);
+        if (b0 == '_') {
+            uint8_t b1 = phys_read8(p+1);
+            uint8_t b2 = phys_read8(p+2);
+            uint8_t b3 = phys_read8(p+3);
+            if (b1 == 'S' && b2 == '5' && b3 == '_') {
+                /* Validate: preceding byte should be NameOp (0x08) */
+                uint8_t prev = (p > dsdt_phys + 36) ? phys_read8(p-1) : 0;
+                uint8_t prev2 = (p > dsdt_phys + 37) ? phys_read8(p-2) : 0;
+                if (prev == 0x08 || (prev2 == 0x08 && prev == 0x5C)) {
+                    p += 4;  /* skip "_S5_" */
+                    if (phys_read8(p) == 0x12) {  /* PackageOp */
+                        p++;
+                        uint8_t pkg_lead = phys_read8(p);
+                        p += (uint64_t)(pkg_lead >> 6) + 1;  /* skip PkgLength */
+                        p++;  /* skip NumElements */
+                        /* Read SLP_TYPa */
+                        uint8_t op = phys_read8(p);
+                        if (op == 0x0A) { p++; s_slp_typa = phys_read8(p); }
+                        else if (op <= 0x01) { s_slp_typa = op; }
+                        p++;
+                        /* Read SLP_TYPb */
+                        op = phys_read8(p);
+                        if (op == 0x0A) { p++; s_slp_typb = phys_read8(p); }
+                        else if (op <= 0x01) { s_slp_typb = op; }
+                    }
+                    return;
+                }
+            }
+        }
+        p++;
+    }
+}
+
+static void
+parse_fadt(uint64_t hdr_phys)
+{
+    uint32_t length = phys_read32(hdr_phys + 4);
+    if (length < 116)
+        return;  /* too short for fields we need */
+
+    /* FADT fields (32-bit I/O port addresses) */
+    s_sci_int     = (uint16_t)phys_read32(hdr_phys + 46);
+    s_pm1a_evt    = phys_read32(hdr_phys + 56);
+    s_pm1b_cnt    = phys_read32(hdr_phys + 68);  /* 0 if absent */
+    s_pm1a_cnt    = phys_read32(hdr_phys + 64);
+    s_pm1_evt_len = phys_read8(hdr_phys + 88);
+
+    /* DSDT pointer */
+    uint64_t dsdt_phys = 0;
+    uint8_t fadt_rev = phys_read8(hdr_phys + 8);
+    if (fadt_rev >= 2 && length >= 148) {
+        /* Try 64-bit X_DSDT at offset 140 */
+        dsdt_phys = phys_read64(hdr_phys + 140);
+    }
+    if (dsdt_phys == 0) {
+        /* Fall back to 32-bit DSDT at offset 40 */
+        dsdt_phys = (uint64_t)phys_read32(hdr_phys + 40);
+    }
+
+    if (dsdt_phys != 0)
+        scan_dsdt_s5(dsdt_phys);
+
+    if (s_pm1a_evt != 0 && s_pm1a_cnt != 0) {
+        s_acpi_pm_ok = 1;
+    }
+}
+
 static void parse_mcfg(uint64_t hdr_phys)
 {
     uint32_t length = phys_read32(hdr_phys + 4);
@@ -153,6 +244,8 @@ static void scan_table(uint64_t phys)
         parse_mcfg(phys);
     else if (__builtin_memcmp(sig, "APIC", 4) == 0)
         g_madt_found = 1;
+    else if (__builtin_memcmp(sig, "FACP", 4) == 0)
+        parse_fadt(phys);
 }
 
 void acpi_init(void)
@@ -242,4 +335,89 @@ void acpi_init(void)
         printk("[ACPI] OK: MCFG+MADT parsed\n");
     else
         printk("[ACPI] OK: MADT parsed, no MCFG (legacy machine)\n");
+
+    /* Enable power button SCI if FADT was found */
+    if (s_acpi_pm_ok)
+        acpi_power_button_init();
+}
+
+/* ── ACPI power button ─────────────────────────────────────────────── */
+
+static inline void outw_port(uint16_t port, uint16_t val)
+{
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint16_t inw_port(uint16_t port)
+{
+    uint16_t val;
+    __asm__ volatile ("inw %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+void
+acpi_power_button_init(void)
+{
+    if (!s_acpi_pm_ok || s_pm1a_evt == 0)
+        return;
+
+    uint16_t evt_base = (uint16_t)s_pm1a_evt;
+    uint16_t en_off   = (uint16_t)(s_pm1_evt_len / 2);  /* PM1_EN offset */
+
+    /* Clear any pending power button status (write-1-to-clear) */
+    outw_port(evt_base, 0x0100);  /* PWRBTN_STS = bit 8 */
+
+    /* Enable power button SCI */
+    uint16_t en = inw_port(evt_base + en_off);
+    outw_port(evt_base + en_off, en | 0x0100);  /* PWRBTN_EN = bit 8 */
+
+    /* Unmask the SCI IRQ in the PIC */
+    if (s_sci_int < 16)
+        pic_unmask((uint8_t)s_sci_int);
+
+    printk("[ACPI] OK: power button enabled (SCI IRQ %u, PM1a=0x%x)\n",
+           (unsigned)s_sci_int, (unsigned)s_pm1a_evt);
+}
+
+void
+acpi_sci_handler(void)
+{
+    if (!s_acpi_pm_ok)
+        return;
+
+    uint16_t evt_base = (uint16_t)s_pm1a_evt;
+    uint16_t en_off   = (uint16_t)(s_pm1_evt_len / 2);
+    uint16_t sts = inw_port(evt_base);
+    uint16_t en  = inw_port(evt_base + en_off);
+
+    if ((sts & 0x0100) && (en & 0x0100)) {
+        /* Power button pressed — initiate shutdown */
+        outw_port(evt_base, 0x0100);  /* clear PWRBTN_STS */
+
+        printk("[ACPI] power button pressed — shutting down\n");
+        ext2_sync();
+        printk("[AEGIS] System halted.\n");
+
+        /* Write SLP_TYPa | SLP_EN to PM1a_CNT to enter S5 (power off) */
+        uint16_t cnt = (uint16_t)s_pm1a_cnt;
+        uint16_t val = (s_slp_typa << 10) | (1 << 13);  /* SLP_TYPa | SLP_EN */
+        outw_port(cnt, val);
+
+        /* If PM1b_CNT exists, write there too */
+        if (s_pm1b_cnt != 0) {
+            uint16_t val_b = (s_slp_typb << 10) | (1 << 13);
+            outw_port((uint16_t)s_pm1b_cnt, val_b);
+        }
+
+        /* If we're still alive, halt */
+        for (;;)
+            __asm__ volatile ("cli; hlt");
+    }
+    /* Not a power button event — spurious or other ACPI event, ignore */
+}
+
+uint16_t
+acpi_get_sci_irq(void)
+{
+    return s_sci_int;
 }
