@@ -597,21 +597,21 @@ Five-agent audit/cleanup run after completing Phases 36-38. Results below.
 
 - [x] **sys_fb_map (513)** — added `CAP_KIND_DISK_ADMIN` check ✅
 - [x] **sys_clock_settime (227)** — added `CAP_KIND_NET_ADMIN` check ✅
-- [ ] **CRITICAL: sys_setfg (360)** — no capability check. Any process can steal keyboard focus.
+- [x] **sys_setfg (360)** — added CAP_KIND_PROC_READ check ✅
 - [x] **sys_accept** — added `user_ptr_valid` for addr parameter ✅
 - [ ] **CRITICAL: sys_execve grants ALL capabilities** — `DISK_ADMIN` + `AUTH` in baseline (known, flagged in Phase 35 constraints). Tighten to vigil exec_caps mechanism.
 - [x] **sys_mkdir/unlink/rename** — added `CAP_KIND_VFS_WRITE` check ✅
 - [ ] **MEDIUM: sys_kill** — any process can signal any other (except PID 1). Needs capability gate.
 - [x] **sys_getsockname/getpeername** — added null addrlen guard ✅
-- [ ] **MEDIUM: sys_setsockopt** — validates 4 bytes but reads 16 for SO_RCVTIMEO.
+- [x] **sys_setsockopt** — added 16-byte validation for SO_RCVTIMEO; unknown opts return ENOPROTOOPT ✅
 - [ ] **MEDIUM: sys_blkdev_io** — static bounce buffer not reentrant (shared across concurrent callers).
 
 ### TODO — Lock Ordering Violations (CRITICAL for SMP)
 
 - [x] **kva_lock → pmm_lock inversion** — restructured kva_alloc_pages to reserve VA range under lock then allocate physical pages outside lock ✅
-- [ ] **ip_lock → arp_lock inversion.** `ip_send` holds `ip_lock`, calls `eth_send`/`arp_resolve` which acquire `arp_lock`. Spec says arp_lock > ip_lock. Fix: release ip_lock before calling eth_send.
-- [ ] **tcp_lock → sock_lock inversion.** `tcp_rx` holds `tcp_lock`, calls `sock_get`/`sock_wake` which acquire `sock_lock`. Spec says sock_lock > tcp_lock.
-- [ ] **udp_lock → sock_lock inversion.** Same pattern as tcp_rx.
+- [x] **ip_lock → arp_lock** — ip_send copies packet to local buffer, releases ip_lock before eth_send ✅
+- [x] **tcp_lock → sock_lock** — tcp_rx defers sock_wake/epoll_notify to after tcp_lock release ✅
+- [x] **udp_lock → sock_lock** — udp_rx defers sock_wake to after udp_lock release; added sock_get_nolock ✅
 
 ### TODO — Missing Lock Protection (safe single-core, needed for SMP)
 
@@ -633,10 +633,11 @@ Five-agent audit/cleanup run after completing Phases 36-38. Results below.
 
 ### TODO — Other Findings
 
-- [ ] `kernel/core/random.c:41` — `rdtsc` reimplemented locally instead of using arch.h. Should be `arch_get_cycles()`.
+- [x] `random.c` — `arch_get_cycles()` moved to arch.h (x86 + ARM64) ✅
 - [ ] `signal.c` — x86 register manipulation (~100 lines) in arch-agnostic file. Properly `#ifdef`-gated but should be in `kernel/arch/x86_64/signal_deliver.c`.
-- [ ] Define `ARCH_USER_CS`/`ARCH_USER_SS` constants instead of magic `0x23`/`0x1B` in proc.c and sys_process.c.
-- [ ] `sys_select` is a stub returning 0 — programs using select() get incorrect results.
+- [x] `ARCH_USER_CS`/`ARCH_USER_DS`/`ARCH_KERNEL_CS`/`ARCH_KERNEL_DS` constants defined, magic numbers replaced in 6 files ✅
+- [x] `sys_select` returns `-ENOSYS` instead of misleading 0 ✅
+- [x] `printk_lock` spinlock added for SMP-safe kernel output ✅
 
 ---
 
