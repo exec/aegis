@@ -260,7 +260,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Framebuffer access | ✅ | sys_fb_map (513) maps FB into userspace; fb_test GUI mockup with Terminus 10x20; native resolution |
 | Password asterisks | ✅ | login echoes * for password input; raw termios mode |
 | DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
-| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol parser; xHCI device type detection; hotplug PSC; installer crypt(); **untested** (boot oracle hangs — see constraints) |
+| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol parser; xHCI device type detection; hotplug PSC; installer crypt(); **untested** (boot oracle cap count fixed, needs retest) |
+| Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested** (builds clean on x86 box) |
 
 ### Known deviations
 
@@ -333,7 +334,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install EFI GRUB | ✅ Done |
 | 35b | **Bare-metal polish** — UEFI EFI boot, ACPI power button, gfxmode=auto, GRUB background, password asterisks | ✅ Done |
 | 36 | **USB HID mouse** — boot protocol mouse via xHCI; /dev/mouse VFS; installer crypt() | 🔶 Untested |
-| 37 | **Lumen** — display server/compositor; owns framebuffer, composites windows, dispatches input events | Not started |
+| 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | 🔶 Untested |
 | 38 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
 | 39 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
 | 40 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
@@ -522,6 +523,44 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
+## Phase 37 — Forward Constraints
+
+**Phase 37 status: 🔶 Code complete, untested. Builds clean on x86 box.**
+
+**What was implemented:**
+- Lumen compositor (`user/lumen/`): 6 source files, ~1200 lines total
+- Drawing library (draw.c): surface_t-based px, fill_rect, rect, gradient, char, text, blit
+- Software cursor (cursor.c): 16x16 monochrome arrow, save-under buffer
+- Compositor (compositor.c): z-ordered window list (16 max), click-to-focus, titlebar drag, close button, window chrome with gradient title bars, backbuffer composite with memcpy flip
+- Terminal (terminal.c): PTY-based, forks oksh, text grid with scroll, raw char processing
+- Taskbar (taskbar.c): Aegis button, static clock
+- Main (main.c): sys_fb_map, raw TTY mode (ISIG|ICANON|ECHO disabled), polling event loop (kbd+mouse+pty master), 16ms nanosleep idle
+- Kernel fix: /dev/mouse now non-blocking (returns -EAGAIN if empty)
+
+**Forward constraints:**
+
+1. **No multi-process clients.** Lumen v0.1 is monolithic. External apps cannot create windows. Phase 38 (Glyph) needs shared memory IPC (MAP_SHARED + fd passing).
+
+2. **No ANSI escape parsing.** Terminal renders raw text only. Programs emitting ANSI codes display garbage. VT100 parser is Phase 38+ work.
+
+3. **No window resize.** Fixed-size windows. Resize requires client notification + buffer realloc.
+
+4. **Static clock.** No RTC syscall. Taskbar shows "12:00 AM" always.
+
+5. **Full-frame composite.** Every redraw composites the entire backbuffer (~8MB memcpy at 1080p). Dirty-rect optimization deferred.
+
+6. **printk conflicts.** Kernel printk still writes to framebuffer. Kernel output corrupts the display while lumen runs. Need a kernel flag to suppress FB writes when compositor is active.
+
+7. **No compositor keyboard shortcuts.** Keyboard is raw ASCII from stdin. No Alt+Tab, no window switching via keyboard. Mouse-only interaction.
+
+8. **Polling loop, not event-driven.** epoll doesn't support non-socket fds. The 16ms nanosleep means ~60fps max but also ~16ms input latency. Acceptable for v0.1.
+
+9. **/dev/mouse is now always non-blocking.** mouse_read_fn returns -EAGAIN if no events. This changes behavior for ALL readers of /dev/mouse. Only lumen and mouse_test read it, both handle -EAGAIN correctly.
+
+10. **Backbuffer allocated via malloc.** At 1080p: ~8MB. Total display memory: ~16MB (FB mapping + backbuffer). Each window also allocates a pixel buffer via calloc.
+
+---
+
 ## Phase 27 — Forward Constraints
 
 **Phase 27 status: ✅ Complete. DHCP + curl HTTPS working.**
@@ -530,7 +569,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 36 code complete (untested). USB HID mouse driver, /dev/mouse VFS, xHCI device type detection + hotplug, installer crypt() password hashing. Boot oracle hanging on x86 box (VNET noise). Next: Phase 37 Lumen compositor.*
+*Last updated: 2026-03-28 — Phase 37 code complete (untested). Lumen compositor: backbuffer composite, z-order window manager, PTY terminal, save-under cursor, taskbar, polling event loop. Phase 36 USB mouse also code complete. Both build clean on x86 box. Next: test both phases, then Phase 38 Glyph widget toolkit.*
 
 ---
 
