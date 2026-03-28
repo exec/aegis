@@ -134,7 +134,7 @@ int main(void)
     s_h = info.height;
     s_pitch_px = info.pitch / 4;
 
-    printf("fb_test: %ux%u mapped at 0x%lx\n", s_w, s_h, (unsigned long)info.addr);
+    /* No logging until the end — printk overwrites the framebuffer */
 
     /* ── Desktop background ── */
     fill_gradient_v(0, 0, (int)s_w, (int)s_h, C_BG1, C_BG2);
@@ -224,12 +224,11 @@ int main(void)
     draw_text(dx+3, dy+10, "$ _", 0x0040FF40, 0x00202030);
     draw_text_t(dx-5, dy+44, "Terminal", 0x00FFFFFF);
 
-    printf("fb_test: displayed. 10 seconds...\n");
     sleep(10);
 
     /* Clear */
     { uint32_t i; for (i = 0; i < s_pitch_px * s_h; i++) s_fb[i] = 0; }
 
-    printf("fb_test: done\n");
+    printf("fb_test: GUI mockup complete (%ux%u)\n", s_w, s_h);
     return 0;
 }
