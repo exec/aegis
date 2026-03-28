@@ -129,6 +129,19 @@ arch_gdt_init_ap(uint8_t cpu_id, uint64_t tss_base)
 
 	__asm__ volatile (
 		"lgdt %0\n\t"
+		/* Far return to reload CS (lgdt doesn't update hidden descriptor cache) */
+		"pushq $0x08\n\t"
+		"leaq  1f(%%rip), %%rax\n\t"
+		"pushq %%rax\n\t"
+		"lretq\n\t"
+		"1:\n\t"
+		/* Reload data segment registers to kernel data (0x10) */
+		"movw $0x10, %%ax\n\t"
+		"movw %%ax,  %%ds\n\t"
+		"movw %%ax,  %%es\n\t"
+		/* Skip GS — managed via WRMSR (percpu data).
+		 * Loading a selector zeros the hidden base, destroying percpu. */
+		"movw %%ax,  %%ss\n\t"
 		/* Load TSS selector — same offset 0x28 in this CPU's GDT */
 		"movw $0x28, %%ax\n\t"
 		"ltr  %%ax\n\t"

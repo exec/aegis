@@ -25,6 +25,12 @@ global ap_stacks
 ap_trampoline_start:
     cli
 
+    ; Enable A20 line (fast A20 via port 0x92)
+    in   al, 0x92
+    or   al, 2
+    and  al, 0xFE           ; don't accidentally trigger reset (bit 0)
+    out  0x92, al
+
     ; Point DS at the trampoline segment so LGDT can find the GDTR
     mov ax, 0x0800              ; segment = TRAMPOLINE_PHYS >> 4
     mov ds, ax
@@ -120,7 +126,7 @@ ap_pml4:        dd 0            ; physical address of kernel PML4 (32-bit)
 align 8
 ap_entry_addr:  dq 0            ; 64-bit VA of ap_entry() C function
 
-ap_stacks:      times 16 dq 0   ; per-CPU kernel stack tops (indexed by LAPIC ID)
+ap_stacks:      times 256 dq 0  ; per-CPU kernel stack tops (indexed by LAPIC ID, max 255)
 
 ; ─── End marker ──────────────────────────────────────────────────────────────
 ap_trampoline_end:

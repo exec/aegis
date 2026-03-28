@@ -4,6 +4,8 @@
 #include "acpi.h"
 #include "lapic.h"
 #include "idt.h"
+#include "gdt.h"
+#include "tss.h"
 #include "printk.h"
 #include "kva.h"
 #include "vmm.h"
@@ -186,8 +188,31 @@ ap_entry(void)
     /* Enable LAPIC on this AP (SVR + TPR, reuses BSP's MMIO mapping) */
     lapic_init_ap();
 
+    /* Per-CPU GDT + TSS — without these, the AP has no user segments
+     * (0x18/0x20), no TSS (RSP0 for ring-3 interrupts), and no IST
+     * stack (double-fault). The trampoline's temporary GDT is insufficient. */
+    arch_tss_init_ap(me->cpu_id);
+    arch_gdt_init_ap(me->cpu_id, arch_tss_get_base_ap(me->cpu_id));
+
+    /* Configure SYSCALL/SYSRET MSRs — per-CPU, needed for user tasks.
+     * Call the shared init function; it prints [SYSCALL] OK which is fine
+     * during AP bringup (boot oracle only runs on -machine pc with 1 CPU). */
+    arch_syscall_init();
+
+    /* Enable SMAP + SMEP on this AP (per-CPU CR4 bits).
+     * Only set if BSP successfully enabled them (same CPU features). */
+    if (arch_smap_enabled) {
+        uint64_t cr4;
+        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+        cr4 |= (1UL << 20) | (1UL << 21);  /* SMEP | SMAP */
+        __asm__ volatile("mov %0, %%cr4" : : "r"(cr4));
+    }
+
     /* Load the shared IDT (same gate table as BSP — at a fixed kernel VA) */
     arch_load_idt();
+
+    /* Start LAPIC timer on this AP for preemptive scheduling */
+    lapic_timer_init();
 
     /* Signal BSP that we are online */
     g_ap_online[my_idx] = 1;
