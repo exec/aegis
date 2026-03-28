@@ -20,7 +20,7 @@
 [RAMDISK] OK: 32 MB ESP mapped from module 2
 [VFS] OK: initialized
 [INITRD] OK: 20 files registered
-[ACPI] OK: MADT parsed, no MCFG (legacy machine)
+[ACPI] OK: MADT parsed, 1 CPUs, no MCFG (legacy machine)
 [ACPI] OK: power button enabled (SCI IRQ 9, PM1a=0x600)
 [PCIE] OK: skipped (no ECAM)
 [EXT2] OK: mounted ramdisk0, 60416 blocks, 15104 inodes

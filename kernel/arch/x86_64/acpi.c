@@ -19,6 +19,19 @@ uint8_t  g_mcfg_start_bus = 0;
 uint8_t  g_mcfg_end_bus   = 0;
 int      g_madt_found     = 0;
 
+/* SMP CPU info parsed from MADT */
+smp_cpu_t  g_smp_cpus[SMP_MAX_CPUS];
+uint32_t   g_smp_cpu_count  = 0;
+uint8_t    g_bsp_apic_id    = 0;
+
+/* I/O APIC info from MADT */
+uint64_t   g_ioapic_addr     = 0;
+uint32_t   g_ioapic_gsi_base = 0;
+
+/* Interrupt Source Overrides from MADT */
+madt_iso_t g_madt_iso[MADT_MAX_ISO];
+uint32_t   g_madt_iso_count = 0;
+
 /* ── ACPI power management (from FADT + DSDT) ──────────────────────── */
 static uint16_t s_sci_int     = 0;     /* SCI interrupt (IRQ number) */
 static uint32_t s_pm1a_evt    = 0;     /* PM1a Event Block I/O port */
@@ -221,6 +234,55 @@ static void parse_mcfg(uint64_t hdr_phys)
     }
 }
 
+/* ── MADT parsing ─────────────────────────────────────────────────── */
+
+static void
+parse_madt(uint64_t hdr_phys)
+{
+    uint32_t length = phys_read32(hdr_phys + 4);
+    if (length < 44)
+        return;  /* too short for MADT header */
+
+    /* Variable-length entries start at offset 44 */
+    uint64_t p   = hdr_phys + 44;
+    uint64_t end = hdr_phys + length;
+
+    while (p + 2 <= end) {
+        uint8_t type = phys_read8(p);
+        uint8_t elen = phys_read8(p + 1);
+        if (elen < 2 || p + elen > end)
+            break;
+
+        if (type == 0 && elen >= 8) {
+            /* Processor Local APIC */
+            uint8_t apic_id = phys_read8(p + 3);
+            uint32_t flags  = phys_read32(p + 4);
+            if (g_smp_cpu_count < SMP_MAX_CPUS) {
+                g_smp_cpus[g_smp_cpu_count].apic_id = apic_id;
+                g_smp_cpus[g_smp_cpu_count].enabled  = (flags & 1) ? 1 : 0;
+                g_smp_cpu_count++;
+            }
+        } else if (type == 1 && elen >= 12) {
+            /* I/O APIC — take the first one */
+            if (g_ioapic_addr == 0) {
+                g_ioapic_addr     = (uint64_t)phys_read32(p + 4);
+                g_ioapic_gsi_base = phys_read32(p + 8);
+            }
+        } else if (type == 2 && elen >= 10) {
+            /* Interrupt Source Override */
+            if (g_madt_iso_count < MADT_MAX_ISO) {
+                g_madt_iso[g_madt_iso_count].bus        = phys_read8(p + 2);
+                g_madt_iso[g_madt_iso_count].source_irq = phys_read8(p + 3);
+                g_madt_iso[g_madt_iso_count].gsi        = phys_read32(p + 4);
+                g_madt_iso[g_madt_iso_count].flags      = (uint16_t)phys_read32(p + 8);
+                g_madt_iso_count++;
+            }
+        }
+
+        p += elen;
+    }
+}
+
 static void scan_table(uint64_t phys)
 {
     char sig[4];
@@ -242,8 +304,10 @@ static void scan_table(uint64_t phys)
 
     if (__builtin_memcmp(sig, "MCFG", 4) == 0)
         parse_mcfg(phys);
-    else if (__builtin_memcmp(sig, "APIC", 4) == 0)
+    else if (__builtin_memcmp(sig, "APIC", 4) == 0) {
         g_madt_found = 1;
+        parse_madt(phys);
+    }
     else if (__builtin_memcmp(sig, "FACP", 4) == 0)
         parse_fadt(phys);
 }
@@ -253,7 +317,7 @@ void acpi_init(void)
     uint64_t rsdp_phys = arch_get_rsdp_phys();
 
     if (rsdp_phys == 0) {
-        printk("[ACPI] OK: MADT parsed, no MCFG (legacy machine)\n");
+        printk("[ACPI] OK: MADT parsed, 0 CPUs, no MCFG (legacy machine)\n");
         return;
     }
 
@@ -331,10 +395,21 @@ void acpi_init(void)
         }
     }
 
+    /* Detect BSP APIC ID via CPUID leaf 1 (EBX[31:24]) */
+    {
+        uint32_t eax, ebx, ecx, edx;
+        __asm__ volatile("cpuid"
+                         : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                         : "a"(1));
+        g_bsp_apic_id = (uint8_t)(ebx >> 24);
+    }
+
     if (g_mcfg_base != 0)
-        printk("[ACPI] OK: MCFG+MADT parsed\n");
+        printk("[ACPI] OK: MCFG+MADT parsed, %u CPUs\n",
+               (unsigned)g_smp_cpu_count);
     else
-        printk("[ACPI] OK: MADT parsed, no MCFG (legacy machine)\n");
+        printk("[ACPI] OK: MADT parsed, %u CPUs, no MCFG (legacy machine)\n",
+               (unsigned)g_smp_cpu_count);
 
     /* Enable power button SCI if FADT was found */
     if (s_acpi_pm_ok)

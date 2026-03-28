@@ -64,6 +64,34 @@ extern uint8_t  g_mcfg_start_bus;
 extern uint8_t  g_mcfg_end_bus;
 extern int      g_madt_found;    /* 1 if MADT was located */
 
+/* SMP CPU info parsed from MADT */
+#define SMP_MAX_CPUS 16
+
+typedef struct {
+    uint8_t apic_id;
+    uint8_t enabled;
+} smp_cpu_t;
+
+extern smp_cpu_t  g_smp_cpus[SMP_MAX_CPUS];
+extern uint32_t   g_smp_cpu_count;
+extern uint8_t    g_bsp_apic_id;
+
+/* I/O APIC info from MADT */
+extern uint64_t   g_ioapic_addr;
+extern uint32_t   g_ioapic_gsi_base;
+
+/* Interrupt Source Overrides from MADT */
+#define MADT_MAX_ISO 16
+typedef struct {
+    uint8_t  bus;
+    uint8_t  source_irq;
+    uint32_t gsi;
+    uint16_t flags;
+} madt_iso_t;
+
+extern madt_iso_t g_madt_iso[MADT_MAX_ISO];
+extern uint32_t   g_madt_iso_count;
+
 /* Initialize ACPI: parse RSDP -> RSDT/XSDT -> find MCFG + MADT + FADT.
  * Enables power button SCI if FADT is found.
  * Prints [ACPI] OK or FAIL to serial. */
