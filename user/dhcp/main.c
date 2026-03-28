@@ -387,19 +387,18 @@ try_renew(int fd)
 int
 main(void)
 {
-    /* Probe for a network interface before doing anything else */
-    int probe = socket(AF_INET, SOCK_DGRAM, 0);
-    if (probe < 0) {
-        dprintf(1, "[DHCP] no network interface available, exiting\n");
-        return 0;
-    }
-    close(probe);
-
-    /* Read MAC via sys_netcfg op=1 */
+    /* Read MAC via sys_netcfg op=1 — if MAC is all zeros, no NIC present */
     netcfg_info_t info;
     memset(&info, 0, sizeof(info));
     (void)syscall(SYS_NETCFG, 1, (long)&info, 0, 0);
     memcpy(s_mac, info.mac, 6);
+
+    /* Check if we have a real NIC (non-zero MAC) */
+    if (s_mac[0] == 0 && s_mac[1] == 0 && s_mac[2] == 0 &&
+        s_mac[3] == 0 && s_mac[4] == 0 && s_mac[5] == 0) {
+        dprintf(1, "[DHCP] no network interface (MAC 00:00:00:00:00:00), exiting\n");
+        return 0;
+    }
 
     int attempt;
     for (attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
