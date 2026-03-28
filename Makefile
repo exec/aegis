@@ -157,13 +157,14 @@ USERSPACE_SRCS = \
 # Programs embedded in initrd via objcopy --input binary
 OBJCOPY = x86_64-elf-objcopy
 
-# Only login and vigil are statically linked and embedded in the initrd.
+# Boot-critical static binaries in initrd: login, vigil, shell.
 # All other user binaries are dynamically linked and live on the ext2 disk.
 USER_ELFS = \
     user/login/login.elf \
-    user/vigil/vigil
+    user/vigil/vigil \
+    user/shell/shell.elf
 
-BLOB_OBJS = $(BUILD)/blobs/login.o $(BUILD)/blobs/vigil.o $(BUILD)/blobs/init.o
+BLOB_OBJS = $(BUILD)/blobs/login.o $(BUILD)/blobs/vigil.o $(BUILD)/blobs/shell.o $(BUILD)/blobs/init.o
 
 
 # ── Object file lists ─────────────────────────────────────────────────────────
@@ -265,6 +266,9 @@ user/shell/shell.elf:
 user/oksh/oksh.elf:
 	$(MAKE) -C user/oksh
 
+user/shell/shell.elf:
+	$(MAKE) -C user/shell
+
 user/login/login.elf:
 	$(MAKE) -C user/login
 
@@ -309,6 +313,13 @@ $(BUILD)/blobs/vigil.o: user/vigil/vigil
 	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
 	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
 	  vigil.bin vigil.o
+
+$(BUILD)/blobs/shell.o: user/shell/shell.elf
+	@mkdir -p $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/shell.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  shell.bin shell.o
 
 $(BUILD)/blobs/init.o: $(INIT_ELF_SRC) $(INIT_STAMP)
 	@mkdir -p $(BUILD)/blobs

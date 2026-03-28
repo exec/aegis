@@ -63,12 +63,14 @@ static const unsigned int s_dhcp_caps_size   = sizeof(s_dhcp_caps)   - 1;
  * Symbols: _binary_<name>_start, _binary_<name>_end.
  * Size = end - start (computed at open time).
  *
- * Only login and vigil are statically linked and embedded in the initrd.
+ * Boot-critical static binaries in initrd: login, vigil, shell.
  * All other user binaries are dynamically linked and live on the ext2 disk. */
 extern const unsigned char _binary_login_bin_start[];
 extern const unsigned char _binary_login_bin_end[];
 extern const unsigned char _binary_vigil_bin_start[];
 extern const unsigned char _binary_vigil_bin_end[];
+extern const unsigned char _binary_shell_bin_start[];
+extern const unsigned char _binary_shell_bin_end[];
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -84,6 +86,7 @@ static const initrd_entry_t s_files[] = {
     { "/etc/motd",  (const unsigned char *)s_motd, (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
     { "/bin/login",   _binary_login_bin_start,     _binary_login_bin_end },
     { "/bin/vigil",   _binary_vigil_bin_start,     _binary_vigil_bin_end },
+    { "/bin/sh",      _binary_shell_bin_start,     _binary_shell_bin_end },
     { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
     { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
     { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },
@@ -101,7 +104,7 @@ static const initrd_entry_t s_files[] = {
 };
 
 
-static const uint32_t s_nfiles = 16;
+static const uint32_t s_nfiles = 17;
 
 /* Helper: return file size for an entry. */
 static uint32_t
