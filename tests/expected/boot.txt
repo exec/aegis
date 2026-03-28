@@ -19,7 +19,7 @@
 [RAMDISK] OK: 59 MB mapped from module
 [RAMDISK] OK: 32 MB ESP mapped from module 2
 [VFS] OK: initialized
-[INITRD] OK: 20 files registered
+[INITRD] OK: 23 files registered
 [ACPI] OK: MADT parsed, 1 CPUs, no MCFG (legacy machine)
 [ACPI] OK: power button enabled (SCI IRQ 9, PM1a=0x600)
 [LAPIC] OK: id=0 base=0xfee00000
