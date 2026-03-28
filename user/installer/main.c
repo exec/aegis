@@ -101,9 +101,9 @@ static const unsigned char AEGIS_ROOT_GUID[16] = {
     0x00,0x01, 0x00,0x00,0x00,0x00,0x00,0x00
 };
 
-/* ESP: 32 MB = 65536 sectors starting at LBA 2048 */
+/* ESP: 2 MB = 4096 sectors starting at LBA 2048 */
 #define ESP_START   2048ULL
-#define ESP_SECTORS 65536ULL
+#define ESP_SECTORS 4096ULL
 #define ESP_END     (ESP_START + ESP_SECTORS - 1)
 /* Root: starts after ESP */
 #define ROOT_START  (ESP_END + 1)

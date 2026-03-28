@@ -400,8 +400,8 @@ $(GRUB_EFI):
 
 $(ESP_IMG): $(GRUB_EFI)
 	@mkdir -p $(BUILD)
-	dd if=/dev/zero of=$(ESP_IMG) bs=512 count=65536 2>/dev/null
-	/sbin/mkfs.fat -F 16 $(ESP_IMG) >/dev/null 2>&1
+	dd if=/dev/zero of=$(ESP_IMG) bs=512 count=4096 2>/dev/null
+	/sbin/mkfs.fat -F 12 $(ESP_IMG) >/dev/null 2>&1
 	mmd -i $(ESP_IMG) ::EFI
 	mmd -i $(ESP_IMG) ::EFI/BOOT
 	mcopy -i $(ESP_IMG) $(GRUB_EFI) ::EFI/BOOT/BOOTX64.EFI
