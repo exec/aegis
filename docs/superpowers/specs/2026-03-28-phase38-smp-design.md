@@ -116,16 +116,65 @@ The `pause` instruction is used in the spin loop to reduce power and improve SMT
 
 Add spinlocks to these subsystems in 38a (even before multi-core):
 
+#### Core Kernel Locks
+
 | Subsystem | Lock | Scope |
 |-----------|------|-------|
+| Scheduler | `sched_lock` | Global — protects run queue + task state transitions |
 | PMM | `pmm_lock` | Global — protects bitmap for alloc/free |
 | KVA | `kva_lock` | Global — protects bump allocator |
-| VMM window | `vmm_window_lock` | Global — protects s_window_pte |
-| Scheduler | `sched_lock` | Global — protects run queue + s_current |
-| Pipe | `pipe->lock` | Per-pipe — protects ring buffer + waiters |
+| VMM window | `vmm_window_lock` | Global — protects s_window_pte page table walks |
+| PID | `pid_lock` | Global — protects s_next_pid (or use atomic) |
+| RNG | `rng_lock` | Global — protects ChaCha20 state + output buffer |
 | Futex | `futex_lock` | Global — protects futex waiter pool |
-| PID | `pid_lock` | Global — protects s_next_pid |
+
+#### Per-Instance Locks
+
+| Subsystem | Lock | Scope |
+|-----------|------|-------|
 | fd_table | `fdt->lock` | Per-fd-table — protects fds[] array |
+| Pipe | `pipe->lock` | Per-pipe — protects ring buffer + waiters |
+| PTY | `pty->lock` | Per-PTY-pair — protects master/slave buffers |
+| TTY | `tty->lock` | Per-TTY — protects line discipline state |
+
+#### Network Stack Locks
+
+| Subsystem | Lock | Scope |
+|-----------|------|-------|
+| Socket table | `sock_lock` | Global — protects s_socks[] array |
+| TCP | `tcp_lock` | Global — protects s_tcp[] connection table + shared TX buffer |
+| UDP | `udp_lock` | Global — protects s_udp[] binding table + shared TX buffer |
+| ARP | `arp_lock` | Global — protects ARP table |
+| IP | `ip_lock` | Global — protects s_my_ip/netmask/gateway + shared buffers + loopback queue |
+| Netdev | `netdev_lock` | Global — protects device registry |
+| Epoll | `epoll_lock` | Global — protects epoll instance table |
+
+#### Driver Locks
+
+| Subsystem | Lock | Scope |
+|-----------|------|-------|
+| NVMe | `nvme_lock` | Global — protects admin+IO queue state, command ID, bounce buffer |
+| xHCI | `xhci_lock` | Global — protects command ring, event ring, per-slot HID state |
+| Blkdev | `blkdev_lock` | Global — protects block device registry |
+| VGA/FB | `console_lock` | Global — protects cursor position + ANSI state |
+
+#### Filesystem Locks
+
+| Subsystem | Lock | Scope |
+|-----------|------|-------|
+| ext2 | `ext2_lock` | Global — protects superblock, BGDs, block cache, inode allocation |
+| Ramfs | `ramfs->lock` | Per-instance — protects file table |
+| Initrd | N/A | Read-only after boot — no lock needed |
+
+#### Read-Only After Init (No Lock Needed)
+
+These are set once during boot and never modified:
+- ACPI globals (MCFG, MADT, SCI, PM registers)
+- PCIe device list (s_devices in pcie.c) — scan happens once at boot
+- Ramdisk base/size
+- FB physical address/dimensions
+- blkdev entries for ramdisk and NVMe parent (only partitions are dynamic)
+- GPT partition table (scanned once; only installer calls gpt_rescan)
 
 In 38a with single core, these locks are never contended but verify correctness (no deadlocks, proper lock ordering).
 
@@ -134,10 +183,14 @@ In 38a with single core, these locks are never contended but verify correctness 
 When multiple locks are needed, always acquire in this order:
 
 ```
-sched_lock > pmm_lock > kva_lock > vmm_window_lock > fdt->lock > pipe->lock > futex_lock > pid_lock
+sched_lock > pmm_lock > kva_lock > vmm_window_lock > ext2_lock > nvme_lock >
+  fdt->lock > pipe->lock > sock_lock > tcp_lock > udp_lock > arp_lock >
+  ip_lock > rng_lock > futex_lock > pid_lock > console_lock
 ```
 
-Never acquire a lower-priority lock while holding a higher-priority one. `sched_exit` calls `fd_table_unref` which may acquire `fdt->lock`, so scheduler lock must outrank fd_table lock.
+Never acquire a lower-priority lock while holding a higher-priority one. `sched_exit` calls `fd_table_unref` which may acquire `fdt->lock`, so scheduler lock must outrank fd_table lock. ext2 operations call NVMe (disk I/O), so ext2_lock outranks nvme_lock.
+
+**Total: ~30 spinlocks across the kernel.** Most are global (single lock per subsystem). Per-instance locks (pipe, PTY, fd_table, ramfs) scale with the number of active objects.
 
 ### Testing (38a)
 
