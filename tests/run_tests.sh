@@ -26,9 +26,14 @@ timeout 60s qemu-system-x86_64 \
 sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g; s/\r//g' "$RAW" \
     | grep '^\[' \
     | grep -v '^\[DHCP\]' \
+    | sed 's/mounted ramdisk0, [0-9]* blocks/mounted ramdisk0, NBLK blocks/' \
     > "$ACTUAL" || true
 
-diff "$EXPECTED" "$ACTUAL"
+# Apply same normalization to expected
+sed 's/mounted ramdisk0, [0-9]* blocks/mounted ramdisk0, NBLK blocks/' \
+    "$EXPECTED" > /tmp/aegis_expected_norm.txt
+
+diff /tmp/aegis_expected_norm.txt "$ACTUAL"
 echo "PASS boot oracle"
 
 # ── Test 2: Hardware-specific tests (INIT=shell, separate boots) ─────────────

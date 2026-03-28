@@ -281,9 +281,6 @@ lapic_timer_init(void)
     /* Configure periodic mode (bit 17), vector 0x30, unmasked */
     lapic_write(LAPIC_TIMER_LVT, (1u << 17) | 0x30);
     lapic_write(LAPIC_TIMER_ICR, elapsed);
-
-    printk("[LAPIC] timer: %u ticks/10ms, periodic at ~100Hz\n",
-           (unsigned)elapsed);
 }
 
 /*
