@@ -456,7 +456,11 @@ int main(void)
     unsigned long long disk_blocks = devs[target].block_count;
 
     /* 1. User account setup (writes to ramdisk ext2 before copy) */
-    if (setup_user() < 0) return 1;
+    /* NOTE: setup_user writes /etc/passwd and /etc/shadow. If it fails,
+     * the default rootfs credentials (root/forevervigilant) are used. */
+    if (setup_user() < 0) {
+        printf("  Using default credentials (root/forevervigilant)\n");
+    }
 
     /* 2. Write installed grub.cfg to ramdisk ext2 */
     printf("\nWriting grub.cfg... ");
