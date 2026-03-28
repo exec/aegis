@@ -25,6 +25,10 @@ static volatile uint64_t s_ticks = 0;
  * continues running after the port write and outputs a second line. */
 static volatile int s_shutdown = 0;
 
+/* Wall clock: epoch_offset + (ticks / 100) = current Unix time in seconds.
+ * Set by sys_clock_settime (chronos NTP daemon). */
+static volatile uint64_t s_epoch_offset = 0;
+
 /* Forward declaration: sched_tick is implemented in kernel/sched/sched.c.
  * We use a forward decl here to avoid a circular include dependency.
  * -Ikernel/sched is in CFLAGS so we could include sched.h, but the
@@ -99,4 +103,22 @@ uint64_t
 arch_get_ticks(void)
 {
     return s_ticks;
+}
+
+/* arch_clock_gettime — returns {seconds, nanoseconds} since Unix epoch.
+ * seconds = epoch_offset + ticks/100
+ * nanoseconds = (ticks % 100) * 10000000 */
+void
+arch_clock_gettime(uint64_t *sec, uint64_t *nsec)
+{
+    uint64_t t = s_ticks;
+    *sec  = s_epoch_offset + t / 100;
+    *nsec = (t % 100) * 10000000UL;
+}
+
+/* arch_clock_settime — set wall clock. Computes epoch_offset from current ticks. */
+void
+arch_clock_settime(uint64_t sec)
+{
+    s_epoch_offset = sec - s_ticks / 100;
 }

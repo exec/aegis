@@ -44,6 +44,11 @@ static const char s_dhcp_run[]    = "/bin/dhcp\n";
 static const char s_dhcp_policy[] = "oneshot\n";
 static const char s_dhcp_caps[]   = "NET_ADMIN NET_SOCKET\n";
 
+/* chronos vigil service config — NTP time sync daemon */
+static const char s_chronos_run[]    = "/bin/chronos\n";
+static const char s_chronos_policy[] = "oneshot\n";
+static const char s_chronos_caps[]   = "NET_SOCKET\n";
+
 /* Compile-time size constants for static string entries. */
 static const unsigned int s_hosts_size         = sizeof(s_hosts)         - 1;
 static const unsigned int s_passwd_size        = sizeof(s_passwd)        - 1;
@@ -58,6 +63,9 @@ static const unsigned int s_httpd_caps_size    = sizeof(s_httpd_caps)    - 1;
 static const unsigned int s_dhcp_run_size    = sizeof(s_dhcp_run)    - 1;
 static const unsigned int s_dhcp_policy_size = sizeof(s_dhcp_policy) - 1;
 static const unsigned int s_dhcp_caps_size   = sizeof(s_dhcp_caps)   - 1;
+static const unsigned int s_chronos_run_size    = sizeof(s_chronos_run)    - 1;
+static const unsigned int s_chronos_policy_size = sizeof(s_chronos_policy) - 1;
+static const unsigned int s_chronos_caps_size   = sizeof(s_chronos_caps)   - 1;
 
 /* Binary blobs embedded via objcopy --input binary.
  * Symbols: _binary_<name>_start, _binary_<name>_end.
@@ -109,11 +117,14 @@ static const initrd_entry_t s_files[] = {
     { "/etc/vigil/services/httpd/run", (const unsigned char *)s_httpd_run, (const unsigned char *)s_httpd_run + s_httpd_run_size },
     { "/etc/vigil/services/httpd/policy", (const unsigned char *)s_httpd_policy, (const unsigned char *)s_httpd_policy + s_httpd_policy_size },
     { "/etc/vigil/services/httpd/caps", (const unsigned char *)s_httpd_caps, (const unsigned char *)s_httpd_caps + s_httpd_caps_size },
+    { "/etc/vigil/services/chronos/run", (const unsigned char *)s_chronos_run, (const unsigned char *)s_chronos_run + s_chronos_run_size },
+    { "/etc/vigil/services/chronos/policy", (const unsigned char *)s_chronos_policy, (const unsigned char *)s_chronos_policy + s_chronos_policy_size },
+    { "/etc/vigil/services/chronos/caps", (const unsigned char *)s_chronos_caps, (const unsigned char *)s_chronos_caps + s_chronos_caps_size },
     { (const char *)0, (const unsigned char *)0, (const unsigned char *)0 }  /* sentinel */
 };
 
 
-static const uint32_t s_nfiles = 20;
+static const uint32_t s_nfiles = 23;
 
 /* Helper: return file size for an entry. */
 static uint32_t

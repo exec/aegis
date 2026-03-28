@@ -180,6 +180,15 @@ void pit_init(void);
  * Use this instead of accessing the pit.c-internal counter directly. */
 uint64_t arch_get_ticks(void);
 
+/* arch_clock_gettime — returns {seconds, nanoseconds} since Unix epoch.
+ * seconds = epoch_offset + ticks/100, nanoseconds = (ticks%100)*10000000.
+ * epoch_offset is set by arch_clock_settime (NTP daemon). */
+void arch_clock_gettime(uint64_t *sec, uint64_t *nsec);
+
+/* arch_clock_settime — set wall clock epoch offset from current ticks.
+ * Called by sys_clock_settime after NTP sync. */
+void arch_clock_settime(uint64_t sec);
+
 /* Request a clean shutdown. Sets a flag checked by pit_handler on the next
  * timer tick; actual arch_debug_exit is deferred to ISR context (IF=0) to
  * prevent the QEMU async isa-debug-exit race where task code re-runs after

@@ -162,6 +162,7 @@ uint64_t sys_setuid(uint64_t uid_arg);
 uint64_t sys_setgid(uint64_t gid_arg);
 uint64_t sys_sync(void);
 uint64_t sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr);
+uint64_t sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr);
 
 /* ── sys_signal.c ───────────────────────────────────────────────────────── */
 uint64_t sys_rt_sigaction(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);

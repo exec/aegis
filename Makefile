@@ -472,6 +472,7 @@ DISK_USER_BINS = \
 	user/fb_test/fb_test.elf \
 	user/mouse_test/mouse_test.elf \
 	user/lumen/lumen.elf \
+	user/chronos/chronos \
 	build/curl/curl \
 	build/musl-dynamic/usr/lib/libc.so
 
@@ -491,7 +492,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	printf 'write build/musl-dynamic/usr/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/usr/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# User binaries (dynamically linked, loaded from ext2 at runtime)
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite user/installer/installer.elf /bin/installer\nwrite user/fb_test/fb_test.elf /bin/fb_test\nwrite user/mouse_test/mouse_test.elf /bin/mouse_test\nwrite user/lumen/lumen.elf /bin/lumen\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite user/installer/installer.elf /bin/installer\nwrite user/fb_test/fb_test.elf /bin/fb_test\nwrite user/mouse_test/mouse_test.elf /bin/mouse_test\nwrite user/lumen/lumen.elf /bin/lumen\nwrite user/chronos/chronos /bin/chronos\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
@@ -536,6 +537,16 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	printf 'write /tmp/aegis-dhcp-run /etc/vigil/services/dhcp/run\nwrite /tmp/aegis-dhcp-policy /etc/vigil/services/dhcp/policy\nwrite /tmp/aegis-dhcp-caps /etc/vigil/services/dhcp/caps\nwrite /tmp/aegis-dhcp-user /etc/vigil/services/dhcp/user\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-dhcp-run /tmp/aegis-dhcp-policy /tmp/aegis-dhcp-caps /tmp/aegis-dhcp-user
+	# chronos vigil service — NTP time sync daemon
+	printf 'mkdir /etc/vigil/services/chronos\n' \
+	    | /sbin/debugfs -w $(ROOTFS)
+	printf '/bin/chronos\n' > /tmp/aegis-chronos-run
+	printf 'oneshot\n' > /tmp/aegis-chronos-policy
+	printf 'NET_SOCKET\n' > /tmp/aegis-chronos-caps
+	printf 'root\n' > /tmp/aegis-chronos-user
+	printf 'write /tmp/aegis-chronos-run /etc/vigil/services/chronos/run\nwrite /tmp/aegis-chronos-policy /etc/vigil/services/chronos/policy\nwrite /tmp/aegis-chronos-caps /etc/vigil/services/chronos/caps\nwrite /tmp/aegis-chronos-user /etc/vigil/services/chronos/user\n' \
+	    | /sbin/debugfs -w $(ROOTFS)
+	rm -f /tmp/aegis-chronos-run /tmp/aegis-chronos-policy /tmp/aegis-chronos-caps /tmp/aegis-chronos-user
 	# curl binary and CA bundle on ext2
 	printf 'mkdir /etc/ssl\nmkdir /etc/ssl/certs\n' \
 	    | /sbin/debugfs -w $(ROOTFS)

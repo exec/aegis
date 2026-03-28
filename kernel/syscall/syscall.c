@@ -40,6 +40,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  94: num = 231; break;  /* exit_group */
     case  96: num = 218; break;  /* set_tid_address */
     case  99: num = 273; break;  /* set_robust_list */
+    case 112: num = 227; break;  /* clock_settime */
     case 113: num = 228; break;  /* clock_gettime */
     case 124: num = 35;  break;  /* sched_yield → nanosleep(0) */
     case 129: num = 62;  break;  /* kill */
@@ -149,6 +150,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  87: return sys_unlink(arg1);
     case 257: return sys_openat(arg1, arg2, arg3, arg4);
     case 162: return sys_sync();
+    case 227: return sys_clock_settime(arg1, arg2);
     case 228: return sys_clock_gettime(arg1, arg2);
     case  41: return sys_socket(arg1, arg2, arg3);
     case  42: return sys_connect(arg1, arg2, arg3);

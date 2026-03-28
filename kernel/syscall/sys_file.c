@@ -803,9 +803,11 @@ sys_sync(void)
 /*
  * sys_clock_gettime — syscall 228
  *
- * arg1 = clk_id  (CLOCK_REALTIME=0, CLOCK_MONOTONIC=1; both return PIT ticks)
+ * arg1 = clk_id  (CLOCK_REALTIME=0, CLOCK_MONOTONIC=1)
  * arg2 = user pointer to struct timespec { int64_t tv_sec; int64_t tv_nsec; }
  *
+ * CLOCK_REALTIME returns wall-clock time (epoch_offset + ticks/100).
+ * CLOCK_MONOTONIC returns raw PIT ticks (no epoch offset).
  * Returns 0 on success, negative errno on failure.
  */
 uint64_t
@@ -813,10 +815,43 @@ sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr)
 {
     if (clk_id != 0 && clk_id != 1) return (uint64_t)-(int64_t)22; /* EINVAL */
     if (!user_ptr_valid(timespec_uptr, 16)) return (uint64_t)-(int64_t)14; /* EFAULT */
-    uint64_t ticks = arch_get_ticks();
-    int64_t tv_sec  = (int64_t)(ticks / 100ULL);
-    int64_t tv_nsec = (int64_t)((ticks % 100ULL) * 10000000ULL);
+
+    int64_t tv_sec, tv_nsec;
+    if (clk_id == 0) {
+        /* CLOCK_REALTIME — wall clock set by NTP */
+        uint64_t sec, nsec;
+        arch_clock_gettime(&sec, &nsec);
+        tv_sec  = (int64_t)sec;
+        tv_nsec = (int64_t)nsec;
+    } else {
+        /* CLOCK_MONOTONIC — raw ticks, no epoch offset */
+        uint64_t ticks = arch_get_ticks();
+        tv_sec  = (int64_t)(ticks / 100ULL);
+        tv_nsec = (int64_t)((ticks % 100ULL) * 10000000ULL);
+    }
     copy_to_user((void *)(uintptr_t)timespec_uptr,       &tv_sec,  8);
     copy_to_user((void *)(uintptr_t)(timespec_uptr + 8), &tv_nsec, 8);
+    return 0;
+}
+
+/*
+ * sys_clock_settime — syscall 227
+ *
+ * arg1 = clk_id (CLOCK_REALTIME=0 only)
+ * arg2 = user pointer to struct timespec { int64_t tv_sec; int64_t tv_nsec; }
+ *
+ * Sets the wall clock epoch offset so that subsequent clock_gettime(CLOCK_REALTIME)
+ * returns real Unix time. Called by the chronos NTP daemon.
+ * Returns 0 on success, negative errno on failure.
+ */
+uint64_t
+sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr)
+{
+    if (clk_id != 0) return (uint64_t)-(int64_t)22; /* EINVAL: only CLOCK_REALTIME */
+    if (!user_ptr_valid(timespec_uptr, 16)) return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    uint64_t sec;
+    copy_from_user(&sec, (const void *)(uintptr_t)timespec_uptr, 8);
+    arch_clock_settime(sec);
     return 0;
 }
