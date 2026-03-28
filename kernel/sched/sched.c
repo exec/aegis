@@ -447,22 +447,14 @@ sched_yield_to_next(void)
 void
 sched_start(void)
 {
-    /* Debug: read gs:16 raw and via sched_current to check consistency */
-    uint64_t raw_gs16;
-    __asm__ volatile("movq %%gs:16, %0" : "=r"(raw_gs16));
-    printk("[SCHED] debug: gs:16=0x%lx gs:0=0x%lx\n",
-           raw_gs16, (uint64_t)(uintptr_t)percpu_self());
-
     aegis_task_t *first = sched_current();
     if (!first) {
-        printk("[SCHED] FAIL: sched_start called with no tasks (gs:16=0x%lx)\n",
-               raw_gs16);
+        printk("[SCHED] FAIL: sched_start called with no tasks\n");
         for (;;) {}
     }
 
-    printk("[SCHED] OK: scheduler started, %u tasks, cur=0x%lx\n",
-           s_task_count, (uint64_t)(uintptr_t)first);
     s_sched_ready = 1;  /* guard: sched_tick now safe to context-switch */
+    printk("[SCHED] OK: scheduler started, %u tasks\n", s_task_count);
 
     /* One-way switch into the first task.
      *

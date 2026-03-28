@@ -101,7 +101,8 @@ arch_gdt_init(void)
 		"movw %%ax,  %%ds\n\t"
 		"movw %%ax,  %%es\n\t"
 		"movw %%ax,  %%fs\n\t"
-		"movw %%ax,  %%gs\n\t"
+		/* Skip GS reload — GS.base is set via WRMSR (percpu data).
+		 * Loading a selector zeros the hidden base, destroying percpu. */
 		"movw %%ax,  %%ss\n\t"
 		/* Load TSS selector */
 		"movw $0x28, %%ax\n\t"
