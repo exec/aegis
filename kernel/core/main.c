@@ -43,10 +43,10 @@
 static void
 task_idle(void)
 {
-    /* Start the LAPIC timer now that the scheduler is running.
-     * Cannot start earlier — the timer fires vector 0x30 which calls
-     * sched_tick, and sched_tick must not run before ctx_switch. */
-    lapic_timer_init();
+    /* LAPIC timer disabled on BSP for now — PIT drives scheduling.
+     * LAPIC timer causes #GP on real hardware (ThinkPad X13 Zen 2)
+     * for unknown reasons. APs still use LAPIC timer in ap_entry.
+     * TODO: debug LAPIC timer IDT gate / ISR interaction on bare metal. */
     arch_enable_irq();
     for (;;)
         arch_halt();
