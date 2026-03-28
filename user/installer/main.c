@@ -232,39 +232,36 @@ static int copy_blocks(const char *src_dev, const char *dst_dev,
 
 static int install_esp(const char *devname)
 {
-    /* The pre-built ESP image is at /boot/esp.img in the live rootfs.
-     * It contains a FAT filesystem with /EFI/BOOT/BOOTX64.EFI and grub.cfg.
-     * We read it and write it block-for-block to the ESP partition.
+    /* The ESP image is loaded by GRUB as the second multiboot2 module
+     * and registered as blkdev "ramdisk1" by the kernel. We copy it
+     * block-for-block to the ESP partition on the target disk.
      *
      * The ESP partition is NOT registered by gpt_scan (no Aegis GUID prefix),
      * so we write directly to the parent device at the ESP's LBA offset. */
-    static unsigned char buf[4096];
-    int fd = open("/boot/esp.img", O_RDONLY);
-    if (fd < 0) {
-        printf("ERROR: cannot open /boot/esp.img\n");
-        return -1;
-    }
-
-    unsigned long long lba;
-    unsigned long long total_read = 0;
-    for (lba = 0; lba < ESP_SECTORS; lba += 8) {
-        unsigned long long chunk = ESP_SECTORS - lba;
-        if (chunk > 8) chunk = 8;
-        memset(buf, 0, 4096);  /* clear buffer before short reads */
-        int n = (int)read(fd, buf, (size_t)(chunk * 512));
-        if (n <= 0) break;
-        total_read += (unsigned long long)n;
-        /* Pad remaining with zeros if short read */
-        if ((unsigned long long)n < chunk * 512)
-            memset(buf + n, 0, (size_t)(chunk * 512 - (unsigned long long)n));
-        if (blkdev_io(devname, ESP_START + lba, chunk, buf, 1) < 0) {
-            close(fd);
-            return -1;
+    blkdev_info_t devs[8];
+    int n = (int)blkdev_list(devs, sizeof(devs));
+    unsigned long long esp_blocks = 0;
+    int i;
+    for (i = 0; i < n; i++) {
+        if (strcmp(devs[i].name, "ramdisk1") == 0) {
+            esp_blocks = devs[i].block_count;
+            break;
         }
     }
-    close(fd);
-    printf("  (read %llu bytes from esp.img, wrote %llu sectors)\n",
-           total_read, lba);
+    if (esp_blocks == 0) {
+        printf("ERROR: ramdisk1 (ESP image) not found\n");
+        return -1;
+    }
+    if (esp_blocks > ESP_SECTORS) esp_blocks = ESP_SECTORS;
+
+    static unsigned char buf[4096];
+    unsigned long long lba;
+    for (lba = 0; lba < esp_blocks; lba += 8) {
+        unsigned long long chunk = esp_blocks - lba;
+        if (chunk > 8) chunk = 8;
+        if (blkdev_io("ramdisk1", lba, chunk, buf, 0) < 0) return -1;
+        if (blkdev_io(devname, ESP_START + lba, chunk, buf, 1) < 0) return -1;
+    }
     return 0;
 }
 

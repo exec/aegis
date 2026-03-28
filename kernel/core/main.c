@@ -70,11 +70,16 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_sse_init();        /* enable SSE for user mode (CR0/CR4 bits)       */
     random_init();          /* ChaCha20 CSPRNG — [RNG] OK                    */
 
-    /* Map GRUB module (rootfs image) into KVA as RAM blkdev */
+    /* Map GRUB modules into KVA as RAM blkdevs */
     {
         uint64_t mod_phys = 0, mod_size = 0;
         arch_get_module(&mod_phys, &mod_size);
-        ramdisk_init(mod_phys, mod_size);
+        ramdisk_init(mod_phys, mod_size);    /* ramdisk0 = rootfs */
+    }
+    {
+        uint64_t mod2_phys = 0, mod2_size = 0;
+        arch_get_module2(&mod2_phys, &mod2_size);
+        ramdisk_init2(mod2_phys, mod2_size); /* ramdisk1 = ESP image */
     }
 
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */

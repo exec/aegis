@@ -412,11 +412,12 @@ $(ESP_IMG): $(GRUB_EFI)
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
-$(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg $(ROOTFS)
+$(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg $(ROOTFS) $(ESP_IMG)
 	@mkdir -p $(ISO_DIR)/boot/grub
 	cp $(BUILD)/aegis.elf $(ISO_DIR)/boot/aegis.elf
 	cp tools/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	cp $(ROOTFS) $(ISO_DIR)/boot/rootfs.img
+	cp $(ESP_IMG) $(ISO_DIR)/boot/esp.img
 	grub-mkrescue -o $@ $(ISO_DIR)
 
 # ── Run targets ───────────────────────────────────────────────────────────────
@@ -455,7 +456,7 @@ rootfs: $(ROOTFS)
 disk: $(DISK)
 
 # ── rootfs.img: standalone ext2 filesystem image (embedded in ISO as module) ──
-$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(ESP_IMG)
+$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
 	/sbin/mke2fs -t ext2 -F -L aegis-root $(ROOTFS)
@@ -517,18 +518,11 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(ESP_IMG)
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	# Kernel binary + EFI ESP image — use loop mount to avoid sparse files
+	# Kernel binary for installed-system boot
 	printf 'mkdir /boot\nmkdir /boot/grub\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write $(BUILD)/aegis.elf /boot/aegis.elf\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	@# esp.img MUST be written via loop mount, not debugfs.
-	@# debugfs creates sparse files; the kernel ext2 read returns zeros for
-	@# unallocated blocks, but the FAT16 directory structure is non-contiguous
-	@# and the installer's sequential read misses file data sectors.
-	sudo mount -o loop $(ROOTFS) /mnt && \
-	    sudo cp $(ESP_IMG) /mnt/boot/esp.img && \
-	    sudo umount /mnt
 	@rm -f /tmp/aegis-motd
 	@echo "Root filesystem image created: $(ROOTFS)"
 

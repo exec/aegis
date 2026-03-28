@@ -113,6 +113,10 @@ int arch_get_fb_info(arch_fb_info_t *out);
  * 0 if no module present (diskless boot). */
 int arch_get_module(uint64_t *phys_out, uint64_t *size_out);
 
+/* arch_get_module2 — return physical address and size of the second multiboot2
+ * module (ESP image for installer). Returns 1 if found, 0 if not present. */
+int arch_get_module2(uint64_t *phys_out, uint64_t *size_out);
+
 /* Highest canonical user-space virtual address. Used by syscall handlers
  * to validate user pointers. Architecture-dependent: x86-64 uses 47-bit
  * canonical addresses; ARM64 48-bit VA uses 0x0000FFFFFFFFFFFF. */
