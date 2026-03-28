@@ -20,6 +20,10 @@
 #include <fcntl.h>
 #include <sys/syscall.h>
 
+#ifndef O_TRUNC
+#define O_TRUNC 0x200
+#endif
+
 /* ── Syscall wrappers ──────────────────────────────────────────────── */
 
 typedef struct {
@@ -379,7 +383,7 @@ static int setup_user(void)
 
     /* Write /etc/passwd — use the entered username, shell = /bin/oksh */
     {
-        int fd = open("/etc/passwd", O_WRONLY | O_CREAT);
+        int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/passwd\n"); return -1; }
         char line[256];
         int n = snprintf(line, sizeof(line), "%s:x:0:0:%s:/root:/bin/oksh\n",
@@ -397,7 +401,7 @@ static int setup_user(void)
      *
      * TODO: implement SHA-512 crypt in the installer or login binary. */
     {
-        int fd = open("/etc/shadow", O_WRONLY | O_CREAT);
+        int fd = open("/etc/shadow", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/shadow\n"); return -1; }
         char line[512];
         int n = snprintf(line, sizeof(line),
