@@ -742,6 +742,10 @@ copy_path_from_user(char *kpath, uint64_t user_ptr, uint32_t bufsz)
 uint64_t
 sys_mkdir(uint64_t arg1, uint64_t arg2)
 {
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)1; /* EPERM */
     char kpath[256];
     (void)arg2; /* mode ignored for now */
     if (copy_path_from_user(kpath, arg1, sizeof(kpath)) != 0)
@@ -760,6 +764,10 @@ sys_mkdir(uint64_t arg1, uint64_t arg2)
 uint64_t
 sys_unlink(uint64_t arg1)
 {
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)1; /* EPERM */
     char kpath[256];
     if (copy_path_from_user(kpath, arg1, sizeof(kpath)) != 0)
         return (uint64_t)-(int64_t)14; /* EFAULT */
@@ -778,6 +786,10 @@ sys_unlink(uint64_t arg1)
 uint64_t
 sys_rename(uint64_t arg1, uint64_t arg2)
 {
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)1; /* EPERM */
     char kold[256], knew[256];
     if (copy_path_from_user(kold, arg1, sizeof(kold)) != 0)
         return (uint64_t)-(int64_t)14; /* EFAULT */
@@ -847,6 +859,10 @@ sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr)
 uint64_t
 sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr)
 {
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_NET_ADMIN, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)1; /* EPERM */
     if (clk_id != 0) return (uint64_t)-(int64_t)22; /* EINVAL: only CLOCK_REALTIME */
     if (!user_ptr_valid(timespec_uptr, 16)) return (uint64_t)-(int64_t)14; /* EFAULT */
 

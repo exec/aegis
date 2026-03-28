@@ -141,6 +141,7 @@ sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen)
 
             /* Fill caller's addr struct */
             if (addr && addrlen) {
+                if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
                 if (!user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
                 k_sockaddr_in_t sa;
                 sa.sin_family = AF_INET;
@@ -369,7 +370,8 @@ uint64_t
 sys_getsockname(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
     if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;
-    if (addrlen && !user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
+    if (!addrlen) return (uint64_t)-(int64_t)14;  /* EFAULT */
+    if (!user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
     sock_t *s; uint32_t sid;
     uint64_t err = get_proc_sock(fd, &s, &sid);
     if (err) return err;
@@ -388,7 +390,8 @@ uint64_t
 sys_getpeername(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
     if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;
-    if (addrlen && !user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
+    if (!addrlen) return (uint64_t)-(int64_t)14;  /* EFAULT */
+    if (!user_ptr_valid(addrlen, sizeof(uint32_t))) return (uint64_t)-(int64_t)14;  /* EFAULT */
     sock_t *s; uint32_t sid;
     uint64_t err = get_proc_sock(fd, &s, &sid);
     if (err) return err;
