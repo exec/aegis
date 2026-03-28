@@ -9,27 +9,13 @@
 #include <stdint.h>
 
 static ramfs_t s_run_ramfs;
-static ramfs_t s_etc_ramfs;
-static ramfs_t s_root_ramfs;
-
-/* Callback: populate etc ramfs from initrd entries */
-static void
-populate_etc_cb(const char *name, const uint8_t *data, uint32_t len, void *ud)
-{
-    (void)ud;
-    ramfs_populate(&s_etc_ramfs, name, data, len);
-}
+static ramfs_t s_tmp_ramfs;
 
 void
 vfs_init(void)
 {
     ramfs_init(&s_run_ramfs);
-    ramfs_init(&s_etc_ramfs);
-    ramfs_init(&s_root_ramfs);
-    /* Shadow all /etc/ initrd entries into the writable etc ramfs */
-    initrd_iter_etc(populate_etc_cb, (void *)0);
-    /* Ensure /etc/resolv.conf exists as an empty slot (DHCP daemon writes it) */
-    ramfs_populate(&s_etc_ramfs, "resolv.conf", (const uint8_t *)0, 0);
+    ramfs_init(&s_tmp_ramfs);
     printk("[VFS] OK: initialized\n");
     initrd_register();
     procfs_init();
@@ -195,11 +181,13 @@ static const vfs_ops_t s_ext2_ops = {
  * vfs_open — resolve path to a vfs_file_t across all registered backends.
  *
  * Priority order:
- *   1. /run/ ramfs (writable; /run/ paths only)
- *   2. /etc/ ramfs (writable; shadows initrd /etc/ entries)
- *   3. /root/ ramfs (writable; initially empty)
- *   4. initrd (static: /bin/, /dev/, and /etc/ directory structure)
- *   5. ext2 on nvme0 (if mounted)
+ *   1. /dev/ptmx, /dev/pts/N -> PTY
+ *   2. /proc/  -> procfs
+ *   3. /dev/   -> initrd (device files: tty, urandom, random)
+ *   4. /tmp/   -> tmp ramfs (volatile storage)
+ *   5. /run/   -> run ramfs
+ *   6. ext2 primary (writable root)
+ *   7. initrd fallback (read-only boot files)
  *
  * flags: open flags forwarded from sys_open.  VFS_O_CREAT causes vfs_open
  *        to call ext2_create() if the file is not found on ext2.
@@ -231,55 +219,64 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
         path[4]=='c' && (path[5]=='/' || path[5]=='\0'))
         return procfs_open(path[5]=='/' ? path + 6 : path + 5, flags, out);
 
-    /* 1. /run/ → run ramfs */
-    if (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n' && path[4]=='/')
-        return ramfs_open(&s_run_ramfs, path + 5, flags, out);
+    /* /dev/ -> initrd (device files: tty, urandom, random, directory) */
+    if (path[0]=='/' && path[1]=='d' && path[2]=='e' && path[3]=='v' &&
+        (path[4]=='/' || path[4]=='\0'))
+        return initrd_open(path, out);
 
-    /* 2. /etc/ → try etc ramfs first (for writable shadow copies of /etc files).
-     *    If ramfs returns ENOENT and VFS_O_CREAT is not set, fall through to
-     *    initrd so that directory opens (/etc/vigil/services) and any path not
-     *    yet in the ramfs are served from the read-only initrd layer.
-     *    Bare /etc (path[4]=='\0') is a directory open — always go to initrd. */
-    if (path[0]=='/' && path[1]=='e' && path[2]=='t' && path[3]=='c' && path[4]=='/') {
-        int r = ramfs_open(&s_etc_ramfs, path + 5, flags, out);
-        if (r == 0 || (flags & (int)VFS_O_CREAT))
-            return r;
-        /* ENOENT from ramfs and no O_CREAT — fall through to initrd */
+    /* /tmp or /tmp/ -> tmp ramfs */
+    if (path[0]=='/' && path[1]=='t' && path[2]=='m' && path[3]=='p') {
+        if (path[4] == '\0')
+            return ramfs_opendir(&s_tmp_ramfs, out);
+        if (path[4] == '/')
+            return ramfs_open(&s_tmp_ramfs, path + 5, flags, out);
     }
 
-    /* 3. /root/ or bare /root → root ramfs */
-    if (path[0]=='/' && path[1]=='r' && path[2]=='o' && path[3]=='o' && path[4]=='t') {
-        if (path[5] == '/')
-            return ramfs_open(&s_root_ramfs, path + 6, flags, out);
-        if (path[5] == '\0')
-            return ramfs_opendir(&s_root_ramfs, out);
+    /* /run or /run/ -> run ramfs */
+    if (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n') {
+        if (path[4] == '\0')
+            return ramfs_opendir(&s_run_ramfs, out);
+        if (path[4] == '/')
+            return ramfs_open(&s_run_ramfs, path + 5, flags, out);
     }
 
-    /* 4. initrd — /bin/, /dev/, /etc/ directories and any /etc/ path not in ramfs */
+    /* ext2 primary — writable root filesystem */
+    {
+        uint32_t ino = 0;
+        if (ext2_open(path, &ino) >= 0) {
+            ext2_fd_priv_t *p = ext2_pool_alloc(ino);
+            if (!p) return -12;
+            int sz = ext2_file_size(ino);
+            if (sz < 0) sz = 0;
+            out->ops    = &s_ext2_ops;
+            out->priv   = (void *)p;
+            out->offset = 0;
+            out->size   = (uint64_t)sz;
+            out->flags  = 0;
+            out->_pad   = 0;
+            return 0;
+        }
+        /* ext2 ENOENT + O_CREAT → create then retry */
+        if ((flags & (int)VFS_O_CREAT) && ext2_create(path, 0644) == 0) {
+            if (ext2_open(path, &ino) >= 0) {
+                ext2_fd_priv_t *p = ext2_pool_alloc(ino);
+                if (!p) return -12;
+                out->ops    = &s_ext2_ops;
+                out->priv   = (void *)p;
+                out->offset = 0;
+                out->size   = 0;
+                out->flags  = 0;
+                out->_pad   = 0;
+                return 0;
+            }
+        }
+    }
+
+    /* initrd fallback — read-only boot files */
     if (initrd_open(path, out) == 0)
         return 0;
 
-    /* 5. ext2 fallback */
-    uint32_t ino = 0;
-    if (ext2_open(path, &ino) < 0) {
-        if ((flags & (int)VFS_O_CREAT) && ext2_create(path, 0644) == 0) {
-            if (ext2_open(path, &ino) < 0)
-                return -2;
-        } else {
-            return -2;
-        }
-    }
-    ext2_fd_priv_t *p = ext2_pool_alloc(ino);
-    if (!p) return -12;
-    int sz = ext2_file_size(ino);
-    if (sz < 0) sz = 0;
-    out->ops    = &s_ext2_ops;
-    out->priv   = (void *)p;
-    out->offset = 0;
-    out->size   = (uint64_t)sz;
-    out->flags  = 0;
-    out->_pad   = 0;
-    return 0;
+    return -2;
 }
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
@@ -294,16 +291,14 @@ streq(const char *a, const char *b)
 /*
  * vfs_stat_path — fill *out with stat for the file at path.
  *
- * Handles:
- *   /               → directory (ino=1, mode=S_IFDIR|0555)
- *   /etc            → directory
- *   /bin            → directory
- *   /etc/motd       → initrd file
- *   /bin/sh ...     → initrd file
- *   /dev/console, /dev/tty, /dev/stdin, /dev/stdout, /dev/stderr
- *               → console chardev (mode=S_IFCHR|0600)
- *   /dev/null   → chardev (mode=S_IFCHR|0666, rdev=makedev(1,3))
- *   everything else → ext2 lookup (if mounted)
+ * Priority order:
+ *   1. /proc or /proc/  -> procfs stat
+ *   2. /dev/ device specials -> synthetic chardev stat
+ *   3. Synthetic dirs: /dev, /proc, /tmp, /run -> S_IFDIR|0555
+ *   4. /tmp/  -> tmp ramfs stat
+ *   5. /run/  -> run ramfs stat
+ *   6. ext2 primary -> disk inode stat
+ *   7. initrd fallback -> static file stat
  *
  * Returns 0 on success, -2 (ENOENT) if not found.
  */
@@ -311,18 +306,6 @@ int
 vfs_stat_path(const char *path, k_stat_t *out)
 {
     if (!path || !out) return -2;
-
-    /* Directory paths */
-    if (streq(path, "/")    || streq(path, "/etc")  || streq(path, "/bin") ||
-        streq(path, "/dev") || streq(path, "/root") || streq(path, "/run") ||
-        streq(path, "/proc")) {
-        __builtin_memset(out, 0, sizeof(*out));
-        out->st_dev   = 1;
-        out->st_ino   = 1;
-        out->st_nlink = 2;
-        out->st_mode  = S_IFDIR | 0555;
-        return 0;
-    }
 
     /* /proc → procfs stat */
     if (path[0]=='/' && path[1]=='p' && path[2]=='r' && path[3]=='o' &&
@@ -392,27 +375,26 @@ vfs_stat_path(const char *path, k_stat_t *out)
         return 0;
     }
 
-    /* /run/ → run ramfs (MUST precede initrd) */
+    /* Synthetic directory stat for pseudo-fs mount points */
+    if (streq(path, "/dev") || streq(path, "/proc") ||
+        streq(path, "/tmp") || streq(path, "/run")) {
+        __builtin_memset(out, 0, sizeof(*out));
+        out->st_dev   = 1;
+        out->st_ino   = 1;
+        out->st_nlink = 2;
+        out->st_mode  = S_IFDIR | 0555;
+        return 0;
+    }
+
+    /* /tmp/ -> tmp ramfs stat */
+    if (path[0]=='/' && path[1]=='t' && path[2]=='m' && path[3]=='p' && path[4]=='/')
+        return ramfs_stat(&s_tmp_ramfs, path + 5, out);
+
+    /* /run/ -> run ramfs stat */
     if (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n' && path[4]=='/')
         return ramfs_stat(&s_run_ramfs, path + 5, out);
 
-    /* /etc/ → try etc ramfs first; fall through to initrd on ENOENT */
-    if (path[0]=='/' && path[1]=='e' && path[2]=='t' && path[3]=='c' && path[4]=='/') {
-        int r = ramfs_stat(&s_etc_ramfs, path + 5, out);
-        if (r == 0)
-            return 0;
-        /* ENOENT — fall through to initrd stat below */
-    }
-
-    /* /root/ → root ramfs */
-    if (path[0]=='/' && path[1]=='r' && path[2]=='o' && path[3]=='o' && path[4]=='t' && path[5]=='/')
-        return ramfs_stat(&s_root_ramfs, path + 6, out);
-
-    /* Initrd file lookup */
-    if (initrd_stat_entry(path, out) == 0)
-        return 0;
-
-    /* ext2 fallback */
+    /* ext2 primary */
     {
         uint32_t ino = 0;
         if (ext2_open(path, &ino) == 0) {
@@ -435,6 +417,10 @@ vfs_stat_path(const char *path, k_stat_t *out)
             return 0;
         }
     }
+
+    /* initrd fallback */
+    if (initrd_stat_entry(path, out) == 0)
+        return 0;
 
     return -2;
 }

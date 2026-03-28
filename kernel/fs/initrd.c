@@ -126,26 +126,6 @@ entry_size(const initrd_entry_t *e)
 
 
 
-
-
-
-void
-initrd_iter_etc(initrd_etc_cb_t cb, void *ud)
-{
-    uint32_t i;
-    for (i = 0; s_files[i].name; i++) {
-        const initrd_entry_t *e = &s_files[i];
-        /* Match paths starting with "/etc/" — skip "/etc" without trailing slash */
-        if (e->name[0] != '/' || e->name[1] != 'e' ||
-            e->name[2] != 't' || e->name[3] != 'c' || e->name[4] != '/')
-            continue;
-        cb(e->name + 5,  /* short name: skip "/etc/" prefix */
-           (const uint8_t *)e->start,
-           entry_size(e),
-           ud);
-    }
-}
-
 /* ── Regular file ops ──────────────────────────────────────────────────── */
 
 static int
@@ -226,6 +206,7 @@ static const dir_entry_t s_root_dir_entries[] = {
 };
 static const dir_entry_t s_root_entries[] = {
     { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { "lib", 4 }, { "root", 4 },
+    { "tmp", 4 }, { "run", 4 }, { "proc", 4 },
     { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
