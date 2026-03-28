@@ -260,8 +260,9 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Framebuffer access | ✅ | sys_fb_map (513) maps FB into userspace; fb_test GUI mockup with Terminus 10x20; native resolution |
 | Password asterisks | ✅ | login echoes * for password input; raw termios mode |
 | DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
-| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol parser; xHCI device type detection; hotplug PSC; installer crypt(); **untested** — q35 boot bug blocks testing (see constraints) |
-| Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested** — builds clean, blocked by q35 bug |
+| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **untested on hardware** |
+| Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested on hardware** |
+| SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS |
 
 ### Known deviations
 
@@ -333,16 +334,17 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 34 | **Writable root** — ext2-first VFS; embedded rootfs.img in ISO as multiboot2 module; RAM blkdev for live boot; Aegis GPT GUID family; NVMe-fail warning | ✅ Done |
 | 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install EFI GRUB | ✅ Done |
 | 35b | **Bare-metal polish** — UEFI EFI boot, ACPI power button, gfxmode=auto, GRUB background, password asterisks | ✅ Done |
-| 36 | **USB HID mouse** — boot protocol mouse via xHCI; /dev/mouse VFS; installer crypt() | 🔶 Untested |
+| 36 | **USB HID mouse** — boot protocol + PS/2 mouse; /dev/mouse VFS; installer crypt() | 🔶 Untested |
 | 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | 🔶 Untested |
-| 38 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
-| 39 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
-| 40 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
-| 41 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated | Not started |
-| 42 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
-| 43 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
-| 44 | Release | Not started |
-| 45 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
+| 38 | **SMP** — LAPIC+IOAPIC, ~30 spinlocks, SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown | ✅ Done |
+| 39 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
+| 40 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
+| 41 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
+| 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated | Not started |
+| 43 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
+| 44 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
+| 45 | Release | Not started |
+| 46 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 ---
 
@@ -571,7 +573,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 38 SMP complete (38a-38d). LAPIC+IOAPIC, spinlocks (~30), SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown. Boot oracle panics on DO box (#PF in sched_current after IOAPIC disables PIC on -machine pc). Root cause: QEMU -machine pc provides MADT I/O APIC entry, our ioapic_init disables PIC, breaking PIT routing. Fix: skip ioapic_init on -machine pc or check for IO APIC before disabling PIC. Phase 36 mouse + Phase 37 lumen also untested. Next session: fix boot oracle, test SMP with -smp 4 on q35.*
+*Last updated: 2026-03-28 — Phase 38 SMP complete + boot oracle PASSES on DO box. Fixed: GS.base zeroed by gdt_init GS reload (skip it), sched_tick before sched_start (s_sched_ready guard), LAPIC timer before ctx_switch (moved to task_idle). Phase 36 mouse + Phase 37 lumen untested on hardware. ISO at ~/aegis.iso ready for ThinkPad. Next: test on ThinkPad bare metal (SMP + mouse + lumen), then continue to Phase 39 (Glyph widget toolkit).*
 
 ---
 
