@@ -589,26 +589,26 @@ Five-agent audit/cleanup run after completing Phases 36-38. Results below.
 
 ### TODO — Arch-Agnostic Violations (3 critical, unguarded)
 
-- [ ] `kernel/fs/pty.c:129,187` — raw `sti; hlt; cli` inline asm. **Fix:** replace with `arch_wait_for_irq()` from arch.h
-- [ ] `kernel/drivers/usb_mouse.c:76,82` — raw `sti`/`cli`. **Fix:** replace with `arch_enable_irq()`/`arch_disable_irq()`
-- [ ] `kernel/sched/sched.h:56` — `movq %%gs:16` inline asm in agnostic header. **Fix:** introduce `arch_get_current_task()` abstraction in arch.h
+- [x] `kernel/fs/pty.c:129,187` — raw `sti; hlt; cli` → `arch_wait_for_irq()` ✅
+- [x] `kernel/drivers/usb_mouse.c:76,82` — raw `sti`/`cli` → `arch_enable_irq()`/`arch_disable_irq()` ✅
+- [x] `kernel/sched/sched.h:56` — `movq %%gs:16` → `percpu_current()` from smp.h ✅
 
 ### TODO — Syscall Security Gaps (from capability audit)
 
-- [ ] **CRITICAL: sys_fb_map (513)** — no capability check. Any process can map framebuffer. Needs `CAP_KIND_FB_ACCESS` or similar.
-- [ ] **CRITICAL: sys_clock_settime (227)** — no capability check. Any process can set wall clock. Needs `CAP_KIND_TIME_ADMIN` or reuse NET_ADMIN.
+- [x] **sys_fb_map (513)** — added `CAP_KIND_DISK_ADMIN` check ✅
+- [x] **sys_clock_settime (227)** — added `CAP_KIND_NET_ADMIN` check ✅
 - [ ] **CRITICAL: sys_setfg (360)** — no capability check. Any process can steal keyboard focus.
-- [ ] **CRITICAL: sys_accept** — missing `user_ptr_valid` for addr parameter before `copy_to_user`.
+- [x] **sys_accept** — added `user_ptr_valid` for addr parameter ✅
 - [ ] **CRITICAL: sys_execve grants ALL capabilities** — `DISK_ADMIN` + `AUTH` in baseline (known, flagged in Phase 35 constraints). Tighten to vigil exec_caps mechanism.
-- [ ] **MEDIUM: sys_mkdir/unlink/rename** — no `CAP_KIND_VFS_WRITE` check.
+- [x] **sys_mkdir/unlink/rename** — added `CAP_KIND_VFS_WRITE` check ✅
 - [ ] **MEDIUM: sys_kill** — any process can signal any other (except PID 1). Needs capability gate.
-- [ ] **MEDIUM: sys_getsockname/getpeername** — null addrlen causes write to address 0.
+- [x] **sys_getsockname/getpeername** — added null addrlen guard ✅
 - [ ] **MEDIUM: sys_setsockopt** — validates 4 bytes but reads 16 for SO_RCVTIMEO.
 - [ ] **MEDIUM: sys_blkdev_io** — static bounce buffer not reentrant (shared across concurrent callers).
 
 ### TODO — Lock Ordering Violations (CRITICAL for SMP)
 
-- [ ] **kva_lock → pmm_lock inversion.** `kva_alloc_pages` holds `kva_lock`, calls `pmm_alloc_page` which acquires `pmm_lock`. Spec says pmm_lock > kva_lock. Fix: acquire pmm_lock first, or restructure kva_alloc to release kva_lock around pmm calls.
+- [x] **kva_lock → pmm_lock inversion** — restructured kva_alloc_pages to reserve VA range under lock then allocate physical pages outside lock ✅
 - [ ] **ip_lock → arp_lock inversion.** `ip_send` holds `ip_lock`, calls `eth_send`/`arp_resolve` which acquire `arp_lock`. Spec says arp_lock > ip_lock. Fix: release ip_lock before calling eth_send.
 - [ ] **tcp_lock → sock_lock inversion.** `tcp_rx` holds `tcp_lock`, calls `sock_get`/`sock_wake` which acquire `sock_lock`. Spec says sock_lock > tcp_lock.
 - [ ] **udp_lock → sock_lock inversion.** Same pattern as tcp_rx.
