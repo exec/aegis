@@ -73,10 +73,11 @@ smp_start_aps(void)
     *(volatile uint64_t *)(uintptr_t)(TRAMPOLINE_PHYS + entry_off) =
         (uint64_t)(uintptr_t)ap_entry;
 
-    /* Enable interrupts so the PIT ticks advance during INIT-SIPI-SIPI
-     * delay loops. Safe: all subsystems are initialized, scheduler not
-     * yet started, and we are the only running CPU. */
-    arch_enable_irq();
+    /* Use RDTSC-based busy-wait delays for INIT-SIPI-SIPI timing.
+     * Do NOT enable interrupts here — ISR SWAPGS + iretq path crashes
+     * before the scheduler is running (no valid task frame on the boot
+     * stack). The LAPIC timer calibration needs PIT ticks but that
+     * happens later in task_idle after sched_start. */
 
     /* 3. For each AP: allocate stack, fill percpu, send INIT-SIPI-SIPI */
     for (uint32_t i = 0; i < g_smp_cpu_count; i++) {
@@ -113,10 +114,11 @@ smp_start_aps(void)
         /* Send INIT IPI */
         lapic_send_init(apic_id);
 
-        /* Wait ~20ms (2 PIT ticks at 100Hz) */
+        /* Wait ~20ms via RDTSC busy-loop.
+         * Assume ≥1 GHz TSC (true for all modern x86). 20ms ≈ 20M cycles. */
         {
-            uint64_t start = arch_get_ticks();
-            while (arch_get_ticks() < start + 2)
+            uint64_t start = arch_get_cycles();
+            while (arch_get_cycles() - start < 20000000ULL)
                 arch_pause();
         }
 
@@ -133,10 +135,11 @@ smp_start_aps(void)
         /* Send second SIPI */
         lapic_send_sipi(apic_id, 0x08);
 
-        /* Poll for AP online, up to ~100ms (10 PIT ticks) */
+        /* Poll for AP online, up to ~100ms (100M cycles at ≥1GHz) */
         {
-            uint64_t deadline = arch_get_ticks() + 10;
-            while (!g_ap_online[i] && arch_get_ticks() < deadline)
+            uint64_t start = arch_get_cycles();
+            while (!g_ap_online[i] &&
+                   (arch_get_cycles() - start) < 100000000ULL)
                 arch_pause();
         }
 
@@ -147,8 +150,6 @@ smp_start_aps(void)
                    i, apic_id);
         }
     }
-
-    arch_disable_irq();
 
     printk("[SMP] OK: %u CPUs online\n", g_cpu_count);
 }
