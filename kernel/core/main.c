@@ -16,7 +16,9 @@
 #include "../drivers/xhci.h"
 #include "../drivers/virtio_net.h"
 #include "../drivers/fb.h"
+#include "../drivers/ramdisk.h"
 #include "../net/ip.h"
+#include "../fs/blkdev.h"
 #include "random.h"
 #include <stdint.h>
 
@@ -67,6 +69,14 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_smep_init();       /* SMEP detect + enable — [SMEP] OK/WARN         */
     arch_sse_init();        /* enable SSE for user mode (CR0/CR4 bits)       */
     random_init();          /* ChaCha20 CSPRNG — [RNG] OK                    */
+
+    /* Map GRUB module (rootfs image) into KVA as RAM blkdev */
+    {
+        uint64_t mod_phys = 0, mod_size = 0;
+        arch_get_module(&mod_phys, &mod_size);
+        ramdisk_init(mod_phys, mod_size);
+    }
+
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
@@ -74,7 +84,12 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
     gpt_scan("nvme0");      /* GPT partitions — [GPT] OK or silent (no NVMe) */
-    ext2_mount("nvme0p1");  /* mount partition 1 — [EXT2] OK or silent (-1)  */
+    /* Mount ext2: prefer NVMe (installed system), fall back to ramdisk (live) */
+    if (ext2_mount("nvme0p1") != 0) {
+        if (blkdev_get("nvme0"))
+            printk("[VFS] WARN: NVMe present but no Aegis root partition — falling back to ramdisk (VOLATILE)\n");
+        ext2_mount("ramdisk0");
+    }
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */

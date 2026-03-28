@@ -108,6 +108,11 @@ typedef struct {
  * was found, 0 otherwise. */
 int arch_get_fb_info(arch_fb_info_t *out);
 
+/* arch_get_module — return physical address and size of the first multiboot2
+ * module (rootfs image loaded by GRUB). Returns 1 if a module was found,
+ * 0 if no module present (diskless boot). */
+int arch_get_module(uint64_t *phys_out, uint64_t *size_out);
+
 /* Highest canonical user-space virtual address. Used by syscall handlers
  * to validate user pointers. Architecture-dependent: x86-64 uses 47-bit
  * canonical addresses; ARM64 48-bit VA uses 0x0000FFFFFFFFFFFF. */

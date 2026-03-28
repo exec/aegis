@@ -38,6 +38,7 @@ typedef struct {
 #define MB2_TAG_ACPI_OLD 14   /* ACPI 1.0 RSDP (32-bit, RSDT) */
 #define MB2_TAG_ACPI_NEW 15   /* ACPI 2.0+ RSDP (64-bit, XSDT) */
 #define MB2_TAG_FB       8
+#define MB2_TAG_MODULE   3
 #define MB2_MEM_AVAIL    1
 #define MAX_REGIONS      32
 
@@ -63,15 +64,18 @@ static uint32_t           region_count = 0;
 static uint64_t s_rsdp_v1_phys = 0;   /* ACPI 1.0 RSDP (type-14 tag) */
 static uint64_t s_rsdp_v2_phys = 0;   /* ACPI 2.0+ RSDP (type-15 tag) */
 static arch_fb_info_t s_fb_info;       /* zeroed at startup; addr==0 means absent */
+static uint64_t s_module_phys = 0;  /* physical start of multiboot2 module */
+static uint64_t s_module_size = 0;  /* byte size of module */
 
 /* Two static entries: first 1MB + multiboot2 info region.
  * Slot [1] is filled in arch_mm_init once mb_info address is known.
  * GRUB may place the multiboot2 info above 1MB (in allocatable RAM), so
  * we must reserve those pages before the PMM marks them free.
  * If mb_info is already below 1MB the slot [1] has len=0 and is a no-op. */
-static aegis_mem_region_t x86_reserved[2] = {
+static aegis_mem_region_t x86_reserved[3] = {
     { 0x0UL, 0x100000UL },  /* first 1MB: BIOS data, VGA hole, ISA ROMs */
     { 0x0UL, 0x0UL },       /* multiboot2 info — filled by arch_mm_init */
+    { 0x0UL, 0x0UL },       /* multiboot2 module — filled by arch_mm_init */
 };
 
 void arch_mm_init(void *mb_info)
@@ -123,6 +127,20 @@ void arch_mm_init(void *mb_info)
         if (tag->type == MB2_TAG_ACPI_OLD && s_rsdp_v1_phys == 0) {
             /* SAFETY: same identity-map guarantee as ACPI_NEW above. */
             s_rsdp_v1_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_tag_t));
+        }
+
+        if (tag->type == MB2_TAG_MODULE && s_module_phys == 0) {
+            /* Module tag: type(4) + size(4) + mod_start(4) + mod_end(4) + string */
+            const uint32_t *mod = (const uint32_t *)p;
+            uint64_t start = (uint64_t)mod[2];
+            uint64_t end_addr = (uint64_t)mod[3];
+            if (end_addr > start) {
+                s_module_phys = start;
+                s_module_size = end_addr - start;
+                /* Reserve module pages so PMM never allocates over them */
+                x86_reserved[2].base = start & ~0xFFFUL;
+                x86_reserved[2].len  = ((end_addr + 0xFFF) & ~0xFFFUL) - (start & ~0xFFFUL);
+            }
         }
 
         if (tag->type == MB2_TAG_FB) {
@@ -181,5 +199,15 @@ arch_get_fb_info(arch_fb_info_t *out)
 {
     if (!out || s_fb_info.addr == 0) return 0;
     *out = s_fb_info;
+    return 1;
+}
+
+int
+arch_get_module(uint64_t *phys_out, uint64_t *size_out)
+{
+    if (s_module_phys == 0 || s_module_size == 0)
+        return 0;
+    *phys_out = s_module_phys;
+    *size_out = s_module_size;
     return 1;
 }

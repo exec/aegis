@@ -78,6 +78,19 @@ typedef struct {
 static gpt_part_priv_t s_parts[GPT_MAX_PARTS];
 static blkdev_t        s_devs[GPT_MAX_PARTS];
 
+/* Aegis partition type GUID prefix (first 8 bytes).
+ * Full GUID: A3618F24-0C76-4B3D-{role}-000000000000
+ * Only partitions with this prefix are registered as blkdevs.
+ * See CLAUDE.md "Aegis GPT Partition Type GUIDs" for the full scheme.
+ *
+ * IMPORTANT: GPT stores GUIDs in mixed-endian format per UEFI spec.
+ * UUID A3618F24-0C76-4B3D is stored on disk as:
+ *   24 8F 61 A3  76 0C  3D 4B
+ * (first 3 groups little-endian, last 2 big-endian) */
+static const uint8_t k_aegis_guid_prefix[8] = {
+    0x24, 0x8F, 0x61, 0xA3, 0x76, 0x0C, 0x3D, 0x4B
+};
+
 static int gpt_part_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf)
 {
     gpt_part_priv_t *p = (gpt_part_priv_t *)dev->priv;
@@ -207,6 +220,13 @@ int gpt_scan(const char *devname)
         if (!used) continue;
         /* Strict less-than: single-sector partitions unsupported (simplification) */
         if (e->start_lba >= e->end_lba) continue;
+
+        /* Only register Aegis-typed partitions (8-byte prefix match) */
+        int aegis = 1;
+        for (int j = 0; j < 8; j++) {
+            if (e->type_guid[j] != k_aegis_guid_prefix[j]) { aegis = 0; break; }
+        }
+        if (!aegis) continue;
 
         int idx = part_num - 1;
 
