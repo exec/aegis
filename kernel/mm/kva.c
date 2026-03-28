@@ -50,6 +50,20 @@ kva_alloc_pages(uint64_t n)
     return (void *)base;
 }
 
+void *
+kva_map_phys_pages(uint64_t phys_base, uint32_t num_pages)
+{
+    if (num_pages == 0) return NULL;
+    uint64_t base = s_kva_next;
+    uint32_t i;
+    for (i = 0; i < num_pages; i++) {
+        vmm_map_page(s_kva_next, phys_base + (uint64_t)i * 4096UL,
+                     VMM_FLAG_WRITABLE);
+        s_kva_next += 4096UL;
+    }
+    return (void *)base;
+}
+
 uint64_t
 kva_page_phys(void *va)
 {

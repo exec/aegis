@@ -14,6 +14,12 @@ void kva_init(void);
  * USER must be absent so the MMU denies ring-3 access to kernel objects. */
 void *kva_alloc_pages(uint64_t n);
 
+/* kva_map_phys_pages — map num_pages of existing physical memory starting at
+ * phys_base into contiguous kernel VA. Does NOT allocate physical pages from
+ * PMM — the pages must already exist (e.g. GRUB-loaded module).
+ * phys_base must be 4KB-aligned. Returns the virtual base address. */
+void *kva_map_phys_pages(uint64_t phys_base, uint32_t num_pages);
+
 /* kva_page_phys — return the physical address of the page mapped at va.
  * va must be a VA previously returned by kva_alloc_pages (or offset within
  * such a range). Panics if any page-table level is absent. */
