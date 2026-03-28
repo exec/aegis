@@ -202,6 +202,45 @@ TESTS = [
     ("net: DHCP configured",
      None,
      lambda s: s.contains("[NET] configured:")),
+
+    # --- Filesystem writability (Phase 34) ---
+    ("fs: echo to /tmp (ramfs)",
+     "echo tmptest > /tmp/foo && cat /tmp/foo",
+     lambda s: s.contains("tmptest")),
+
+    ("fs: touch + ls on ext2",
+     "touch /home/testfile && ls /home/testfile",
+     lambda s: s.contains("testfile")),
+
+    ("fs: unlink file",
+     "rm /home/testfile && ls /home/testfile",
+     lambda s: s.contains("No such file")),
+
+    ("fs: mkdir + ls",
+     "mkdir /home/newdir && ls /home",
+     lambda s: s.contains("newdir")),
+
+    ("fs: rename (mv)",
+     "echo mvtest > /home/orig && mv /home/orig /home/moved && cat /home/moved",
+     lambda s: s.contains("mvtest")),
+
+    # --- VFS structure ---
+    ("vfs: ls / shows root dirs",
+     "ls /",
+     lambda s: _any_of(s, "bin", "etc", "lib")),
+
+    ("vfs: pwd shows /root",
+     "pwd",
+     lambda s: s.contains("/root")),
+
+    ("vfs: cd + pwd",
+     "cd /bin && pwd",
+     lambda s: s.contains("/bin")),
+
+    # --- Device files ---
+    ("dev: /dev/urandom readable",
+     "cat /dev/urandom | wc -c",
+     lambda s: _any_of(s, "1", "2", "3", "4", "5", "6", "7", "8", "9")),
 ]
 
 
