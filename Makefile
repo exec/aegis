@@ -115,6 +115,7 @@ DRIVER_SRCS = \
     kernel/drivers/nvme.c \
     kernel/drivers/xhci.c \
     kernel/drivers/usb_hid.c \
+    kernel/drivers/usb_mouse.c \
     kernel/drivers/virtio_net.c \
     kernel/drivers/fb.c \
     kernel/drivers/ramdisk.c
