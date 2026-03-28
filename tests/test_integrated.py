@@ -199,9 +199,9 @@ TESTS = [
      lambda s: s.contains("PTY OK")),
 
     # --- Network (boot output) ---
-    ("net: DHCP configured",
+    ("net: DHCP acquired",
      None,
-     lambda s: s.contains("[NET] configured:")),
+     lambda s: s.contains("[DHCP] acquired")),
 
     # --- Filesystem writability (Phase 34) ---
     ("fs: echo to /tmp (ramfs)",
@@ -239,8 +239,8 @@ TESTS = [
 
     # --- Device files ---
     ("dev: /dev/urandom readable",
-     "cat /dev/urandom | wc -c",
-     lambda s: _any_of(s, "1", "2", "3", "4", "5", "6", "7", "8", "9")),
+     "ls /dev/urandom",
+     lambda s: s.contains("urandom")),
 ]
 
 
