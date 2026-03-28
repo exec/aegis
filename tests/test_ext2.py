@@ -2,8 +2,8 @@
 """Phase 21 ext2 persistence test.
 
 Boots the shell ISO twice with the same NVMe disk image:
-  Boot 1 — write /tmp/test.txt via 'echo hello > /tmp/test.txt', verify read-back.
-  Boot 2 — read /tmp/test.txt, verify 'hello' survived the reboot.
+  Boot 1 — write /home/test.txt via 'echo hello > /home/test.txt', verify read-back.
+  Boot 2 — read /home/test.txt, verify 'hello' survived the reboot.
 
 Uses the QEMU monitor unix socket to inject PS/2 keyboard events (same
 pattern as test_pipe.py).  NVMe requires -machine q35.
@@ -262,11 +262,11 @@ def test_ext2_persistence():
                     break
                 dst.write(block)
 
-        # ── Boot 1: write /tmp/test.txt ────────────────────────────────
-        print("  boot 1: writing /tmp/test.txt ...")
+        # ── Boot 1: write /home/test.txt ────────────────────────────────
+        print("  boot 1: writing /home/test.txt ...")
         out1 = run_shell_session(disk_path, [
-            "echo hello > /tmp/test.txt",
-            "cat /tmp/test.txt",
+            "echo hello > /home/test.txt",
+            "cat /home/test.txt",
         ])
 
         assert "hello" in out1, (
@@ -277,13 +277,13 @@ def test_ext2_persistence():
         print("  [boot1 output end]")
 
         # Check the disk image directly before boot 2
-        on_disk = _ext2_find_file(disk_path, "/tmp/test.txt")
-        print("  disk-check after boot 1: /tmp/test.txt on disk = %s" % on_disk)
+        on_disk = _ext2_find_file(disk_path, "/home/test.txt")
+        print("  disk-check after boot 1: /home/test.txt on disk = %s" % on_disk)
 
-        # ── Boot 2: verify /tmp/test.txt persists ─────────────────────
-        print("  boot 2: reading /tmp/test.txt ...")
+        # ── Boot 2: verify /home/test.txt persists ─────────────────────
+        print("  boot 2: reading /home/test.txt ...")
         out2 = run_shell_session(disk_path, [
-            "cat /tmp/test.txt",
+            "cat /home/test.txt",
         ])
 
         assert "hello" in out2, (
