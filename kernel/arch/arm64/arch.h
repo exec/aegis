@@ -133,6 +133,17 @@ static inline void arch_clac(void) { (void)0; }
  * Arch-portable helpers
  * ------------------------------------------------------------------------- */
 
+/* arch_get_cycles — read the virtual count register (CNTVCT_EL0).
+ * Returns monotonically increasing counter. Used by the CSPRNG
+ * for entropy and by interrupt timing. */
+static inline uint64_t
+arch_get_cycles(void)
+{
+    uint64_t val;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(val));
+    return val;
+}
+
 static inline void arch_wmb(void) { __asm__ volatile("dmb st" ::: "memory"); }
 static inline void arch_enable_irq(void)  { __asm__ volatile("msr daifclr, #2" ::: "memory"); }
 static inline void arch_disable_irq(void) { __asm__ volatile("msr daifset, #2" ::: "memory"); }

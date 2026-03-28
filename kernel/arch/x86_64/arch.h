@@ -117,6 +117,14 @@ int arch_get_module(uint64_t *phys_out, uint64_t *size_out);
  * module (ESP image for installer). Returns 1 if found, 0 if not present. */
 int arch_get_module2(uint64_t *phys_out, uint64_t *size_out);
 
+/* -------------------------------------------------------------------------
+ * x86-64 GDT segment selectors
+ * ------------------------------------------------------------------------- */
+#define ARCH_KERNEL_CS  0x08   /* GDT index 1, RPL=0 */
+#define ARCH_KERNEL_DS  0x10   /* GDT index 2, RPL=0 */
+#define ARCH_USER_DS    0x1B   /* GDT index 3, RPL=3 */
+#define ARCH_USER_CS    0x23   /* GDT index 4, RPL=3 */
+
 /* Highest canonical user-space virtual address. Used by syscall handlers
  * to validate user pointers. Architecture-dependent: x86-64 uses 47-bit
  * canonical addresses; ARM64 48-bit VA uses 0x0000FFFFFFFFFFFF. */
@@ -351,6 +359,17 @@ static inline void
 arch_irq_restore(unsigned long flags)
 {
     __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
+/* arch_get_cycles — read the CPU timestamp counter (RDTSC).
+ * Returns monotonically increasing cycle count. Used by the CSPRNG
+ * for entropy and by interrupt timing. */
+static inline uint64_t
+arch_get_cycles(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
 }
 
 /* Hint to the CPU that we are in a spin loop. */

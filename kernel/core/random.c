@@ -27,22 +27,6 @@
 #include "spinlock.h"
 #include <stdint.h>
 
-/* ── Architecture-specific cycle counter ─────────────────────────────── */
-
-static inline uint64_t
-arch_get_cycles(void)
-{
-#ifdef __aarch64__
-    uint64_t val;
-    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(val));
-    return val;
-#else
-    uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-#endif
-}
-
 /* ── ChaCha20 quarter-round and block function ───────────────────────── */
 
 #define ROTL32(v, n) (((v) << (n)) | ((v) >> (32 - (n))))
