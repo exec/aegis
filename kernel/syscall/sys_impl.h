@@ -217,6 +217,7 @@ uint64_t sys_blkdev_list(uint64_t arg1, uint64_t arg2);
 uint64_t sys_blkdev_io(uint64_t arg1, uint64_t arg2, uint64_t arg3,
                         uint64_t arg4, uint64_t arg5);
 uint64_t sys_gpt_rescan(uint64_t arg1);
+uint64_t sys_fb_map(uint64_t arg1);
 
 /* ── futex.c ───────────────────────────────────────────────────────────── */
 uint64_t sys_futex(uint64_t a1, uint64_t a2, uint64_t a3,

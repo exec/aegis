@@ -31,4 +31,10 @@ void fb_check_amd(void);
  * Checked by printk() before calling fb_write_string(). */
 extern int fb_available;
 
+/* fb_get_phys_info — return framebuffer physical address, width, height, pitch.
+ * Returns 1 on success, 0 if no framebuffer available.
+ * Used by sys_fb_map to map FB into userspace. */
+int fb_get_phys_info(uint64_t *phys_out, uint32_t *width_out,
+                     uint32_t *height_out, uint32_t *pitch_out);
+
 #endif /* FB_H */

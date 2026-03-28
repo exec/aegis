@@ -176,6 +176,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 510: return sys_blkdev_list(arg1, arg2);
     case 511: return sys_blkdev_io(arg1, arg2, arg3, arg4, arg5);
     case 512: return sys_gpt_rescan(arg1);
+    case 513: return sys_fb_map(arg1);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

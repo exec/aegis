@@ -355,6 +355,25 @@ _fb_scroll(void)
     s_row = s_rows - 1u;
 }
 
+/* Physical address and dimensions — saved for sys_fb_map */
+static uint64_t s_fb_phys;
+static uint32_t s_fb_width;
+static uint32_t s_fb_height;
+static uint32_t s_fb_pitch;
+
+int
+fb_get_phys_info(uint64_t *phys_out, uint32_t *width_out,
+                 uint32_t *height_out, uint32_t *pitch_out)
+{
+    if (!fb_available || s_fb_phys == 0)
+        return 0;
+    *phys_out  = s_fb_phys;
+    *width_out = s_fb_width;
+    *height_out = s_fb_height;
+    *pitch_out = s_fb_pitch;
+    return 1;
+}
+
 void
 fb_init(void)
 {
@@ -390,6 +409,12 @@ fb_init(void)
     s_pitch_px = info.pitch / 4u;
     s_cols     = info.width  / 8u;
     s_rows     = info.height / 16u;
+
+    /* Save physical info for sys_fb_map */
+    s_fb_phys   = info.addr;
+    s_fb_width  = info.width;
+    s_fb_height = info.height;
+    s_fb_pitch  = info.pitch;
     s_col      = 0;
     s_row      = 0;
 

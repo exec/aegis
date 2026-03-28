@@ -4,6 +4,8 @@
 #include "printk.h"
 #include "blkdev.h"
 #include "gpt.h"
+#include "fb.h"
+#include "vmm.h"
 #include <stdint.h>
 
 /* ── blkdev_info_t — sent to userspace by sys_blkdev_list ───────────── */
@@ -158,4 +160,53 @@ sys_gpt_rescan(uint64_t arg1)
 
     int n = gpt_rescan(name);
     return (uint64_t)(int64_t)n;
+}
+
+/*
+ * sys_fb_map — syscall 513
+ * Map the linear framebuffer into the calling process's address space.
+ * arg1 = user pointer to fb_info struct to fill:
+ *   struct { uint64_t addr; uint32_t width, height, pitch, bpp; }
+ * Returns the user virtual address of the mapped framebuffer, or negative errno.
+ */
+uint64_t
+sys_fb_map(uint64_t arg1)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+
+    uint64_t fb_phys;
+    uint32_t width, height, pitch;
+    if (!fb_get_phys_info(&fb_phys, &width, &height, &pitch))
+        return (uint64_t)-19;  /* ENODEV — no framebuffer */
+
+    uint32_t fb_bytes = pitch * height;
+    uint32_t fb_pages = (fb_bytes + 0xFFF) / 0x1000;
+
+    /* Pick a user VA for the mapping.
+     * Use the process mmap_base bump allocator (same as sys_mmap). */
+    uint64_t base_va = proc->mmap_base;
+    proc->mmap_base += (uint64_t)fb_pages * 0x1000;
+
+    /* Map each FB physical page into the user's address space */
+    uint32_t i;
+    for (i = 0; i < fb_pages; i++) {
+        vmm_map_user_page(proc->pml4_phys,
+                          base_va + (uint64_t)i * 0x1000,
+                          fb_phys + (uint64_t)i * 0x1000,
+                          VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE |
+                          VMM_FLAG_USER | VMM_FLAG_WC);
+    }
+
+    /* Fill user info struct: { uint64_t addr; uint32_t w, h, pitch, bpp } */
+    if (user_ptr_valid(arg1, 24)) {
+        uint64_t va = base_va;
+        uint32_t bpp = 32;
+        copy_to_user((void *)(uintptr_t)arg1, &va, 8);
+        copy_to_user((void *)(uintptr_t)(arg1 + 8), &width, 4);
+        copy_to_user((void *)(uintptr_t)(arg1 + 12), &height, 4);
+        copy_to_user((void *)(uintptr_t)(arg1 + 16), &pitch, 4);
+        copy_to_user((void *)(uintptr_t)(arg1 + 20), &bpp, 4);
+    }
+
+    return base_va;
 }
