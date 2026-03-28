@@ -3,6 +3,7 @@
 #include "sched.h"
 #include "syscall_util.h"
 #include "../mm/uaccess.h"
+#include "spinlock.h"
 
 #define FUTEX_MAX_WAIT 64
 
@@ -14,8 +15,11 @@ typedef struct {
 
 static futex_waiter_t s_pool[FUTEX_MAX_WAIT];
 
+static spinlock_t futex_lock = SPINLOCK_INIT;
+
 int futex_wake_addr(uint64_t addr, uint32_t count)
 {
+    irqflags_t fl = spin_lock_irqsave(&futex_lock);
     int woken = 0;
     uint32_t i;
     for (i = 0; i < FUTEX_MAX_WAIT && (uint32_t)woken < count; i++) {
@@ -26,6 +30,7 @@ int futex_wake_addr(uint64_t addr, uint32_t count)
             woken++;
         }
     }
+    spin_unlock_irqrestore(&futex_lock, fl);
     return woken;
 }
 
@@ -45,6 +50,7 @@ uint64_t sys_futex(uint64_t addr, uint64_t op, uint64_t val,
         if (uval != (uint32_t)val)
             return (uint64_t)-(int64_t)11; /* EAGAIN */
         /* Find free pool slot */
+        irqflags_t fl = spin_lock_irqsave(&futex_lock);
         uint32_t i;
         futex_waiter_t *w = (futex_waiter_t *)0;
         for (i = 0; i < FUTEX_MAX_WAIT; i++) {
@@ -53,11 +59,14 @@ uint64_t sys_futex(uint64_t addr, uint64_t op, uint64_t val,
                 break;
             }
         }
-        if (!w)
+        if (!w) {
+            spin_unlock_irqrestore(&futex_lock, fl);
             return (uint64_t)-(int64_t)12; /* ENOMEM */
+        }
         w->in_use = 1;
         w->task = sched_current();
         w->addr = addr;
+        spin_unlock_irqrestore(&futex_lock, fl);
         sched_block();
         /* Woken — slot freed by futex_wake_addr */
         return 0;

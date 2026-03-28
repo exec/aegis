@@ -1,6 +1,7 @@
 #include "pmm.h"
 #include "arch.h"     /* aegis_mem_region_t, arch_mm_region_count/get_regions */
 #include "printk.h"
+#include "spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 /* Note: -nostdinc blocks string.h even from GCC freestanding headers.
@@ -46,6 +47,8 @@ static char *append_str(char *dst, const char *src)
 static uint8_t pmm_bitmap[PMM_MAX_PAGES / 8];
 
 static uint64_t s_total_usable_bytes;
+
+static spinlock_t pmm_lock = SPINLOCK_INIT;
 
 /* _kernel_end is exported by the linker script after .bss.
  * The bitmap array itself is in .bss, so _kernel_end is after it. */
@@ -138,6 +141,7 @@ void pmm_init(void)
 
 uint64_t pmm_alloc_page(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&pmm_lock);
     /* Linear scan: find first byte that is not 0xFF, then find the
      * first clear bit in that byte. O(n) is acceptable for Phase 2. */
     for (uint64_t i = 0; i < PMM_MAX_PAGES / 8; i++) {
@@ -146,10 +150,13 @@ uint64_t pmm_alloc_page(void)
         for (int bit = 0; bit < 8; bit++) {
             if (!(pmm_bitmap[i] & (1U << bit))) {
                 pmm_bitmap[i] |= (uint8_t)(1U << bit);
-                return (i * 8 + (uint64_t)bit) * PAGE_SIZE;
+                uint64_t result = (i * 8 + (uint64_t)bit) * PAGE_SIZE;
+                spin_unlock_irqrestore(&pmm_lock, fl);
+                return result;
             }
         }
     }
+    spin_unlock_irqrestore(&pmm_lock, fl);
     printk("[PMM] WARN: out of physical memory\n");
     return 0;   /* OOM — 0 is always reserved, unambiguous sentinel */
 }
@@ -173,15 +180,18 @@ void pmm_free_page(uint64_t addr)
          * These pages were never allocated by PMM and must not be freed. */
         return;
     }
+    irqflags_t fl = spin_lock_irqsave(&pmm_lock);
     uint8_t  bit = (uint8_t)(1U << (idx % 8));
     if (!(pmm_bitmap[idx / 8] & bit)) {
         /* Page not allocated — could be MMIO mapped into user space (e.g.
          * framebuffer), or an actual double-free bug. Silently skip rather
          * than panicking, since MMIO pages are legitimately freed during
          * vmm_free_user_pml4 after process exit. */
+        spin_unlock_irqrestore(&pmm_lock, fl);
         return;
     }
     pmm_bitmap[idx / 8] &= (uint8_t)~bit;
+    spin_unlock_irqrestore(&pmm_lock, fl);
 }
 
 uint64_t

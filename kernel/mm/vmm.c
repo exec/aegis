@@ -3,6 +3,7 @@
 #include "arch_vmm.h" /* arch_pte_from_flags, ARCH_PTE_ADDR */
 #include "pmm.h"
 #include "printk.h"
+#include "spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -32,6 +33,8 @@ static volatile uint64_t *s_window_pte;     /* → s_window_pt[0], set at init  
                                              * write must reach memory before   *
                                              * the __asm__ volatile invlpg.     */
 static volatile uint64_t *s_window_pte2;    /* → s_window_pt[1], second window slot */
+
+static spinlock_t vmm_window_lock = SPINLOCK_INIT;
 
 /*
  * vmm_window_map — map an arbitrary physical page into the window slot.
@@ -238,6 +241,8 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
         for (;;) {}
     }
 
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
@@ -250,11 +255,14 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
     uint64_t *pt = vmm_window_map(pt_phys);
     if (pt[pt_idx] & VMM_FLAG_PRESENT) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_map_page double-map\n");
         for (;;) {}
     }
     pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
+
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
 void
@@ -264,6 +272,8 @@ vmm_unmap_page(uint64_t virt)
         printk("[VMM] FAIL: vmm_unmap_page virt not aligned\n");
         for (;;) {}
     }
+
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
 
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
@@ -280,6 +290,7 @@ vmm_unmap_page(uint64_t virt)
     uint64_t  pml4e = pml4[pml4_idx];
     if (!(pml4e & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pml4)\n");
         for (;;) {}
     }
@@ -288,6 +299,7 @@ vmm_unmap_page(uint64_t virt)
     uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pdpt)\n");
         for (;;) {}
     }
@@ -296,11 +308,13 @@ vmm_unmap_page(uint64_t virt)
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pd)\n");
         for (;;) {}
     }
     if (pde & (1UL << 7)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page called on huge-page-backed address\n");
         for (;;) {}
     }
@@ -309,17 +323,22 @@ vmm_unmap_page(uint64_t virt)
     uint64_t  pte = pt[pt_idx];
     if (!(pte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pt)\n");
         for (;;) {}
     }
     pt[pt_idx] = 0;
     vmm_window_unmap();          /* single unmap at the end of the walk */
     arch_vmm_invlpg(virt);
+
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
 uint64_t
 vmm_phys_of(uint64_t virt)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
@@ -331,6 +350,7 @@ vmm_phys_of(uint64_t virt)
     uint64_t  pml4e = pml4[pml4_idx];
     if (!(pml4e & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pml4)\n");
         for (;;) {}
     }
@@ -339,6 +359,7 @@ vmm_phys_of(uint64_t virt)
     uint64_t  pdpte = pdpt[pdpt_idx];
     if (!(pdpte & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pdpt)\n");
         for (;;) {}
     }
@@ -347,11 +368,13 @@ vmm_phys_of(uint64_t virt)
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pd)\n");
         for (;;) {}
     }
     if (pde & (1UL << 7)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of called on huge-page-backed address\n");
         for (;;) {}
     }
@@ -361,15 +384,19 @@ vmm_phys_of(uint64_t virt)
     vmm_window_unmap();
 
     if (!(pte & VMM_FLAG_PRESENT)) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pt)\n");
         for (;;) {}
     }
-    return ARCH_PTE_ADDR(pte);
+    uint64_t result = ARCH_PTE_ADDR(pte);
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
+    return result;
 }
 
 void
 vmm_teardown_identity(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     /* Clear pml4[0]: removes the entire [0..512GB) low identity range.
      * pdpt_lo and pd_lo pages remain allocated but are now unreachable;
      * they will be reclaimed when a kernel page-table free path exists. */
@@ -379,12 +406,15 @@ vmm_teardown_identity(void)
     /* Full CR3 reload for a complete TLB flush. invlpg of each individual
      * huge page would work but CR3 reload is simpler and more complete. */
     arch_vmm_load_pml4(s_pml4_phys);
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
     printk("[VMM] OK: identity map removed\n");
 }
 
 uint64_t
 vmm_create_user_pml4(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
     uint64_t new_pml4_phys = alloc_table();   /* zeroed by alloc_table */
 
     /* Copy kernel high entries [256..511] from master PML4.
@@ -406,22 +436,15 @@ vmm_create_user_pml4(void)
         newpml[256 + i] = tmp[i];
     vmm_window_unmap();
 
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
     return new_pml4_phys;
 }
 
-void
-vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
-                  uint64_t phys, uint64_t flags)
+/* vmm_map_user_page_nolock — internal helper, caller must hold vmm_window_lock. */
+static void
+vmm_map_user_page_nolock(uint64_t pml4_phys, uint64_t virt,
+                         uint64_t phys, uint64_t flags)
 {
-    if (virt & ~VMM_PAGE_MASK) {
-        printk("[VMM] FAIL: vmm_map_user_page virt not aligned\n");
-        for (;;) {}
-    }
-    if (phys & ~VMM_PAGE_MASK) {
-        printk("[VMM] FAIL: vmm_map_user_page phys not aligned\n");
-        for (;;) {}
-    }
-
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
@@ -439,6 +462,24 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     }
     pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
+}
+
+void
+vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
+                  uint64_t phys, uint64_t flags)
+{
+    if (virt & ~VMM_PAGE_MASK) {
+        printk("[VMM] FAIL: vmm_map_user_page virt not aligned\n");
+        for (;;) {}
+    }
+    if (phys & ~VMM_PAGE_MASK) {
+        printk("[VMM] FAIL: vmm_map_user_page phys not aligned\n");
+        for (;;) {}
+    }
+
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+    vmm_map_user_page_nolock(pml4_phys, virt, phys, flags);
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
 void
@@ -463,6 +504,7 @@ vmm_get_master_pml4(void)
 void
 vmm_free_user_pml4(uint64_t pml4_phys)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     int i, j, k, l;
     for (i = 0; i < 256; i++) {
         uint64_t pml4e = ((uint64_t *)vmm_window_map(pml4_phys))[i];
@@ -498,20 +540,24 @@ vmm_free_user_pml4(uint64_t pml4_phys)
         pmm_free_page(pdpt_phys);
     }
     pmm_free_page(pml4_phys);
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
 void
 vmm_zero_page(uint64_t phys)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     uint8_t *p = (uint8_t *)vmm_window_map(phys);
     int i;
     for (i = 0; i < 4096; i++)
         p[i] = 0;
     vmm_window_unmap();
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
-uint64_t
-vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
+/* vmm_phys_of_user_nolock — internal helper, caller must hold vmm_window_lock. */
+static uint64_t
+vmm_phys_of_user_nolock(uint64_t pml4_phys, uint64_t virt)
 {
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
@@ -543,9 +589,20 @@ vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
     return (pte & VMM_FLAG_PRESENT) ? ARCH_PTE_ADDR(pte) : 0;
 }
 
+uint64_t
+vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
+{
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+    uint64_t result = vmm_phys_of_user_nolock(pml4_phys, virt);
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
+    return result;
+}
+
 void
 vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
@@ -554,16 +611,16 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
     /* Walk-overwrite pattern. Silent no-op if any level is absent. */
     uint64_t *pml4  = vmm_window_map(pml4_phys);
     uint64_t  pml4e = pml4[pml4_idx];
-    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return; }
+    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return; }
 
     uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
     uint64_t  pdpte = pdpt[pdpt_idx];
-    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return; }
+    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return; }
 
     uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
-        vmm_window_unmap(); return;
+        vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return;
     }
 
     uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
@@ -571,11 +628,15 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
         pt[pt_idx] = 0;
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
+
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
 int
 vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
     uint64_t pml4_idx = (virt >> 39) & 0x1FF;
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx   = (virt >> 21) & 0x1FF;
@@ -584,16 +645,16 @@ vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
     /* Walk-overwrite pattern. Return -1 if any level is absent. */
     uint64_t *pml4  = vmm_window_map(pml4_phys);
     uint64_t  pml4e = pml4[pml4_idx];
-    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return -1; }
+    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return -1; }
 
     uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
     uint64_t  pdpte = pdpt[pdpt_idx];
-    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); return -1; }
+    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return -1; }
 
     uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
     uint64_t  pde = pd[pd_idx];
     if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
-        vmm_window_unmap(); return -1;
+        vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return -1;
     }
 
     uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
@@ -602,10 +663,12 @@ vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
     /* If page was never mapped (no physical address), skip. */
     if (!(old & VMM_FLAG_PRESENT) && flags == 0) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         return 0;  /* PROT_NONE on unmapped page is a no-op */
     }
     if (!(old & VMM_FLAG_PRESENT)) {
         vmm_window_unmap();
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
         return -1;  /* can't set real prot on unmapped page */
     }
 
@@ -620,6 +683,7 @@ vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
     }
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
     return 0;
 }
 
@@ -632,6 +696,7 @@ vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
 int
 vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     uint64_t pml4i, pdpti, pdi, pti;
     for (pml4i = 0; pml4i < 256; pml4i++) {
         uint64_t *pml4 = vmm_window_map(src_pml4);
@@ -667,7 +732,10 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
 
                     /* Allocate destination frame */
                     uint64_t dst_phys = pmm_alloc_page();
-                    if (!dst_phys) return -1;
+                    if (!dst_phys) {
+                        spin_unlock_irqrestore(&vmm_window_lock, fl);
+                        return -1;
+                    }
 
                     /* Copy via two window slots: slot 1 = src, slot 2 = dst */
                     void *src_va = vmm_window_map(src_phys);
@@ -680,11 +748,12 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
                     uint64_t va = (pml4i << 39) | (pdpti << 30) |
                                   (pdi   << 21) | (pti   << 12);
 
-                    vmm_map_user_page(dst_pml4, va, dst_phys, flags);
+                    vmm_map_user_page_nolock(dst_pml4, va, dst_phys, flags);
                 }
             }
         }
     }
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
     return 0;
 }
 
@@ -699,6 +768,7 @@ vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
 {
     const uint8_t *s = (const uint8_t *)src;
     uint64_t done = 0;
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     while (done < len) {
         uint64_t cur_va    = va + done;
         uint64_t pg_va     = cur_va & ~0xFFFULL;
@@ -706,8 +776,11 @@ vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
         uint64_t chunk     = 4096ULL - off_in_pg;
         if (chunk > len - done) chunk = len - done;
 
-        uint64_t phys = vmm_phys_of_user(pml4_phys, pg_va);
-        if (!phys) return -1;
+        uint64_t phys = vmm_phys_of_user_nolock(pml4_phys, pg_va);
+        if (!phys) {
+            spin_unlock_irqrestore(&vmm_window_lock, fl);
+            return -1;
+        }
 
         uint8_t *dst = (uint8_t *)vmm_window_map(phys) + off_in_pg;
         __builtin_memcpy(dst, s + done, chunk);
@@ -715,6 +788,7 @@ vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
 
         done += chunk;
     }
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
     return 0;
 }
 
@@ -736,6 +810,7 @@ vmm_write_user_u64(uint64_t pml4_phys, uint64_t va, uint64_t val)
 void
 vmm_free_user_pages(uint64_t pml4_phys)
 {
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     uint64_t pml4i, pdpti, pdi, pti;
     for (pml4i = 0; pml4i < 256; pml4i++) {
         uint64_t *pml4 = vmm_window_map(pml4_phys);
@@ -776,4 +851,5 @@ vmm_free_user_pages(uint64_t pml4_phys)
             }
         }
     }
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
 }

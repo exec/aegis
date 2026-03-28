@@ -9,15 +9,20 @@
 #include "kbd_vfs.h"
 #include "kbd.h"
 #include "vma.h"
+#include "spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 
 static uint32_t s_next_pid = 1;
+static spinlock_t pid_lock = SPINLOCK_INIT;
 
 uint32_t
 proc_alloc_pid(void)
 {
-    return s_next_pid++;
+    irqflags_t fl = spin_lock_irqsave(&pid_lock);
+    uint32_t pid = s_next_pid++;
+    spin_unlock_irqrestore(&pid_lock, fl);
+    return pid;
 }
 
 _Static_assert(offsetof(aegis_process_t, task) == 0,

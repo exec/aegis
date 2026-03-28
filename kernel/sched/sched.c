@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "fd_table.h"
 #include "ext2.h"
+#include "spinlock.h"
 #include <stddef.h>
 
 /* Compile-time guard: ctx_switch.asm assumes sp is at offset 0 of TCB.
@@ -21,6 +22,8 @@ static aegis_task_t *s_current = (void *)0;
 static uint32_t      s_next_tid = 0;
 static uint32_t      s_task_count = 0;
 
+static spinlock_t sched_lock = SPINLOCK_INIT;
+
 void
 sched_init(void)
 {
@@ -32,6 +35,8 @@ sched_init(void)
 void
 sched_spawn(void (*fn)(void))
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+
     /* Allocate TCB (one kva page — higher-half VA, no identity-map dependency). */
     aegis_task_t *task = kva_alloc_pages(1);
 
@@ -96,11 +101,14 @@ sched_spawn(void (*fn)(void))
     }
 
     s_task_count++;
+
+    spin_unlock_irqrestore(&sched_lock, fl);
 }
 
 void
 sched_add(aegis_task_t *task)
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
     if (!s_current) {
         task->next = task;
         s_current  = task;
@@ -109,6 +117,7 @@ sched_add(aegis_task_t *task)
         s_current->next = task;
     }
     s_task_count++;
+    spin_unlock_irqrestore(&sched_lock, fl);
 }
 
 /* Deferred cleanup: dying task's resources cannot be freed before ctx_switch
@@ -121,6 +130,8 @@ static uint64_t g_prev_dying_stack_pages = 0;
 void
 sched_exit(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+
     /* ── Deferred cleanup from the PREVIOUS exiting kernel/orphaned task ──
      * Free TCB + kernel stack of the task that exited last time.
      * Safe: ctx_switch has completed; that TCB and stack are no longer live
@@ -222,9 +233,11 @@ sched_exit(void)
             arch_set_kernel_stack(s_current->kernel_stack_top);
             if (s_current->is_user)
                 arch_set_fs_base(s_current->fs_base);
+            spin_unlock_irqrestore(&sched_lock, fl);
             ctx_switch(zombie_task, s_current);
             /* unreachable — zombie never resumes after direct switch */
         } else {
+            spin_unlock_irqrestore(&sched_lock, fl);
             sched_yield_to_next();
         }
         /* unreachable — zombie never resumes */
@@ -262,6 +275,7 @@ sched_exit(void)
     g_prev_dying_stack       = (void *)dying_k->stack_base;
     g_prev_dying_stack_pages = dying_k->stack_pages;
     g_prev_dying_tcb         = dying_k;
+    spin_unlock_irqrestore(&sched_lock, fl);
     ctx_switch(dying_k, s_current);
     __builtin_unreachable();
 }
@@ -269,6 +283,8 @@ sched_exit(void)
 void
 sched_block(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+
     aegis_task_t *old = s_current;
 
     old->state = TASK_BLOCKED;
@@ -301,6 +317,7 @@ sched_block(void)
     if (s_current->is_user)
         arch_set_fs_base(s_current->fs_base);
 
+    spin_unlock_irqrestore(&sched_lock, fl);
     ctx_switch(old, s_current);
 
     /* Restore CR3 for the incoming user task after ctx_switch returns.
@@ -326,16 +343,21 @@ sched_wake(aegis_task_t *task)
 {
     /* The task remains in the circular run queue (sched_block no longer
      * removes it).  Simply transition state back to TASK_RUNNING so the
-     * scheduler's next pass will pick it up.  No list insertion needed. */
+     * scheduler's next pass will pick it up.  No list insertion needed.
+     * No lock needed: single-word state write, and callers may already
+     * hold sched_lock (e.g. sched_exit → signal_send_pid → sched_wake). */
     task->state = TASK_RUNNING;
 }
 
 void
 sched_stop(aegis_task_t *task)
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+
     if (task != s_current) {
         /* Stopping a different task: just flip state. */
         task->state = TASK_STOPPED;
+        spin_unlock_irqrestore(&sched_lock, fl);
         return;
     }
 
@@ -354,6 +376,7 @@ sched_stop(aegis_task_t *task)
     if (s_current->is_user)
         arch_set_fs_base(s_current->fs_base);
 
+    spin_unlock_irqrestore(&sched_lock, fl);
     ctx_switch(old, s_current);
 
     /* After ctx_switch returns (SIGCONT has resumed us), restore CR3 + FS.base.
@@ -370,7 +393,8 @@ sched_resume(aegis_task_t *task)
 {
     /* Mirrors sched_wake: flip state back to RUNNING.
      * Works for both TASK_STOPPED and TASK_BLOCKED (SIGCONT while blocked
-     * on a read must also let the read return EINTR). */
+     * on a read must also let the read return EINTR).
+     * No lock needed: single-word state write, callers may hold sched_lock. */
     task->state = TASK_RUNNING;
 }
 
@@ -457,6 +481,8 @@ sched_tick(void)
     if (s_current->next == s_current)      /* single task: nowhere to switch */
         return;
 
+    spin_lock(&sched_lock);
+
     aegis_task_t *old = s_current;
     /* Skip blocked/zombie tasks. task_idle guarantees termination. */
     do {
@@ -498,6 +524,7 @@ sched_tick(void)
 
     /* ctx_switch is declared in arch.h with a forward struct declaration.
      * It saves old->sp, loads s_current->sp, and returns into new task. */
+    spin_unlock(&sched_lock);
     ctx_switch(old, s_current);
 
     /* Restore the incoming user process's FS base.

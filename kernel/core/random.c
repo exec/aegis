@@ -24,6 +24,7 @@
 #include "random.h"
 #include "printk.h"
 #include "arch.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 /* ── Architecture-specific cycle counter ─────────────────────────────── */
@@ -101,6 +102,8 @@ static uint32_t s_buf_pos;     /* next byte to consume from s_buf */
 
 /* Blocks generated since last re-key */
 static uint32_t s_blocks_since_rekey;
+
+static spinlock_t rng_lock = SPINLOCK_INIT;
 
 /* ── Entropy mixing ──────────────────────────────────────────────────── */
 
@@ -207,6 +210,7 @@ refill_buf(void)
 int
 random_get_bytes(void *buf, size_t len)
 {
+    irqflags_t fl = spin_lock_irqsave(&rng_lock);
     uint8_t *dst = (uint8_t *)buf;
     while (len > 0) {
         if (s_buf_pos >= 64)
@@ -218,6 +222,7 @@ random_get_bytes(void *buf, size_t len)
         dst += chunk;
         len -= chunk;
     }
+    spin_unlock_irqrestore(&rng_lock, fl);
     return 0;
 }
 

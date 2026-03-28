@@ -3,6 +3,7 @@
 #include "pmm.h"
 #include "printk.h"
 #include "arch.h"
+#include "spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -18,6 +19,7 @@
 #endif
 
 static uint64_t s_kva_next;
+static spinlock_t kva_lock = SPINLOCK_INIT;
 
 void
 kva_init(void)
@@ -30,11 +32,13 @@ void *
 kva_alloc_pages(uint64_t n)
 {
     if (n == 0) return NULL;   /* caller passed 0 — no pages to allocate */
+    irqflags_t fl = spin_lock_irqsave(&kva_lock);
     uint64_t base = s_kva_next;
     uint64_t i;
     for (i = 0; i < n; i++) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
+            spin_unlock_irqrestore(&kva_lock, fl);
             printk("[KVA] FAIL: out of memory\n");
             for (;;) {}
         }
@@ -45,6 +49,7 @@ kva_alloc_pages(uint64_t n)
         vmm_map_page(s_kva_next, phys, VMM_FLAG_WRITABLE);
         s_kva_next += 4096UL;
     }
+    spin_unlock_irqrestore(&kva_lock, fl);
     /* SAFETY: base is a higher-half VA set from s_kva_next at function entry;
      * all n pages at [base, s_kva_next) have been mapped via vmm_map_page. */
     return (void *)base;
