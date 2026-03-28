@@ -606,12 +606,30 @@ Five-agent audit/cleanup run after completing Phases 36-38. Results below.
 - [ ] **MEDIUM: sys_setsockopt** — validates 4 bytes but reads 16 for SO_RCVTIMEO.
 - [ ] **MEDIUM: sys_blkdev_io** — static bounce buffer not reentrant (shared across concurrent callers).
 
-### TODO — Spinlock Issues (from partial audit)
+### TODO — Lock Ordering Violations (CRITICAL for SMP)
 
-- [ ] **Lock ordering violation: ip_lock → arp_lock.** `ip_send` holds `ip_lock`, calls `eth_send` which acquires `arp_lock`. Spec says arp_lock > ip_lock. Fix: release ip_lock before calling eth_send, or merge the locks.
-- [ ] **kbd ring buffer unprotected** — `s_buf`/`s_head`/`s_tail` in kbd.c accessed from both ISR (IRQ1) and syscall context without a lock. Single-core safe (ISR atomic), but SMP needs protection.
-- [ ] **PS/2 mouse packet state unprotected** — `s_packet`/`s_byte_index` in ps2_mouse.c accessed only from IRQ12 handler (single ISR, safe on SMP since only one CPU handles IRQ12 via IOAPIC routing).
-- [ ] **fb.c shadow buffer + ANSI state unprotected** — `s_shadow`, `s_esc_buf` in fb.c accessed from printk path without lock.
+- [ ] **kva_lock → pmm_lock inversion.** `kva_alloc_pages` holds `kva_lock`, calls `pmm_alloc_page` which acquires `pmm_lock`. Spec says pmm_lock > kva_lock. Fix: acquire pmm_lock first, or restructure kva_alloc to release kva_lock around pmm calls.
+- [ ] **ip_lock → arp_lock inversion.** `ip_send` holds `ip_lock`, calls `eth_send`/`arp_resolve` which acquire `arp_lock`. Spec says arp_lock > ip_lock. Fix: release ip_lock before calling eth_send.
+- [ ] **tcp_lock → sock_lock inversion.** `tcp_rx` holds `tcp_lock`, calls `sock_get`/`sock_wake` which acquire `sock_lock`. Spec says sock_lock > tcp_lock.
+- [ ] **udp_lock → sock_lock inversion.** Same pattern as tcp_rx.
+
+### TODO — Missing Lock Protection (safe single-core, needed for SMP)
+
+- [ ] **kbd ring buffer** — `s_buf`/`s_head`/`s_tail`/`s_shift`/`s_ctrl` in kbd.c accessed from IRQ1 and PIT ISR (via kbd_usb_inject) without lock.
+- [ ] **Mouse ring buffer** — `s_buf`/`s_head`/`s_tail`/`s_waiter` in usb_mouse.c from PIT ISR, IRQ12, and syscall context without lock.
+- [ ] **Signal delivery** — `signal_send_pid`/`signal_send_pgrp` traverse task list and modify `pending_signals` without lock. Called from ISR (kbd), syscall (sys_kill), and sched_exit.
+- [ ] **TTY layer** — `tty->fg_pgrp`, `tty->linebuf`, `tty->line_len` etc in tty.c accessed from ISR and syscall without any lock.
+- [ ] **Console lock missing** — listed in lock ordering spec but never implemented. `s_console_file` unprotected.
+- [ ] **kva_map_phys_pages** — reads/writes `s_kva_next` without `kva_lock`.
+- [ ] **ext2_sync** — accesses cache/superblock without `ext2_lock`. Called from sched_exit during shutdown.
+- [ ] **fb.c cursor state** — `s_col`/`s_row` modified during printk from ISR and syscall without lock.
+- [ ] **Static TX buffers** — `s_tx_buf` (eth.c), `s_tcp_buf` (tcp.c), `s_ip_buf` (ip.c) shared without per-buffer locks. SMP needs per-CPU buffers.
+
+### Spinlock Audit — Clean Areas
+
+- [x] No lock-while-blocking bugs (all sched_block callers release locks first)
+- [x] No missing-unlock-on-error-path bugs (all error returns properly unlock)
+- [x] sched_tick using spin_lock (not irqsave) in ISR context — correct and intentional
 
 ### TODO — Other Findings
 
