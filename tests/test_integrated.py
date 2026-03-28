@@ -61,6 +61,7 @@ class SerialReader:
     def __init__(self, fd):
         self._fd = fd
         self._buf = b""
+        self._mark = 0
 
     def _drain(self, timeout=0.5):
         ready, _, _ = select.select([self._fd], [], [], timeout)
@@ -72,31 +73,36 @@ class SerialReader:
             except (BlockingIOError, OSError):
                 pass
 
+    def mark(self):
+        """Set a mark at the current buffer position. Subsequent searches
+        only look at output received after this mark."""
+        self._mark = len(self._buf)
+
     def wait_for(self, needle, deadline):
-        """Wait until needle appears in accumulated output or deadline passes."""
+        """Wait until needle appears in output after the mark."""
         enc = needle.encode() if isinstance(needle, str) else needle
         while time.time() < deadline:
-            if enc in self._buf:
+            if enc in self._buf[self._mark:]:
                 return True
             self._drain()
-        return enc in self._buf
+        return enc in self._buf[self._mark:]
 
     def wait_for_prompt(self, deadline):
         """Wait for shell prompt '# ' after a command completes."""
         return self.wait_for("# ", deadline)
 
     def contains(self, needle):
-        """Check if needle is already in accumulated output (no waiting)."""
+        """Check if needle is in output after the mark (no waiting)."""
         enc = needle.encode() if isinstance(needle, str) else needle
-        return enc in self._buf
+        return enc in self._buf[self._mark:]
 
     def snapshot(self):
-        """Drain any pending bytes and return the full accumulated output."""
+        """Drain any pending bytes and return output since mark."""
         self._drain(timeout=0.1)
-        return self._buf.decode("utf-8", errors="replace")
+        return self._buf[self._mark:].decode("utf-8", errors="replace")
 
     def tail(self, n=500):
-        """Return the last n characters of accumulated output."""
+        """Return the last n characters of output since mark."""
         return self.snapshot()[-n:]
 
 
@@ -262,6 +268,10 @@ def run_tests():
 
         # --- Run each test ---
         for name, command, check_fn in TESTS:
+            if command is not None:
+                serial.mark()  # only search NEW output for command tests
+            else:
+                serial._mark = 0  # boot-output checks search everything
             if command is not None:
                 # Type the command
                 time.sleep(0.5)
