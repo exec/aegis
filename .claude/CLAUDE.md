@@ -599,12 +599,12 @@ Five-agent audit/cleanup run after completing Phases 36-38. Results below.
 - [x] **sys_clock_settime (227)** — added `CAP_KIND_NET_ADMIN` check ✅
 - [x] **sys_setfg (360)** — added CAP_KIND_PROC_READ check ✅
 - [x] **sys_accept** — added `user_ptr_valid` for addr parameter ✅
-- [ ] **CRITICAL: sys_execve grants ALL capabilities** — `DISK_ADMIN` + `AUTH` in baseline (known, flagged in Phase 35 constraints). Tighten to vigil exec_caps mechanism.
+- [x] **sys_execve baseline tightened** — removed DISK_ADMIN + AUTH from default grants; vigil exec_caps provides them to installer/login ✅
 - [x] **sys_mkdir/unlink/rename** — added `CAP_KIND_VFS_WRITE` check ✅
-- [ ] **MEDIUM: sys_kill** — any process can signal any other (except PID 1). Needs capability gate.
+- [x] **sys_kill** — added CAP_KIND_PROC_READ/WRITE check ✅
 - [x] **sys_getsockname/getpeername** — added null addrlen guard ✅
 - [x] **sys_setsockopt** — added 16-byte validation for SO_RCVTIMEO; unknown opts return ENOPROTOOPT ✅
-- [ ] **MEDIUM: sys_blkdev_io** — static bounce buffer not reentrant (shared across concurrent callers).
+- [x] **sys_blkdev_io** — added blkdev_io_lock spinlock around bounce buffer ✅
 
 ### TODO — Lock Ordering Violations (CRITICAL for SMP)
 
@@ -615,15 +615,15 @@ Five-agent audit/cleanup run after completing Phases 36-38. Results below.
 
 ### TODO — Missing Lock Protection (safe single-core, needed for SMP)
 
-- [ ] **kbd ring buffer** — `s_buf`/`s_head`/`s_tail`/`s_shift`/`s_ctrl` in kbd.c accessed from IRQ1 and PIT ISR (via kbd_usb_inject) without lock.
-- [ ] **Mouse ring buffer** — `s_buf`/`s_head`/`s_tail`/`s_waiter` in usb_mouse.c from PIT ISR, IRQ12, and syscall context without lock.
-- [ ] **Signal delivery** — `signal_send_pid`/`signal_send_pgrp` traverse task list and modify `pending_signals` without lock. Called from ISR (kbd), syscall (sys_kill), and sched_exit.
-- [ ] **TTY layer** — `tty->fg_pgrp`, `tty->linebuf`, `tty->line_len` etc in tty.c accessed from ISR and syscall without any lock.
-- [ ] **Console lock missing** — listed in lock ordering spec but never implemented. `s_console_file` unprotected.
-- [ ] **kva_map_phys_pages** — reads/writes `s_kva_next` without `kva_lock`.
-- [ ] **ext2_sync** — accesses cache/superblock without `ext2_lock`. Called from sched_exit during shutdown.
-- [ ] **fb.c cursor state** — `s_col`/`s_row` modified during printk from ISR and syscall without lock.
-- [ ] **Static TX buffers** — `s_tx_buf` (eth.c), `s_tcp_buf` (tcp.c), `s_ip_buf` (ip.c) shared without per-buffer locks. SMP needs per-CPU buffers.
+- [x] **kbd ring buffer** — added kbd_lock spinlock around buf_push/kbd_poll ✅
+- [x] **Mouse ring buffer** — added mouse_lock spinlock around buf_push/mouse_poll ✅
+- [ ] **Signal delivery** — signal_send_pid/signal_send_pgrp traverse task list without lock. Protected by sched_lock in most paths but ISR path (kbd Ctrl-C) is unprotected. Low priority — single ISR context.
+- [x] **TTY layer** — added tty_global_lock protecting ioctl/write/read state ✅
+- [x] **printk lock** — added printk_lock for SMP-safe output (covers console/fb/serial) ✅
+- [x] **kva_map_phys_pages** — already had lock protection (verified) ✅
+- [x] **ext2_sync** — wrapped with ext2_lock via ext2_internal.h extern ✅
+- [ ] **fb.c cursor state** — s_col/s_row unprotected during printk. Mitigated by printk_lock (printk is the only caller). Low priority.
+- [ ] **Static TX buffers** — s_tx_buf (eth.c), s_tcp_buf (tcp.c) shared. Mitigated by ip_lock/tcp_lock restructuring (buffers used inside lock). Low priority.
 
 ### Spinlock Audit — Clean Areas
 
