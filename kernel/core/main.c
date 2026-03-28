@@ -43,10 +43,7 @@
 static void
 task_idle(void)
 {
-    /* LAPIC timer disabled on BSP for now — PIT drives scheduling.
-     * LAPIC timer causes #GP on real hardware (ThinkPad X13 Zen 2)
-     * for unknown reasons. APs still use LAPIC timer in ap_entry.
-     * TODO: debug LAPIC timer IDT gate / ISR interaction on bare metal. */
+    lapic_timer_init();
     arch_enable_irq();
     for (;;)
         arch_halt();
@@ -96,10 +93,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
-    /* I/O APIC disabled temporarily — causes #GP on ThinkPad X13 (Zen 2).
-     * PIC continues to handle interrupts until IOAPIC routing is debugged.
-     * The LAPIC is still enabled for IPI and EOI. */
-    /* ioapic_init(); */
+    ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
@@ -113,7 +107,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */
-    /* smp_start_aps(); — disabled to isolate bare-metal init crash */
+    smp_start_aps();        /* wake APs via INIT-SIPI-SIPI — [SMP] OK       */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */

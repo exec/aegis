@@ -152,4 +152,35 @@ static inline void arch_wait_for_irq(void) {
     __asm__ volatile("msr daifclr, #2; wfi; msr daifset, #2" ::: "memory");
 }
 
+/* Save DAIF flags and disable IRQs (spinlock support) */
+static inline unsigned long
+arch_irq_save(void)
+{
+    unsigned long flags;
+    __asm__ volatile("mrs %0, daif; msr daifset, #2" : "=r"(flags) : : "memory");
+    return flags;
+}
+
+/* Restore DAIF flags */
+static inline void
+arch_irq_restore(unsigned long flags)
+{
+    __asm__ volatile("msr daif, %0" : : "r"(flags) : "memory");
+}
+
+/* Hint: spin-wait (yield to other SMT threads) */
+static inline void
+arch_pause(void)
+{
+    __asm__ volatile("yield");
+}
+
+/* Wall clock stubs — ARM64 uses generic timer, not PIT.
+ * TODO: implement real wall clock using CNTPCT_EL0. */
+static inline void arch_clock_gettime(uint64_t *sec, uint64_t *nsec)
+{
+    *sec = 0; *nsec = 0;
+}
+static inline void arch_clock_settime(uint64_t sec) { (void)sec; }
+
 #endif /* ARCH_H */

@@ -315,7 +315,7 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
      * → iretq to user space.  Only difference: when child_stack != 0, use
      * child_stack instead of frame->user_rsp for the iretq RSP slot. */
     uint64_t *sp = (uint64_t *)(kstack + 4 * 4096);
-    uint64_t user_rsp = child_stack ? child_stack : frame->user_rsp;
+    uint64_t user_rsp = child_stack ? child_stack : FRAME_SP(frame);
 
 #ifdef __aarch64__
     extern void fork_child_return(void);
