@@ -260,8 +260,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Framebuffer access | ✅ | sys_fb_map (513) maps FB into userspace; fb_test GUI mockup with Terminus 10x20; native resolution |
 | Password asterisks | ✅ | login echoes * for password input; raw termios mode |
 | DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
-| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol parser; xHCI device type detection; hotplug PSC; installer crypt(); **untested** (boot oracle cap count fixed, needs retest) |
-| Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested** (builds clean on x86 box) |
+| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol parser; xHCI device type detection; hotplug PSC; installer crypt(); **untested** — q35 boot bug blocks testing (see constraints) |
+| Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested** — builds clean, blocked by q35 bug |
 
 ### Known deviations
 
@@ -505,7 +505,9 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 - boot.txt cap count fixed: 10→9 (was stale since Phase 35b)
 
 **Known issues:**
-1. **Boot oracle hangs/fails.** `make test` on x86 box produces VNET RX noise (`[VNET] RX pkt`) in serial output that contaminates the diff. This is a pre-existing issue with virtio-net packets arriving during boot. The boot oracle uses `-machine pc` (no virtio-net) so this should not happen — investigate whether the Makefile test target changed.
+1. **q35 without NVMe panics at RIP=0x0.** Pre-existing bug (reproduces on pre-Phase36 baseline). On `-machine q35` without an NVMe drive attached, init crashes with `RIP=0x0, fs_base=0x0, CS=0x23`. Adding `-drive ... -device nvme,...` makes it work. This is suspicious — the live system boots from ramdisk, not NVMe. The NVMe presence shouldn't affect init loading. Root cause unknown. Likely: PCIe enumeration without NVMe corrupts ELF loader state or an uninitialized variable. **Needs `make gdb` investigation** with breakpoints in `elf_load` and `proc_enter_user` on q35 to see why entry point is 0. Test scripts currently paper over this by adding NVMe+virtio-net to match test_integrated's working config.
+
+2. **`[PCIE] found %04x:%04x` — printk format bug.** `pcie.c:187` uses `%d` and `%04x` but printk only supports `%u`, `%x`, `%s`, `%c`. The `%d` and `%04x` come out literally. Cosmetic only — fix by changing to `%u`/`%x`.
 
 2. **No cursor rendering.** Kernel delivers raw deltas only. Cursor position tracking and rendering are Lumen's job (Phase 37).
 
@@ -569,7 +571,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 37 code complete (untested). Lumen compositor: backbuffer composite, z-order window manager, PTY terminal, save-under cursor, taskbar, polling event loop. Phase 36 USB mouse also code complete. Both build clean on x86 box. Next: test both phases, then Phase 38 Glyph widget toolkit.*
+*Last updated: 2026-03-28 — Phase 36+37 code complete (untested). Blocked by pre-existing q35 boot bug (RIP=0x0 without NVMe — needs GDB investigation). test_integrated passes 24/25 on x86 box. Next: debug q35 boot issue, then test Phase 36 mouse + Phase 37 lumen.*
 
 ---
 
