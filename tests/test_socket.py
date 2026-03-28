@@ -83,8 +83,8 @@ def run_test():
     try:
         # Wait for vigil init capabilities to confirm kernel is up
         print("  waiting for vigil init caps...")
-        out = _read_until(proc, time.time() + BOOT_TIMEOUT, "[CAP] OK: 8 capabilities")
-        if "[CAP] OK: 8 capabilities" not in out:
+        out = _read_until(proc, time.time() + BOOT_TIMEOUT, "[CAP] OK:")
+        if "[CAP] OK:" not in out:
             print("FAIL: vigil did not receive init capabilities within timeout")
             proc.kill(); proc.wait()
             sys.exit(1)

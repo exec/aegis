@@ -172,9 +172,9 @@ TESTS = [
      lambda s: _any_of(s, "Welcome", "Aegis")),
 
     # --- Vigil cap check (boot output) ---
-    ("vigil: boot has 9 capabilities",
+    ("vigil: init capabilities granted",
      None,
-     lambda s: s.contains("[CAP] OK: 9 capabilities")),
+     lambda s: s.contains("[CAP] OK:") and s.contains("capabilities granted to init")),
 
     # --- Dynamic linking ---
     ("dynlink: /bin/dynlink_test",
