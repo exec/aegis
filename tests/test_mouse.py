@@ -82,7 +82,7 @@ def main():
 
     qemu_cmd = [
         QEMU,
-        "-machine", "q35",
+        "-machine", "q35", "-cpu", "Broadwell",
         "-m", "2G",
         "-cdrom", ISO,
         "-boot", "order=d",

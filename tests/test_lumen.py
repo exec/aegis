@@ -74,7 +74,7 @@ def main():
 
     mon_path = tempfile.mktemp(suffix=".sock")
     qemu_cmd = [
-        QEMU, "-machine", "q35", "-m", "2G",
+        QEMU, "-machine", "q35", "-cpu", "Broadwell", "-m", "2G",
         "-cdrom", ISO, "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio", "-no-reboot",
