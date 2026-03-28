@@ -146,18 +146,30 @@ main(void)
             continue;
         }
 
-        /* Disable echo for password */
+        /* Disable echo and canonical mode for password — read char by char */
         struct termios t;
         tcgetattr(0, &t);
-        struct termios t_noecho = t;
-        t_noecho.c_lflag &= ~(unsigned)ECHO;
-        tcsetattr(0, TCSANOW, &t_noecho);
+        struct termios t_raw = t;
+        t_raw.c_lflag &= ~(unsigned)(ECHO | ICANON);
+        tcsetattr(0, TCSANOW, &t_raw);
 
         write(1, "password: ", 10);
-        int plen = readline(0, password, (int)sizeof(password));
+        {
+            int pi = 0;
+            char c;
+            while (pi < (int)sizeof(password) - 1) {
+                int n = (int)read(0, &c, 1);
+                if (n <= 0) break;
+                if (c == '\n' || c == '\r') break;
+                password[pi++] = c;
+                write(1, "*", 1);
+            }
+            password[pi] = '\0';
+        }
         write(1, "\n", 1);
+        int plen = (int)strlen(password);
 
-        /* Restore echo */
+        /* Restore terminal */
         tcsetattr(0, TCSANOW, &t);
 
         if (plen < 0) continue;
