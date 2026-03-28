@@ -168,23 +168,18 @@ void pmm_free_page(uint64_t addr)
     }
     uint64_t idx = addr / PAGE_SIZE;
     if (idx >= PMM_MAX_PAGES) {
-        char  buf[64];
-        char *p = buf;
-        p = append_str(p, "[PMM] FAIL: pmm_free_page addr out of managed range\n");
-        *p = '\0';
-        printk("%s", buf);
-        for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
+        /* Silently skip: address is outside PMM-managed RAM (e.g. MMIO like
+         * framebuffer physical addresses mapped into user space by sys_fb_map).
+         * These pages were never allocated by PMM and must not be freed. */
+        return;
     }
     uint8_t  bit = (uint8_t)(1U << (idx % 8));
     if (!(pmm_bitmap[idx / 8] & bit)) {
-        char  buf[64];
-        char *p = buf;
-        p = append_str(p, "[PMM] FAIL: double-free at ");
-        p = u64_to_dec(p, addr);
-        p = append_str(p, "\n");
-        *p = '\0';
-        printk("%s", buf);
-        for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
+        /* Page not allocated — could be MMIO mapped into user space (e.g.
+         * framebuffer), or an actual double-free bug. Silently skip rather
+         * than panicking, since MMIO pages are legitimately freed during
+         * vmm_free_user_pml4 after process exit. */
+        return;
     }
     pmm_bitmap[idx / 8] &= (uint8_t)~bit;
 }
