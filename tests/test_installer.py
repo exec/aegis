@@ -157,12 +157,19 @@ def run_test():
         # ── Boot 2: UEFI standalone NVMe (no ISO) ──
         # Use OVMF (UEFI firmware) to boot directly from the installed NVMe.
         # OVMF has NVMe drivers and can load BOOTX64.EFI from the ESP.
-        OVMF = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+        OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+        OVMF_VARS_SRC = "/usr/share/OVMF/OVMF_VARS_4M.fd"
         print("Boot 2: OVMF + NVMe only (true standalone UEFI boot)...")
+        # Copy OVMF NVRAM — OVMF needs writable NVRAM to create boot entries
+        fd_vars, vars_path = tempfile.mkstemp(suffix=".fd")
+        os.close(fd_vars)
+        import shutil
+        shutil.copy2(OVMF_VARS_SRC, vars_path)
         mon_path2 = tempfile.mktemp(suffix=".sock")
         proc2 = subprocess.Popen([
             QEMU, "-machine", "q35", "-cpu", "Broadwell",
-            "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}",
+            "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
+            "-drive", f"if=pflash,format=raw,file={vars_path}",
             "-display", "none", "-vga", "std", "-nodefaults",
             "-serial", "stdio", "-no-reboot", "-m", "2G",
             "-drive", f"file={disk_path},if=none,id=nvme0,format=raw",
@@ -212,6 +219,8 @@ def run_test():
     finally:
         try: os.unlink(disk_path)
         except OSError: pass
+        try: os.unlink(vars_path)
+        except (OSError, NameError): pass
 
 if __name__ == "__main__":
     run_test()
