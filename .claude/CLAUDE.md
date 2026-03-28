@@ -366,29 +366,50 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 **Phase 33 status: ✅ complete. Boot oracle PASS. `test_integrated.py` 16/16 PASS.**
 
-1. **No ASLR.** Interpreter loads at fixed INTERP_BASE (0x40000000). PIE binaries load at fixed base. ASLR is future work. Debug builds must disable ASLR to keep `make sym` working.
+### Current filesystem layout (important for Phase 34)
 
-2. **dlopen/dlsym untested.** The MAP_FIXED + file-backed mmap infrastructure supports it, but no test exercises dlopen. Future work.
+The system has **three distinct data sources** that the VFS merges at runtime:
 
-3. **curl statically links BearSSL.** Only libc is shared. libbearssl.so is future work.
+1. **Initrd** (baked into kernel image, read-only): 20 files total.
+   - Static binaries: `/bin/login`, `/bin/vigil`, `/bin/sh`, `/bin/echo`, `/bin/cat`, `/bin/ls`
+   - Config files: `/etc/motd`, `/etc/passwd`, `/etc/shadow`, `/etc/profile`, `/etc/hosts`
+   - Vigil service descriptors: `/etc/vigil/services/{getty,httpd,dhcp}/{run,policy,caps}`
+   - These are the ONLY things available before ext2 is mounted.
+
+2. **ext2 on NVMe** (read-write disk, mounted after NVMe+GPT init): everything else.
+   - Dynamic binaries: `/bin/oksh`, `/bin/grep`, `/bin/wc`, `/bin/sort`, `/bin/curl`, etc. (26 binaries)
+   - Shared library: `/lib/libc.so`, `/lib/ld-musl-x86_64.so.1`
+   - Auth files (duplicated from initrd): `/etc/passwd`, `/etc/shadow`, `/etc/group`
+   - Vigil service configs (duplicated from initrd)
+   - CA certs: `/etc/ssl/certs/ca-certificates.crt`
+
+3. **ramfs** (writable in-memory, populated at boot): `/etc` and `/root` only.
+   - `/etc` ramfs is populated from initrd's `/etc/*` files at mount time via `initrd_iter_etc`.
+   - `/root` ramfs is empty at boot.
+   - These are the ONLY writable paths outside ext2.
+
+**VFS open order:** initrd first → ext2 fallback. File opens check initrd, then VFS (ext2/ramfs).
+**VFS directory listing:** `/bin` and `/lib` listings come from ext2 (initrd has no synthetic `/bin` directory). `/etc` listing comes from ramfs. `/` listing comes from initrd's synthetic root (shows etc, bin, dev, lib, root).
+
+**The merge is implicit and incomplete.** `ls /bin` only shows ext2 entries — the 6 initrd binaries (login, vigil, sh, echo, cat, ls) are invisible in directory listings but accessible by name. Phase 34 (writable root) should make this coherent: one writable tree that contains everything.
+
+### Forward constraints
+
+1. **No ASLR.** Interpreter loads at fixed INTERP_BASE (0x40000000). Debug builds must disable ASLR to keep `make sym` working.
+
+2. **dlopen/dlsym untested.** Infrastructure supports it, no test exercises it.
+
+3. **curl statically links BearSSL.** Only libc is shared.
 
 4. **No LD_PRELOAD or LD_LIBRARY_PATH.** Interpreter uses built-in /lib path only.
 
-5. **File-backed mmap is read-once.** No page cache, no demand paging. Each mmap reads fresh from disk.
+5. **File-backed mmap is read-once.** No page cache, no demand paging.
 
-6. **Initrd contains vigil + login + shell + config (17 files).** All other binaries on ext2. Shell kept static for `INIT=shell` tests.
+6. **No MAP_SHARED.** MAP_PRIVATE file-backed mappings only.
 
-7. **No MAP_SHARED.** MAP_PRIVATE file-backed mappings only.
+7. **Test suite consolidated.** `test_integrated.py` runs 16 tests in one QEMU boot (replaces 11 separate boots). `make test` builds both vigil ISO and disk before running. Hardware-specific tests (ext2, xhci, gpt, virtio_net, net_stack) still boot separately.
 
-8. **`make test` does not auto-build disk.** Tests that need `build/disk.img` skip if absent. Must run `make disk` first, then `make test`. Fix: add `disk` as prerequisite to the test targets that need it, or add `make disk` to `run_tests.sh`.
-
-9. **test_ext2 broken — `echo` not in initrd.** `test_ext2.py` boots `INIT=shell` with a fresh temp disk (no ext2 /bin). It runs `echo "test" > /tmp/test.txt` — but our shell's `echo` is an external binary, not a builtin. Fix: either add `echo` as a shell builtin, or make test_ext2 boot with `INIT=vigil` + full disk. Blocks: Phase 34 (writable root) if it needs ext2 persistence tests.
-
-10. **test_pipe/signal/stat need disk.img.** These were converted from `-machine pc` to q35+NVMe in Phase 33. They skip if no disk. Must run `make disk` before `make test` for full coverage. Blocks: any phase that changes pipe/signal/stat behavior.
-
-11. **VFS `/bin` directory listing comes from ext2, not initrd.** Removed `/bin` from initrd synthetic directories so `ls /bin` shows ext2 entries (all dynamic binaries). On `-machine pc` (no ext2), `ls /bin` returns empty. Only affects tests that `ls /bin` without a disk — currently none after the test updates.
-
-12. **Test suite is too slow.** ~15 separate QEMU boots, each 10-20s. Total 10-15 min. Should consolidate tests that share the same boot config (q35+NVMe+vigil) into a single QEMU session. Blocks: developer productivity on every future phase.
+8. **`make clean` does not clean user binaries.** `rm -rf build` leaves `user/*/` artifacts. Must run `for d in user/*/; do make -C "$d" clean; done` for a truly clean rebuild. Stale dynamic .elf files from before a Makefile change (e.g., switching static↔dynamic) will silently be used.
 
 ---
 
