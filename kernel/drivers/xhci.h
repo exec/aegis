@@ -78,7 +78,13 @@ typedef struct __attribute__((packed)) {
 #define XHCI_PORTSC_CCS            (1u << 0)
 #define XHCI_PORTSC_PED            (1u << 1)
 #define XHCI_PORTSC_PR             (1u << 4)
+#define XHCI_PORTSC_CSC            (1u << 17)  /* Connect Status Change (RW1C) */
 #define XHCI_PORTSC_PRC            (1u << 21)
+
+/* USB device types for HID boot protocol */
+#define USB_DEV_NONE   0u
+#define USB_DEV_KBD    1u
+#define USB_DEV_MOUSE  2u
 
 /* Command Ring sizes */
 #define XHCI_CMD_RING_SIZE         64

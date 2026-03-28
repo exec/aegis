@@ -30,6 +30,7 @@
  * development.  The linker resolves this symbol when usb_hid.c is compiled
  * and linked in Task 4. */
 void usb_hid_process_report(const uint8_t *report, uint32_t len);
+void usb_mouse_process_report(const uint8_t *data, uint32_t len);
 
 /* -------------------------------------------------------------------------
  * Constants
@@ -69,6 +70,7 @@ void usb_hid_process_report(const uint8_t *report, uint32_t len);
  * ---------------------------------------------------------------------- */
 
 static int                       s_xhci_active    = 0;
+static int                       s_post_boot      = 0;
 static uint8_t                  *s_bar0_va         = NULL;
 /* SAFETY: s_cap and s_op are volatile MMIO pointers — volatile prevents the
  * compiler from caching hardware register reads/writes. */
@@ -95,7 +97,8 @@ static uint64_t                   s_dcbaa_phys       = 0;
 static uint64_t                  *s_dcbaa             = NULL;
 
 /* Per-slot HID state (index 0 unused; xHCI slots are 1-based) */
-static int        s_hid_slots[XHCI_MAX_SLOTS];        /* 1 = active HID kbd */
+static int        s_hid_slots[XHCI_MAX_SLOTS];        /* 1 = active HID device */
+static uint8_t    s_hid_slot_type[XHCI_MAX_SLOTS];   /* USB_DEV_NONE/KBD/MOUSE */
 static uint8_t   *s_hid_buf[XHCI_MAX_SLOTS];          /* VA of 8-byte report */
 static uint64_t   s_hid_buf_phys[XHCI_MAX_SLOTS];     /* PA of report buffer */
 static xhci_trb_t *s_xfer_ring[XHCI_MAX_SLOTS];       /* transfer ring VA */
@@ -388,9 +391,203 @@ issue_configure_ep(uint8_t slot_id, uint8_t port_num, uint8_t speed)
     return 0;
 }
 
+/* -------------------------------------------------------------------------
+ * Control transfer helpers for device enumeration
+ * ---------------------------------------------------------------------- */
+
+/* issue_control_transfer — send a SETUP + DATA(IN) + STATUS(OUT) sequence on
+ * EP0 (DCI=1) for the given slot.  The 8-byte response lands in
+ * s_hid_buf[slot_id].  Returns bytes transferred or -1 on error.
+ *
+ * setup_pkt: the 8-byte USB setup packet encoded as a uint64_t:
+ *   bits [7:0]   = bmRequestType
+ *   bits [15:8]  = bRequest
+ *   bits [31:16] = wValue
+ *   bits [47:32] = wIndex
+ *   bits [63:48] = wLength
+ *
+ * For a no-data transfer (wLength==0), pass only SETUP + STATUS (no DATA
+ * stage); the STATUS direction is IN for host-to-device transfers and OUT
+ * for device-to-host transfers (opposite of data direction). */
+static int
+issue_control_transfer(uint8_t slot_id, uint64_t setup_pkt, int has_data_in)
+{
+    xhci_trb_t *ring  = s_xfer_ring[slot_id];
+    uint32_t    cycle = (uint32_t)s_xfer_cycle[slot_id];
+    uint32_t    ei    = s_xfer_enqueue[slot_id];
+    uint16_t    wlen  = (uint16_t)(setup_pkt >> 48);
+    volatile uint32_t *db;
+    volatile xhci_trb_t *evt;
+    uint32_t timeout;
+
+    if (!ring || !s_hid_buf[slot_id])
+        return -1;
+
+    /* --- Setup TRB: type=2, IDT=1(bit6), TRT=3(IN, bits17:16), len=8 --- */
+    {
+        xhci_trb_t *trb = &ring[ei];
+        trb->param   = setup_pkt;
+        trb->status  = 8u;                                /* setup packet length */
+        trb->control = (uint32_t)(XHCI_TRB_SETUP << 10)  /* type */
+                     | (1u << 6)                           /* IDT (Immediate Data) */
+                     | (has_data_in ? (3u << 16) : 0u)     /* TRT: 3=IN, 0=No Data */
+                     | cycle;
+        ei++;
+        if (ei >= XHCI_TRANSFER_RING_SIZE - 1u) {
+            s_xfer_cycle[slot_id] ^= 1;
+            ei = 0;
+            ring[XHCI_TRANSFER_RING_SIZE - 1].control =
+                (uint32_t)(XHCI_TRB_LINK << 10) | (1u << 1) |
+                (uint32_t)s_xfer_cycle[slot_id];
+            cycle = (uint32_t)s_xfer_cycle[slot_id];
+        }
+    }
+
+    /* --- Data TRB (only if wLength > 0) --- */
+    if (has_data_in && wlen > 0) {
+        xhci_trb_t *trb = &ring[ei];
+        trb->param   = s_hid_buf_phys[slot_id];
+        trb->status  = (uint32_t)wlen;
+        trb->control = (uint32_t)(XHCI_TRB_DATA << 10)
+                     | (1u << 16)                          /* DIR=1 (IN) */
+                     | cycle;
+        ei++;
+        if (ei >= XHCI_TRANSFER_RING_SIZE - 1u) {
+            s_xfer_cycle[slot_id] ^= 1;
+            ei = 0;
+            ring[XHCI_TRANSFER_RING_SIZE - 1].control =
+                (uint32_t)(XHCI_TRB_LINK << 10) | (1u << 1) |
+                (uint32_t)s_xfer_cycle[slot_id];
+            cycle = (uint32_t)s_xfer_cycle[slot_id];
+        }
+    }
+
+    /* --- Status TRB --- */
+    {
+        xhci_trb_t *trb = &ring[ei];
+        trb->param   = 0;
+        trb->status  = 0;
+        /* Status direction is opposite of data direction:
+         *   IN data  → OUT status (DIR=0)
+         *   No data (host-to-device setup) → IN status (DIR=1) */
+        trb->control = (uint32_t)(XHCI_TRB_STATUS << 10)
+                     | (1u << 5)                           /* IOC */
+                     | (has_data_in ? 0u : (1u << 16))     /* DIR: 0=OUT, 1=IN */
+                     | cycle;
+        ei++;
+        if (ei >= XHCI_TRANSFER_RING_SIZE - 1u) {
+            s_xfer_cycle[slot_id] ^= 1;
+            ei = 0;
+            ring[XHCI_TRANSFER_RING_SIZE - 1].control =
+                (uint32_t)(XHCI_TRB_LINK << 10) | (1u << 1) |
+                (uint32_t)s_xfer_cycle[slot_id];
+            cycle = (uint32_t)s_xfer_cycle[slot_id];
+        }
+    }
+
+    s_xfer_enqueue[slot_id] = ei;
+
+    /* Ring doorbell for EP0 (DCI=1) */
+    db = (volatile uint32_t *)(s_bar0_va + s_cap->dboff);
+    arch_wmb();
+    db[slot_id] = 1u;   /* DCI=1 for EP0 */
+
+    /* Poll for Transfer Event completion */
+    timeout = 2000000u;
+    while (timeout--) {
+        evt = &s_evt_ring[s_evt_dequeue];
+        if ((evt->control & 1u) != (uint32_t)s_evt_cycle)
+            continue;
+
+        {
+            uint32_t ctrl     = evt->control;
+            uint32_t etype    = (ctrl >> 10) & 0x3Fu;
+            uint8_t  cc       = (uint8_t)((evt->status >> 24) & 0xFFu);
+            uint32_t residual = evt->status & 0xFFFFFFu;
+
+            s_evt_dequeue++;
+            if (s_evt_dequeue >= XHCI_EVT_RING_SIZE) {
+                s_evt_dequeue = 0;
+                s_evt_cycle  ^= 1;
+            }
+            update_erdp();
+
+            if (etype == XHCI_TRB_TRANSFER_EVENT &&
+                (cc == 1u || cc == 13u)) {
+                /* cc=1: Success, cc=13: Short Packet (normal for descriptors) */
+                return (int)((uint32_t)wlen - residual);
+            }
+            /* Unexpected event — error */
+            return -1;
+        }
+    }
+    return -1;   /* timeout */
+}
+
+/* detect_hid_protocol — issue GET_DESCRIPTOR(Configuration) and walk the
+ * returned descriptor chain for an Interface Descriptor (type=4) with
+ * bInterfaceClass=3 (HID).  Returns bInterfaceProtocol:
+ *   1 = keyboard, 2 = mouse, 0 = unknown/not HID. */
+static uint8_t
+detect_hid_protocol(uint8_t slot_id)
+{
+    /* GET_DESCRIPTOR: bmRequestType=0x80 (Device-to-Host, Standard, Device),
+     * bRequest=6 (GET_DESCRIPTOR), wValue=0x0200 (Configuration, index 0),
+     * wIndex=0, wLength=64 */
+    uint64_t setup = (uint64_t)0x80u          /* bmRequestType */
+                   | ((uint64_t)0x06u << 8)   /* bRequest */
+                   | ((uint64_t)0x0200u << 16) /* wValue: Config desc, idx 0 */
+                   | ((uint64_t)0u << 32)      /* wIndex */
+                   | ((uint64_t)64u << 48);    /* wLength */
+    int got;
+    uint8_t *buf;
+    int off;
+
+    got = issue_control_transfer(slot_id, setup, 1);
+    if (got < 4)
+        return 0;
+
+    buf = s_hid_buf[slot_id];
+
+    /* Walk the descriptor chain */
+    off = 0;
+    while (off + 2 <= got) {
+        uint8_t blen  = buf[off];
+        uint8_t btype = buf[off + 1];
+
+        if (blen < 2 || off + blen > got)
+            break;
+
+        /* Interface Descriptor: bDescriptorType=4, bLength>=9 */
+        if (btype == 4u && blen >= 9u) {
+            uint8_t bclass = buf[off + 5];   /* bInterfaceClass */
+            uint8_t bproto = buf[off + 7];   /* bInterfaceProtocol */
+            if (bclass == 3u)                /* HID class */
+                return bproto;               /* 1=kbd, 2=mouse */
+        }
+        off += blen;
+    }
+    return 0;
+}
+
+/* issue_set_protocol — send SET_PROTOCOL(Boot Protocol=0) class request.
+ * bmRequestType=0x21 (Host-to-Device, Class, Interface),
+ * bRequest=0x0B (SET_PROTOCOL), wValue=0 (Boot Protocol),
+ * wIndex=0, wLength=0.  No data stage. */
+static void
+issue_set_protocol(uint8_t slot_id)
+{
+    uint64_t setup = (uint64_t)0x21u          /* bmRequestType */
+                   | ((uint64_t)0x0Bu << 8)   /* bRequest: SET_PROTOCOL */
+                   | ((uint64_t)0u << 16)      /* wValue: 0 = Boot Protocol */
+                   | ((uint64_t)0u << 32)      /* wIndex */
+                   | ((uint64_t)0u << 48);     /* wLength */
+    issue_control_transfer(slot_id, setup, 0);
+}
+
 /* enumerate_port — detect device on one port (1-based), reset it, run
- * Enable Slot + Address Device + Configure EP, then schedule first
- * interrupt IN transfer if successful. */
+ * Enable Slot + Address Device + Configure EP, detect HID type, then
+ * schedule first interrupt IN transfer if successful. */
 static void
 enumerate_port(uint32_t port_num)
 {
@@ -426,7 +623,8 @@ enumerate_port(uint32_t port_num)
             break;
     }
     if (!(*portsc_reg & XHCI_PORTSC_PRC)) {
-        printk("[XHCI] port %u: reset timeout\n", (unsigned)port_num);
+        if (!s_post_boot)
+            printk("[XHCI] port %u: reset timeout\n", (unsigned)port_num);
         return;
     }
     /* Clear PRC by writing 1 to it (RW1C) */
@@ -435,7 +633,8 @@ enumerate_port(uint32_t port_num)
     /* Enable Slot */
     slot_id = issue_enable_slot();
     if (slot_id == 0 || slot_id >= XHCI_MAX_SLOTS) {
-        printk("[XHCI] port %u: Enable Slot failed\n", (unsigned)port_num);
+        if (!s_post_boot)
+            printk("[XHCI] port %u: Enable Slot failed\n", (unsigned)port_num);
         return;
     }
 
@@ -459,20 +658,36 @@ enumerate_port(uint32_t port_num)
 
     /* Address Device */
     if (issue_address_device(slot_id, (uint8_t)port_num, speed) != 0) {
-        printk("[XHCI] port %u: Address Device failed\n",
-               (unsigned)port_num);
+        if (!s_post_boot)
+            printk("[XHCI] port %u: Address Device failed\n",
+                   (unsigned)port_num);
         return;
     }
 
     /* Configure EP1 IN */
     if (issue_configure_ep(slot_id, (uint8_t)port_num, speed) != 0) {
-        printk("[XHCI] port %u: Configure Endpoint failed\n",
-               (unsigned)port_num);
+        if (!s_post_boot)
+            printk("[XHCI] port %u: Configure Endpoint failed\n",
+                   (unsigned)port_num);
         return;
     }
 
-    /* Mark slot as active HID keyboard */
-    s_hid_slots[slot_id] = 1;
+    /* Detect HID device type via Configuration Descriptor */
+    {
+        uint8_t proto = detect_hid_protocol(slot_id);
+
+        if (proto == 1) {
+            issue_set_protocol(slot_id);
+            s_hid_slots[slot_id]     = 1;
+            s_hid_slot_type[slot_id] = USB_DEV_KBD;
+        } else if (proto == 2) {
+            issue_set_protocol(slot_id);
+            s_hid_slots[slot_id]     = 1;
+            s_hid_slot_type[slot_id] = USB_DEV_MOUSE;
+        } else {
+            return;
+        }
+    }
 
     /* Schedule the first interrupt IN transfer */
     xhci_schedule_interrupt_in(slot_id, XHCI_EP1_IN_DCI,
@@ -642,6 +857,7 @@ xhci_init(void)
     for (i = 1; i <= s_max_ports && i < XHCI_MAX_SLOTS; i++)
         enumerate_port(i);
 
+    s_post_boot   = 1;
     s_xhci_active = 1;
 
     printk("[XHCI] OK: %u ports, %u slots\n",
@@ -673,8 +889,10 @@ xhci_poll(void)
         if (trb_type == XHCI_TRB_TRANSFER_EVENT &&
             slot > 0 && slot < XHCI_MAX_SLOTS && s_hid_slots[slot]) {
             if (!s_hid_buf[slot]) goto next_trb;  /* alloc failure guard */
-            /* Deliver the 8-byte HID boot report */
-            usb_hid_process_report(s_hid_buf[slot], 8u);
+            if (s_hid_slot_type[slot] == USB_DEV_KBD)
+                usb_hid_process_report(s_hid_buf[slot], 8u);
+            else if (s_hid_slot_type[slot] == USB_DEV_MOUSE)
+                usb_mouse_process_report(s_hid_buf[slot], 8u);
             /* Re-arm: schedule the next interrupt IN */
             xhci_schedule_interrupt_in(slot, XHCI_EP1_IN_DCI,
                                        s_hid_buf_phys[slot], 8u);
