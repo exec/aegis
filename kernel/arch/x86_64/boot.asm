@@ -149,18 +149,20 @@ _start:
     mov ebx, dword (pdpt_hi - KERN_VMA)
     mov [ebx + PDPT_HI_IDX*8], eax
 
-    ; pd_lo[0..3]: 2MB huge pages PA 0x000000..0x600000 (identity, first 8MB)
+    ; pd_lo[0..511]: 2MB huge pages PA 0x000000..0x3FE00000 (identity, first 1GB)
+    ; Covers all physical RAM that GRUB modules or PMM pages may occupy.
     ; Flags: PRESENT(0x01) | WRITABLE(0x02) | HUGE(0x80) = 0x83
-    ; Each PD entry is 8 bytes; entries at offsets 0, 8, 16, 24.
     mov ebx, dword (pd_lo - KERN_VMA)
-    mov dword [ebx],       0x00000083  ; PA=0x000000, PRESENT|WRITABLE|HUGE
-    mov dword [ebx + 4],   0x00000000  ; high 32 bits of address
-    mov dword [ebx + 8],   0x00200083  ; PA=0x200000
-    mov dword [ebx + 12],  0x00000000
-    mov dword [ebx + 16],  0x00400083  ; PA=0x400000
-    mov dword [ebx + 20],  0x00000000
-    mov dword [ebx + 24],  0x00600083  ; PA=0x600000
-    mov dword [ebx + 28],  0x00000000
+    xor ecx, ecx                       ; ecx = page index (0..511)
+.fill_pd_lo:
+    mov eax, ecx
+    shl eax, 21                        ; eax = index * 2MB
+    or  eax, 0x83                      ; PRESENT | WRITABLE | HUGE
+    mov [ebx + ecx*8],     eax         ; low 32 bits
+    mov dword [ebx + ecx*8 + 4], 0    ; high 32 bits = 0 (below 4GB)
+    inc ecx
+    cmp ecx, 512
+    jb .fill_pd_lo
 
     ; pd_hi[0..3]: 2MB huge pages PA 0x000000..0x600000 (kernel higher-half)
     mov ebx, dword (pd_hi - KERN_VMA)

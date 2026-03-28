@@ -221,7 +221,7 @@ def run_tests():
          "-machine", "q35", "-cpu", "Broadwell",
          "-cdrom", iso_path, "-boot", "order=d",
          "-display", "none", "-vga", "std", "-nodefaults",
-         "-serial", "stdio", "-no-reboot", "-m", "256M",
+         "-serial", "stdio", "-no-reboot", "-m", "2G",
          "-drive", f"file={disk_path},if=none,id=nvme0,format=raw",
          "-device", "nvme,drive=nvme0,serial=aegis0",
          "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",

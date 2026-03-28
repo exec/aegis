@@ -37,9 +37,23 @@ ramdisk_init(uint64_t phys_base, uint64_t size)
     if (phys_base == 0 || size == 0)
         return;  /* no module loaded — diskless boot */
 
+    /* Allocate fresh KVA pages and COPY module data into them.
+     * We cannot map the module's physical pages in-place because GRUB places
+     * the module right after the kernel image, potentially overlapping with
+     * physical addresses used by VMM page tables.  Copying avoids the conflict.
+     *
+     * SAFETY: the identity map [0..1GB) is still active at this point in boot
+     * (vmm_teardown_identity runs later), so we can read the module's physical
+     * address directly via pointer cast. */
     uint32_t num_pages = (uint32_t)((size + 4095) / 4096);
-    s_base = (uint8_t *)kva_map_phys_pages(phys_base, num_pages);
+    s_base = (uint8_t *)kva_alloc_pages(num_pages);
     s_size = size;
+    {
+        const uint8_t *src = (const uint8_t *)(uintptr_t)phys_base;
+        uint64_t i;
+        for (i = 0; i < size; i++)
+            s_base[i] = src[i];
+    }
 
     /* Build blkdev name manually — no snprintf in kernel */
     s_ramdisk.name[0] = 'r'; s_ramdisk.name[1] = 'a';

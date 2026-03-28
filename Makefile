@@ -513,7 +513,7 @@ run: iso
 	qemu-system-x86_64 \
 	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
-	    -serial stdio -vga std -no-reboot -m 256M \
+	    -serial stdio -vga std -no-reboot -m 2G \
 	    $(NVME_FLAGS) \
 	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
@@ -527,7 +527,7 @@ run-fb: iso
 	qemu-system-x86_64 \
 	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
-	    -serial stdio -vga none -device virtio-vga -no-reboot -m 256M \
+	    -serial stdio -vga none -device virtio-vga -no-reboot -m 2G \
 	    $(NVME_FLAGS) \
 	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
@@ -551,7 +551,7 @@ gdb: iso
 	@qemu-system-x86_64 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial file:$(BUILD)/debug.log \
-	    -vga std -no-reboot -m 256M \
+	    -vga std -no-reboot -m 2G \
 	    -s -S \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
 	    -display none & \

@@ -53,14 +53,6 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_pat_init();        /* PAT MSR: PA1=WC for framebuffer mapping       */
     arch_mm_init(mb_info);  /* parse multiboot2 memory map                   */
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
-    {   /* DEBUG: show module location */
-        uint64_t mp = 0, ms = 0;
-        if (arch_get_module(&mp, &ms))
-            printk("[DEBUG] module phys=0x%x size=0x%x (%u MB)\n",
-                   (unsigned)mp, (unsigned)ms, (unsigned)(ms / (1024*1024)));
-        else
-            printk("[DEBUG] no module found\n");
-    }
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */
     kva_init();             /* kernel virtual allocator — [KVA] OK           */
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */

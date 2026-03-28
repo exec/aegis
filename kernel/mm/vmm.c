@@ -122,8 +122,8 @@ alloc_table_early(void)
         printk("[VMM] FAIL: out of memory allocating page table\n");
         for (;;) {}
     }
-    /* SAFETY: identity map [0..4MB) is active; phys is within that range
-     * because the PMM starts above _kernel_end which is well below 4MB. */
+    /* SAFETY: identity map [0..1GB) is active (boot.asm pd_lo fills 512 entries);
+     * phys must be within that range. PMM starts above _kernel_end. */
     uint64_t *p = (uint64_t *)(uintptr_t)phys;
     int i;
     for (i = 0; i < 512; i++)
