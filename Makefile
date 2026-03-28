@@ -113,7 +113,8 @@ DRIVER_SRCS = \
     kernel/drivers/xhci.c \
     kernel/drivers/usb_hid.c \
     kernel/drivers/virtio_net.c \
-    kernel/drivers/fb.c
+    kernel/drivers/fb.c \
+    kernel/drivers/ramdisk.c
 
 NET_SRCS = \
     kernel/net/netdev.c \
