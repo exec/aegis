@@ -30,7 +30,7 @@ idt_gate_set(uint8_t vec, void *handler)
 {
     uint64_t addr = (uint64_t)handler;
     s_idt[vec].offset_lo  = addr & 0xFFFF;
-    s_idt[vec].selector   = 0x08;           /* kernel code segment */
+    s_idt[vec].selector   = ARCH_KERNEL_CS;  /* kernel code segment */
     s_idt[vec].ist        = 0;
     s_idt[vec].type_attr  = 0x8E;           /* present, DPL=0, interrupt gate */
     s_idt[vec].offset_mid = (addr >> 16) & 0xFFFF;
@@ -87,7 +87,7 @@ arch_load_idt(void)
 }
 
 /* Walk the RBP frame-pointer chain and print return addresses.
- * Only valid for kernel-mode exceptions (CS=0x08).
+ * Only valid for kernel-mode exceptions (CS=ARCH_KERNEL_CS).
  * At -O0 with -fno-omit-frame-pointer, every frame pushes RBP.
  * Each frame: [rbp+0] = saved previous RBP, [rbp+8] = return address.
  * Resolve addresses with: make sym ADDR=0x<addr>
@@ -138,8 +138,8 @@ isr_dispatch(cpu_state_t *s)
                    f[0], f[1], f[2], f[3], f[4]);
         }
         /* Print kernel backtrace for kernel-mode faults.
-         * For ring-3 faults (CS=0x23) rbp is a user-space pointer — skip. */
-        if (s->cs == 0x08)
+         * For ring-3 faults (CS=ARCH_USER_CS) rbp is a user-space pointer — skip. */
+        if (s->cs == ARCH_KERNEL_CS)
             panic_backtrace(s->rbp);
         for (;;) {}
     } else if (s->vector == 0xFE) {
@@ -186,15 +186,15 @@ isr_dispatch(cpu_state_t *s)
     }
 
     /* Sanity-check the iretq frame for ring-3 interrupts.
-     * For a ring-3 interrupt (cs=0x23), cpu_state_t.rsp=user_rsp and
+     * For a ring-3 interrupt (cs=ARCH_USER_CS), cpu_state_t.rsp=user_rsp and
      * cpu_state_t.ss must point to the user data descriptor (GDT index 3).
      *
      * AMD CPUs in 64-bit mode may strip SS RPL bits after loading, pushing
      * 0x18 (RPL=0) instead of 0x1B (RPL=3) on interrupt entry — both are
      * valid since SS is unused for addressing in 64-bit long mode.
      * Accept any RPL variant of the user data selector: (ss & ~3) == 0x18.
-     * Reject kernel selectors (0x08, 0x10) or user code (0x20). */
-    if (s->cs == 0x23 && (s->ss & ~(uint64_t)3) != 0x18) {
+     * Reject kernel selectors (ARCH_KERNEL_CS, ARCH_KERNEL_DS) or user code (0x20). */
+    if (s->cs == ARCH_USER_CS && (s->ss & ~(uint64_t)3) != (ARCH_USER_DS & ~(uint64_t)3)) {
         printk("[PANIC] corrupt ring-3 iretq frame vec=%lu rip=0x%lx rsp=0x%lx ss=0x%lx\n",
                s->vector, s->rip, s->rsp, s->ss);
         for (;;) {}
@@ -202,10 +202,10 @@ isr_dispatch(cpu_state_t *s)
 
     /* Normalize SS RPL=3 for iretq back to ring-3.
      * AMD CPUs in 64-bit mode strip SS RPL bits on ring-3 interrupt entry,
-     * pushing SS=0x18 (RPL=0) instead of SS=0x1B (RPL=3).  iretq to ring-3
-     * (CPL=3) requires SS.RPL == CPL=3; without normalization the iretq
-     * faults #GP(SS) on AMD.  Force RPL=3 unconditionally on the return
+     * pushing SS=0x18 (RPL=0) instead of SS=ARCH_USER_DS (RPL=3).  iretq to
+     * ring-3 (CPL=3) requires SS.RPL == CPL=3; without normalization the
+     * iretq faults #GP(SS) on AMD.  Force RPL=3 unconditionally on the return
      * path — harmless on Intel (which already pushes RPL=3), required on AMD. */
-    if (s->cs == 0x23)
+    if (s->cs == ARCH_USER_CS)
         s->ss |= 3;
 }

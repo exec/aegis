@@ -346,10 +346,10 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     /* x86-64: build ISR + ctx_switch frame for isr_post_dispatch path. */
 
     /* CPU ring-3 interrupt frame (ss = highest address) */
-    *--sp = 0x1B;                   /* ss = user data selector              */
+    *--sp = ARCH_USER_DS;            /* ss = user data selector              */
     *--sp = user_rsp;               /* user RSP (child stack or parent's)   */
     *--sp = frame->rflags;          /* RFLAGS                               */
-    *--sp = 0x23;                   /* cs = user code selector              */
+    *--sp = ARCH_USER_CS;            /* cs = user code selector              */
     *--sp = frame->rip;             /* RIP = resume point after clone()     */
 
     /* ISR stub: ISR_NOERR pushes error_code(0) then vector(0) */
@@ -554,7 +554,7 @@ sys_fork(syscall_frame_t *frame)
      *   [r15=0][r14=0][r13=0][r12=0][r11=rflags][r10][r9][r8]
      *   [rbp=0][rdi=0][rsi=0][rdx=0][rcx=rip][rbx=0][rax=0]  <- fork ret 0
      *   [vector=0][error_code=0]
-     *   [rip][cs=0x23][rflags][user_rsp][ss=0x1B]  <- CPU ring-3 frame
+     *   [rip][cs=ARCH_USER_CS][rflags][user_rsp][ss=ARCH_USER_DS]  <- CPU ring-3 frame
      *
      * isr_post_dispatch: pop CR3 → mov cr3 → pop r15..rax → add rsp,16 → iretq
      */
@@ -595,10 +595,10 @@ sys_fork(syscall_frame_t *frame)
     /* x86-64: build ISR + ctx_switch frame for isr_post_dispatch path. */
 
     /* CPU ring-3 interrupt frame (ss = highest address) */
-    *--sp = 0x1B;                   /* ss = user data selector              */
+    *--sp = ARCH_USER_DS;            /* ss = user data selector              */
     *--sp = frame->user_rsp;        /* user RSP                             */
     *--sp = frame->rflags;          /* RFLAGS                               */
-    *--sp = 0x23;                   /* cs = user code selector              */
+    *--sp = ARCH_USER_CS;            /* cs = user code selector              */
     *--sp = frame->rip;             /* RIP = resume point after fork()      */
 
     /* ISR stub: ISR_NOERR pushes error_code(0) then vector(0) */

@@ -139,7 +139,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * Stack layout from low (RSP) to high:
      *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0]
      *   [proc_enter_user]
-     *   [entry_rip][CS=0x23][RFLAGS=0x202][user_RSP][SS=0x1B]
+     *   [entry_rip][CS=ARCH_USER_CS][RFLAGS=0x202][user_RSP][SS=ARCH_USER_DS]
      *
      * Push order (high-to-low, decrementing sp):
      *   SS first (highest address), r15 last (lowest = task.sp value).
@@ -178,10 +178,10 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     *--sp = 0;                          /* x29 (fp) */
 #else
     /* x86-64: iretq frame + ctx_switch callee-saves. */
-    *--sp = 0x1BULL;            /* SS  — user data | RPL=3       */
+    *--sp = (uint64_t)ARCH_USER_DS; /* SS  — user data | RPL=3    */
     *--sp = USER_STACK_TOP - 128; /* RSP */
     *--sp = 0x202ULL;           /* RFLAGS — IF=1, reserved bit 1  */
-    *--sp = 0x23ULL;            /* CS  — user code | RPL=3        */
+    *--sp = (uint64_t)ARCH_USER_CS; /* CS  — user code | RPL=3     */
     *--sp = entry_rip;          /* RIP — ELF entry point          */
     *--sp = proc->pml4_phys;    /* user PML4 phys — popped by proc_enter_user */
     *--sp = (uint64_t)(uintptr_t)proc_enter_user; /* ret → CR3 switch + iretq */

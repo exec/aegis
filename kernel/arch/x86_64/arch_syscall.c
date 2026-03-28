@@ -1,3 +1,4 @@
+#include "arch.h"
 #include "printk.h"
 #include <stdint.h>
 
@@ -35,13 +36,13 @@ arch_syscall_init(void)
 
     /*
      * STAR selector layout:
-     *   bits [47:32] = 0x0008  → SYSCALL: CS=0x08 (kernel code), SS=0x10 (kernel data)
-     *   bits [63:48] = 0x0010  → SYSRET:  SS=(0x10+8)|3=0x1B, CS=(0x10+16)|3=0x23
+     *   bits [47:32] = ARCH_KERNEL_CS  → SYSCALL: CS=0x08, SS=0x10
+     *   bits [63:48] = ARCH_KERNEL_DS  → SYSRET:  SS=(0x10+8)|3=0x1B, CS=(0x10+16)|3=0x23
      *
      * The user data descriptor (0x18) must be at GDT index 3 and user code (0x20)
      * at GDT index 4 for these selector values to land on the correct descriptors.
      */
-    wrmsr(IA32_STAR, (0x0010ULL << 48) | (0x0008ULL << 32));
+    wrmsr(IA32_STAR, ((uint64_t)ARCH_KERNEL_DS << 48) | ((uint64_t)ARCH_KERNEL_CS << 32));
 
     /* LSTAR: syscall entry point */
     wrmsr(IA32_LSTAR, (uint64_t)(uintptr_t)syscall_entry);

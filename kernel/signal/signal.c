@@ -176,6 +176,7 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
 }
 
 #else /* x86-64 */
+#include "arch.h"
 #include "uaccess.h"
 #include "syscall_util.h"
 #include "idt.h"
@@ -187,14 +188,14 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
  * to ring 3 via iretq. Called from isr.asm between isr_dispatch and
  * isr_post_dispatch, with CR3=master PML4 and IF=0.
  *
- * s->cs == 0x08 means returning to kernel mode (IRQ fired in kernel hlt loop) —
- * do not deliver. Only deliver to ring-3 (cs=0x23).
+ * s->cs == ARCH_KERNEL_CS means returning to kernel mode (IRQ fired in kernel
+ * hlt loop) — do not deliver. Only deliver to ring-3 (cs=ARCH_USER_CS).
  */
 void
 signal_deliver(cpu_state_t *s)
 {
     /* Only deliver to ring-3 returns */
-    if (s->cs != 0x23) return;
+    if (s->cs != ARCH_USER_CS) return;
 
     aegis_task_t *task = sched_current();
     if (!task || !task->is_user) return;
