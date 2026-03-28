@@ -180,12 +180,17 @@ vmm_init(void)
     uint64_t *pdpt_hi = (uint64_t *)(uintptr_t)pdpt_hi_phys;
     uint64_t *pd_hi   = (uint64_t *)(uintptr_t)pd_hi_phys;
 
-    /* Identity map: VA [0..4MB) → PA [0..4MB) via PML4[0].
-     * PML4[0] → pdpt_lo[0] → pd_lo with two 2MB huge pages. */
+    /* Identity map: VA [0..1GB) → PA [0..1GB) via PML4[0].
+     * PML4[0] → pdpt_lo[0] → pd_lo with 512 × 2MB huge pages.
+     * Covers all physical RAM that GRUB modules or PMM pages may occupy.
+     * Torn down by vmm_teardown_identity() at end of boot. */
     pml4[0]    = pdpt_lo_phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
     pdpt_lo[0] = pd_lo_phys   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
-    pd_lo[0]   = 0x000000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
-    pd_lo[1]   = 0x200000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
+    {
+        uint32_t i;
+        for (i = 0; i < 512; i++)
+            pd_lo[i] = ((uint64_t)i << 21) | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
+    }
 
     /* Higher-half map: VA [KERN_VMA..KERN_VMA+4MB) → PA [0..4MB).
      * KERN_VMA = 0xFFFFFFFF80000000 → PML4[511], PDPT[510].
