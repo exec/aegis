@@ -19,6 +19,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
+#include <termios.h>
+#include <crypt.h>
+#include <stdint.h>
 
 #ifndef O_TRUNC
 #define O_TRUNC 0x200
@@ -338,6 +341,72 @@ static void strip_test_binaries(void)
 
 /* ── User account setup ────────────────────────────────────────────── */
 
+/* read_password — read password with asterisk echo.
+ * Uses termios raw mode (no ECHO, no ICANON).
+ * Handles backspace. Returns length of password. */
+static int
+read_password(const char *prompt, char *buf, int bufsize)
+{
+    struct termios orig, raw;
+    int pi = 0;
+    char c;
+
+    tcgetattr(0, &orig);
+    raw = orig;
+    raw.c_lflag &= ~(unsigned)(ECHO | ICANON);
+    tcsetattr(0, TCSANOW, &raw);
+
+    printf("%s", prompt);
+    fflush(stdout);
+
+    while (pi < bufsize - 1) {
+        int n = (int)read(0, &c, 1);
+        if (n <= 0) break;
+        if (c == '\n' || c == '\r') break;
+        if (c == '\b' || c == 127) {
+            if (pi > 0) {
+                pi--;
+                write(1, "\b \b", 3);
+            }
+            continue;
+        }
+        buf[pi++] = c;
+        write(1, "*", 1);
+    }
+    buf[pi] = '\0';
+    write(1, "\n", 1);
+
+    tcsetattr(0, TCSANOW, &orig);
+    return pi;
+}
+
+/* generate_salt — create a SHA-512 crypt salt from /dev/urandom.
+ * Format: "$6$XXXXXXXXXXXX$" where X is base64-like chars. */
+static void
+generate_salt(char *buf, int bufsize)
+{
+    static const char b64[] =
+        "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    uint8_t rand_bytes[12];
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd >= 0) {
+        read(fd, rand_bytes, sizeof(rand_bytes));
+        close(fd);
+    } else {
+        memset(rand_bytes, 0, sizeof(rand_bytes));
+    }
+
+    int pos = 0;
+    int i;
+    buf[pos++] = '$';
+    buf[pos++] = '6';
+    buf[pos++] = '$';
+    for (i = 0; i < 12 && pos < bufsize - 2; i++)
+        buf[pos++] = b64[rand_bytes[i] % 64];
+    buf[pos++] = '$';
+    buf[pos] = '\0';
+}
+
 static int setup_user(void)
 {
     char username[64] = "root";
@@ -348,32 +417,19 @@ static int setup_user(void)
     printf("Username [root]: ");
     fflush(stdout);
     if (fgets(username, sizeof(username), stdin) != NULL) {
-        /* Strip newline */
         int len = (int)strlen(username);
         if (len > 0 && username[len-1] == '\n') username[len-1] = '\0';
         if (username[0] == '\0') strcpy(username, "root");
     }
 
-    printf("Password: ");
-    fflush(stdout);
-    if (fgets(password, sizeof(password), stdin) == NULL || password[0] == '\n') {
+    if (read_password("Password: ", password, sizeof(password)) == 0) {
         printf("ERROR: password cannot be empty\n");
         return -1;
     }
-    {
-        int len = (int)strlen(password);
-        if (len > 0 && password[len-1] == '\n') password[len-1] = '\0';
-    }
 
-    printf("Confirm password: ");
-    fflush(stdout);
-    if (fgets(confirm, sizeof(confirm), stdin) == NULL) {
+    if (read_password("Confirm password: ", confirm, sizeof(confirm)) == 0) {
         printf("ERROR: password confirmation failed\n");
         return -1;
-    }
-    {
-        int len = (int)strlen(confirm);
-        if (len > 0 && confirm[len-1] == '\n') confirm[len-1] = '\0';
     }
 
     if (strcmp(password, confirm) != 0) {
@@ -381,7 +437,7 @@ static int setup_user(void)
         return -1;
     }
 
-    /* Write /etc/passwd — use the entered username, shell = /bin/oksh */
+    /* Write /etc/passwd */
     {
         int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/passwd\n"); return -1; }
@@ -392,29 +448,27 @@ static int setup_user(void)
         close(fd);
     }
 
-    /* Write /etc/shadow — store password in plaintext hash format.
-     * A real system would use SHA-512 crypt, but we don't have crypt() in
-     * musl-static. The login binary compares the shadow hash field against
-     * a SHA-512 hash. For now, write the pre-computed hash from the default
-     * rootfs (forevervigilant). A proper password hashing implementation
-     * is future work.
-     *
-     * TODO: implement SHA-512 crypt in the installer or login binary. */
+    /* Write /etc/shadow with real SHA-512 hash */
     {
+        char salt[32];
+        generate_salt(salt, sizeof(salt));
+
+        char *hashed = crypt(password, salt);
+        if (!hashed) {
+            printf("ERROR: crypt() failed\n");
+            return -1;
+        }
+
         int fd = open("/etc/shadow", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/shadow\n"); return -1; }
         char line[512];
         int n = snprintf(line, sizeof(line),
-            "%s:$6$5a3b9c1d2e4f6789$fvwyIjdmyvB59hifGMRFrcwhBb4cH0.3nRy2j2LpCk."
-            "aNIFNyvYQJ36Bsl94miFbD/JHICz8O1dXoegZ0OmOg.:19000:0:99999:7:::\n",
-            username);
+                         "%s:%s:19814:0:99999:7:::\n", username, hashed);
         write(fd, line, (size_t)n);
         close(fd);
     }
 
     printf("User '%s' configured.\n", username);
-    printf("NOTE: Custom password hashing not yet implemented.\n");
-    printf("      Default password 'forevervigilant' will be used.\n");
     return 0;
 }
 

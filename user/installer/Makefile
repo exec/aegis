@@ -5,7 +5,7 @@ CFLAGS = -O2 -fno-pie -no-pie -Wl,--build-id=none
 all: installer.elf
 
 installer.elf: main.c
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -lcrypt -o $@ $<
 
 clean:
 	rm -f *.elf
