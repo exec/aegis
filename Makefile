@@ -401,6 +401,7 @@ P1_SECTORS = 120832
 # producing a disk with an empty /bin and no build error — so we list
 # them all as prerequisites here.
 DISK_USER_BINS = \
+	user/login/login.elf user/vigil/vigil \
 	user/shell/shell.elf user/ls/ls.elf user/cat/cat.elf \
 	user/echo/echo.elf user/pwd/pwd.elf user/uname/uname.elf \
 	user/clear/clear.elf user/true/true.elf user/false/false.elf \
@@ -431,7 +432,7 @@ $(DISK): $(DISK_USER_BINS)
 	    $(DISK)
 	dd if=/dev/zero of=/tmp/aegis-p1.img bs=512 count=$(P1_SECTORS) 2>/dev/null
 	/sbin/mke2fs -t ext2 -F -L aegis-root /tmp/aegis-p1.img
-	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\nmkdir /lib\n' \
+	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\nmkdir /lib\nmkdir /root\nmkdir /proc\nmkdir /dev\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
 	# Dynamic linker / shared library — written as two separate files
@@ -439,7 +440,7 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'write build/musl-dynamic/usr/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/usr/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	# User binaries (dynamically linked, loaded from ext2 at runtime)
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
@@ -448,6 +449,12 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'write /tmp/aegis-passwd /etc/passwd\nwrite /tmp/aegis-shadow /etc/shadow\nwrite /tmp/aegis-group /etc/group\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	rm -f /tmp/aegis-passwd /tmp/aegis-shadow /tmp/aegis-group
+	# /etc/hosts and /etc/profile for writable root
+	printf '127.0.0.1 localhost\n10.0.2.15 aegis\n104.18.27.120 example.com\n' > /tmp/aegis-hosts
+	printf "PS1='root@aegis:\$${PWD:-/}# '\nexport PS1\nPATH=/bin\nexport PATH\n" > /tmp/aegis-profile
+	printf 'write /tmp/aegis-hosts /etc/hosts\nwrite /tmp/aegis-profile /etc/profile\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	rm -f /tmp/aegis-hosts /tmp/aegis-profile
 	# Vigil init directories and service declarations
 	printf 'mkdir /var\nmkdir /run\nmkdir /etc/vigil\nmkdir /etc/vigil/services\nmkdir /etc/vigil/services/getty\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
