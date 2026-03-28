@@ -67,8 +67,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     /* Allocate kernel stack (STACK_PAGES kva pages — per-process higher-half VA).
      * kva pages are mapped into pd_hi (shared with user PML4s), so this
      * stack VA is reachable regardless of which PML4 is loaded in CR3.
-     * Each proc_spawn call gets a distinct VA; the single-KSTACK_VA
-     * limitation from Phase 5 is now resolved.
+     * Each proc_spawn call gets a distinct kva-mapped VA.
      * 4 pages (16KB) matches the sched task stack size and is sufficient to
      * handle deep PIT ISR → virtio → tcp_rx call chains from user mode. */
     uint8_t *kstack = kva_alloc_pages(STACK_PAGES);
@@ -198,7 +197,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->task.sp               = (uint64_t)(uintptr_t)sp;
     proc->task.stack_base       = kstack;
     proc->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + STACK_SIZE);
-    proc->task.tid              = 0xFF;   /* fixed user-process TID for Phase 5 */
+    proc->task.tid              = 0xFF;   /* placeholder TID for init process */
     proc->task.is_user          = 1;
     proc->task.stack_pages      = (uint32_t)STACK_PAGES;
 
@@ -212,7 +211,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     /* Zero cap table — all slots start empty.
      * kva_alloc_pages maps raw physical frames without zeroing; the loop is
      * required to ensure all slots start as CAP_KIND_NULL (= 0).
-     * Phase 10 is responsible for zeroing fds[] — this loop covers caps[] only. */
+     * fd_table_alloc() handles zeroing the fd table separately. */
     {
         uint32_t ci;
         for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {

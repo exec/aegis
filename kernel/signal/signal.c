@@ -302,7 +302,7 @@ signal_deliver(cpu_state_t *s)
  * Returns 0 if no signal or SIG_DFL action (sched_exit never returns for SIG_DFL).
  * Returns 1 if a user handler was installed (caller sets rax=0, does sysret).
  *
- * Phase 17 limitation: only rip/rflags/user_rsp/r8/r9/r10 are saved in
+ * Limitation: only rip/rflags/user_rsp/r8/r9/r10 are saved in
  * syscall_frame_t. rbx/rbp/r11-r15/rax/rcx/rdx/rsi/rdi from the interrupted
  * context are not restored into the signal frame gregs. Signal handlers that
  * rely on exact register restoration of these fields will not work correctly.

@@ -7,8 +7,8 @@
  * sys_open — syscall 2
  *
  * arg1 = user pointer to null-terminated path string
- * arg2 = flags (ignored in Phase 10)
- * arg3 = mode (ignored in Phase 10)
+ * arg2 = flags (O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, etc.)
+ * arg3 = mode (ignored — permissions not yet enforced)
  *
  * Returns fd on success, negative errno on failure.
  */
@@ -117,7 +117,7 @@ sys_openat(uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
     return sys_open(arg2, arg3, arg4);
 }
 
-/* ── Phase 18 syscalls ───────────────────────────────────────────────────── */
+/* ── stat / access / nanosleep ────────────────────────────────────────── */
 
 int
 stat_copy_path(uint64_t user_ptr, char *out, uint32_t bufsz)
@@ -321,7 +321,7 @@ sys_fstat(uint64_t arg1, uint64_t arg2)
 /*
  * sys_access — syscall 21
  * arg1 = user pointer to path string, arg2 = mode (F_OK=0, R_OK=4, W_OK=2, X_OK=1)
- * Phase 18: return 0 if file exists, -ENOENT otherwise (no permission checks).
+ * Returns 0 if file exists, -ENOENT otherwise (no permission checks).
  */
 uint64_t
 sys_access(uint64_t arg1, uint64_t arg2)
@@ -339,8 +339,8 @@ sys_access(uint64_t arg1, uint64_t arg2)
  * arg1 = user pointer to struct timespec { int64_t tv_sec; int64_t tv_nsec; }
  * arg2 = user pointer to remainder (NULL allowed; not populated)
  *
- * Uses sti; hlt; cli loop. PIT fires at 100 Hz (1 tick = 10ms).
- * Phase 18 limitation: starves other tasks (correct for single-process usage).
+ * Uses sti; hlt; cli loop — yields to scheduler on each PIT tick (100 Hz).
+ * Does not call sched_block; other tasks still run via preemption.
  */
 uint64_t
 sys_nanosleep(uint64_t arg1, uint64_t arg2)

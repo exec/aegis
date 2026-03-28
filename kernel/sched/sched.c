@@ -146,11 +146,8 @@ sched_exit(void)
     }
 
     /* Switch to master PML4 so kernel structures are safely accessible.
-     *
-     * Before Phase 7: required because TCBs were in identity-mapped [0..4MB),
-     * which is absent from user PML4s.
-     * After Phase 7: TCBs are kva-mapped higher-half VAs, visible from any CR3
-     * (pd_hi is shared). The switch is retained as a defensive measure. */
+     * TCBs are kva-mapped higher-half VAs visible from any CR3 (pd_hi is
+     * shared), so this is a defensive measure rather than a hard requirement. */
     vmm_switch_to(vmm_get_master_pml4());
 
     aegis_task_t *s_cur = sched_current();
@@ -513,7 +510,7 @@ sched_tick(void)
         arch_set_fs_base(next->fs_base);
 
     /*
-     * CR3 switch policy in sched_tick (Phase 5):
+     * CR3 switch policy in sched_tick:
      *
      * sched_tick always runs inside isr_common_stub which switches to the
      * master PML4 at interrupt entry.  sched_tick therefore always executes

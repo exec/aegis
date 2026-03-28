@@ -23,7 +23,7 @@ static uint32_t s_fork_count = 1;  /* starts at 1 for init */
 /*
  * sys_exit — syscall 60
  *
- * arg1 = exit code (ignored for Phase 5)
+ * arg1 = exit code (stored in proc->exit_status, returned by waitpid)
  * Calls sched_exit() which never returns.
  */
 uint64_t
@@ -62,10 +62,7 @@ sys_exit(uint64_t arg1)
     __builtin_unreachable();
 }
 
-/* ── Stubs ─────────────────────────────────────────────────────────────────
- * musl startup calls these; they do not require real implementations in
- * Phase 14 with a single short-lived process.
- */
+/* ── exit_group ────────────────────────────────────────────────────────── */
 uint64_t sys_exit_group(uint64_t arg1)
 {
     aegis_task_t *cur = sched_current();
@@ -566,9 +563,8 @@ sys_fork(syscall_frame_t *frame)
 #ifdef __aarch64__
     /* ARM64 fork child frame: ctx_switch callee-saves + a trampoline that
      * restores the EL0 exception frame and ERETs to user space.
-     * For now, build a ctx_switch frame that returns to fork_child_return
-     * which sets x0=0 (child return) and returns to user via ERET.
-     * TODO: implement fork_child_return trampoline in vectors.S */
+     * Build a ctx_switch frame that returns to fork_child_return
+     * (implemented in proc_enter.S) which sets x0=0 and ERETs. */
     extern void fork_child_return(void);
 
     /* Build SAVE_ALL_EL0 frame (34 slots) for the trampoline to restore */
@@ -749,7 +745,7 @@ retry:;
  *
  * arg1 = user pointer to null-terminated path
  * arg2 = user pointer to null-terminated argv[] array (NULL-terminated)
- * arg3 = user pointer to envp[] (ignored; Phase 15 always passes empty env)
+ * arg3 = user pointer to envp[] (ignored; empty environment always used)
  *
  * Replaces the calling process image in place:
  *   1. Copy path and argv from user.
@@ -782,7 +778,7 @@ uint64_t
 sys_execve(syscall_frame_t *frame,
            uint64_t path_uptr, uint64_t argv_uptr, uint64_t envp_uptr)
 {
-    (void)envp_uptr;  /* Phase 15: empty environment */
+    (void)envp_uptr;  /* empty environment — envp not yet supported */
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     /* Allocate argv working area from kva — too large for kernel stack. */
@@ -1256,7 +1252,7 @@ sys_getpgid(uint64_t pid_arg)
 }
 
 /* sys_umask — syscall 95: set file creation mask; return previous value.
- * Not yet wired to ext2 create (Phase 26). */
+ * Not yet wired to ext2 create. */
 uint64_t
 sys_umask(uint64_t mask)
 {

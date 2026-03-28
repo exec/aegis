@@ -105,7 +105,7 @@ sys_rt_sigprocmask(uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
  * to restore the interrupted context, restores signal_mask from uc_sigmask,
  * and returns SIGRETURN_MAGIC to tell syscall_entry.asm to skip signal delivery.
  *
- * Phase 17 limitation: only rip/rflags/rsp/r8/r9/r10 are restored through the
+ * Limitation: only rip/rflags/rsp/r8/r9/r10 are restored through the
  * frame mechanism. rbx/rbp/r12-r15/rax/rcx/rdx/rsi/rdi survive through the C
  * call chain per SysV ABI (callee-saved or not used by the handler).
  */

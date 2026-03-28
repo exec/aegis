@@ -314,8 +314,8 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
  * arg1 = addr (must be page-aligned)
  * arg2 = length
  *
- * Frees physical pages for [addr, addr+len). Does not reclaim VA
- * (bump allocator — VA is not reused in Phase 14).
+ * Frees physical pages for [addr, addr+len) and returns VA to the
+ * per-process freelist for reuse by future mmap calls.
  * Returns 0 on success, -EINVAL if addr is not page-aligned.
  */
 uint64_t
