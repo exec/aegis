@@ -4,14 +4,19 @@
 #include "kbd.h"
 #include "ps2_mouse.h"
 #include "acpi.h"
+#include "lapic.h"
+#include "ioapic.h"
 #include "printk.h"
 #include "arch.h"
 
-/* 48 entries: vectors 0x00-0x1F (CPU exceptions) + 0x20-0x2F (IRQs) */
-static aegis_idt_gate_t s_idt[48];
+/* 256 entries: full IDT covering all x86-64 interrupt vectors */
+static aegis_idt_gate_t s_idt[256];
 
 /* Prototypes for the 48 ISR stubs defined in isr.asm */
 extern void *isr_stubs[48];
+
+/* LAPIC spurious vector stub (vector 0xFF) defined in isr.asm */
+extern void *isr_stub_spurious;
 
 static void
 idt_gate_set(uint8_t vec, void *handler)
@@ -40,6 +45,10 @@ idt_init(void)
     for (int i = 0; i < 48; i++)
         idt_gate_set((uint8_t)i, isr_stubs[i]);
 
+    /* Vector 0xFF — LAPIC spurious interrupt.  Per Intel spec, no EOI must
+     * be sent for spurious interrupts; isr_dispatch returns immediately. */
+    idt_gate_set(0xFF, isr_stub_spurious);
+
     /* #DF (double fault, vector 8) uses IST1 — dedicated stack prevents
      * triple fault when #DF occurs due to stack overflow or RSP corruption.
      * IST field value 1 in the gate maps to tss.ist[0] (Intel 1-indexed,
@@ -47,7 +56,7 @@ idt_init(void)
     s_idt[8].ist = 1;
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
-    printk("[IDT] OK: 48 vectors installed\n");
+    printk("[IDT] OK: 256 vectors installed\n");
 }
 
 /* Walk the RBP frame-pointer chain and print return addresses.
@@ -106,6 +115,9 @@ isr_dispatch(cpu_state_t *s)
         if (s->cs == 0x08)
             panic_backtrace(s->rbp);
         for (;;) {}
+    } else if (s->vector == 0xFF) {
+        /* LAPIC spurious interrupt — per Intel spec, do NOT send EOI. */
+        return;
     } else if (s->vector < 0x30) {
         /* Hardware IRQ: send EOI BEFORE the handler.
          * pit_handler calls sched_tick which calls ctx_switch — if we
@@ -113,17 +125,21 @@ isr_dispatch(cpu_state_t *s)
          * obligation and IRQ0 goes dark until that task is rescheduled. */
         uint8_t irq = (uint8_t)(s->vector - 0x20);
 
-        /* Guard against spurious IRQ7 (PIC1) and IRQ15 (PIC2 cascade).
-         * Per 8259A spec: do NOT send EOI for spurious interrupts — doing
-         * so clears the ISR bit of a real in-service interrupt.
-         * For spurious IRQ15 (PIC2), PIC1 still received the cascade
-         * interrupt on IRQ2, so we must EOI PIC1 only. */
-        if ((irq == 7 || irq == 15) && !pic_irq_is_real(irq)) {
-            if (irq == 15)
-                outb(0x20, 0x20);   /* spurious IRQ15: EOI to PIC1 only */
-            /* No EOI to PIC2 for spurious IRQ15; no EOI at all for spurious IRQ7. */
+        if (lapic_active()) {
+            lapic_eoi();
         } else {
-            pic_send_eoi(irq);
+            /* Guard against spurious IRQ7 (PIC1) and IRQ15 (PIC2 cascade).
+             * Per 8259A spec: do NOT send EOI for spurious interrupts — doing
+             * so clears the ISR bit of a real in-service interrupt.
+             * For spurious IRQ15 (PIC2), PIC1 still received the cascade
+             * interrupt on IRQ2, so we must EOI PIC1 only. */
+            if ((irq == 7 || irq == 15) && !pic_irq_is_real(irq)) {
+                if (irq == 15)
+                    outb(0x20, 0x20);   /* spurious IRQ15: EOI to PIC1 only */
+                /* No EOI to PIC2 for spurious IRQ15; no EOI at all for spurious IRQ7. */
+            } else {
+                pic_send_eoi(irq);
+            }
         }
 
         if      (s->vector == 0x20) { pit_handler(); }

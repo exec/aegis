@@ -9,6 +9,8 @@
 #include "vfs.h"
 #include "console.h"
 #include "acpi.h"
+#include "lapic.h"
+#include "ioapic.h"
 #include "pcie.h"
 #include "nvme.h"
 #include "../fs/ext2.h"
@@ -87,6 +89,8 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
+    lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
+    ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */

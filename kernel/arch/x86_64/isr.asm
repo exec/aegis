@@ -105,6 +105,10 @@ ISR_ERR   29   ; #VC VMM communication
 ISR_ERR   30   ; #SX security exception
 ISR_NOERR 31   ; reserved
 
+; LAPIC spurious interrupt vector 0xFF — must NOT send EOI per Intel spec.
+; isr_dispatch returns immediately for vector 0xFF.
+ISR_NOERR 0xFF
+
 ; Hardware IRQs 0x20-0x2F (remapped by PIC)
 ISR_NOERR 0x20 ; IRQ0 — PIT timer
 ISR_NOERR 0x21 ; IRQ1 — PS/2 keyboard
@@ -228,3 +232,8 @@ isr_stubs:
     dq isr_0x24, isr_0x25, isr_0x26, isr_0x27
     dq isr_0x28, isr_0x29, isr_0x2A, isr_0x2B
     dq isr_0x2C, isr_0x2D, isr_0x2E, isr_0x2F
+
+; LAPIC spurious vector stub — idt.c references as: extern void *isr_stub_spurious;
+global isr_stub_spurious
+isr_stub_spurious:
+    dq isr_0xFF

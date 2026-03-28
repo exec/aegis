@@ -5,7 +5,7 @@
 [VMM] OK: mapped-window allocator active
 [KVA] OK: kernel virtual allocator active
 [CAP] OK: capability subsystem initialized
-[IDT] OK: 48 vectors installed
+[IDT] OK: 256 vectors installed
 [PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
 [PIT] OK: timer at 100 Hz
 [KBD] OK: PS/2 keyboard ready
@@ -22,6 +22,7 @@
 [INITRD] OK: 20 files registered
 [ACPI] OK: MADT parsed, 1 CPUs, no MCFG (legacy machine)
 [ACPI] OK: power button enabled (SCI IRQ 9, PM1a=0x600)
+[LAPIC] OK: id=0 base=0xfee00000
 [PCIE] OK: skipped (no ECAM)
 [EXT2] OK: mounted ramdisk0, 60416 blocks, 15104 inodes
 [CAP] OK: 9 capabilities granted to init
