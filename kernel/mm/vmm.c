@@ -710,10 +710,9 @@ int
 vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
 {
     uint64_t pml4i, pdpti, pdi, pti;
-    uint32_t batch = 0, copied = 0, skipped = 0;
+    uint32_t batch = 0;
     #define FORK_BATCH_SIZE 32
 
-    printk("[FORK] vmm_copy_user_pages: starting\n");
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
 
     for (pml4i = 0; pml4i < 256; pml4i++) {
@@ -746,7 +745,7 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
                     /* Skip MMIO pages (WC/UC) — framebuffer, device MMIO.
                      * Copying MMIO via memcpy is extremely slow or can
                      * stall the CPU.  Child doesn't need these. */
-                    if (pte & (VMM_FLAG_WC | VMM_FLAG_UCMINUS)) { skipped++; continue; }
+                    if (pte & (VMM_FLAG_WC | VMM_FLAG_UCMINUS)) continue;
 
                     uint64_t src_phys = pte & ~0x8000000000000FFFULL;
                     /* Preserve all PTE flags including bit 63 (NX/XD bit). */
@@ -771,7 +770,6 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
                                   (pdi   << 21) | (pti   << 12);
 
                     vmm_map_user_page_nolock(dst_pml4, va, dst_phys, flags);
-                    copied++;
 
                     /* Yield to interrupts periodically so the system
                      * stays responsive during large forks. */
@@ -785,8 +783,6 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
         }
     }
     spin_unlock_irqrestore(&vmm_window_lock, fl);
-    printk("[FORK] vmm_copy_user_pages: done, copied=%u skipped=%u\n",
-           copied, skipped);
     return 0;
 }
 
