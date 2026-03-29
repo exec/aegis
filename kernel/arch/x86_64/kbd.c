@@ -5,6 +5,7 @@
 #include "random.h"
 #include "signal.h"
 #include "tty.h"
+#include "sched.h"
 #include "spinlock.h"
 
 #define KBD_DATA 0x60
@@ -16,6 +17,9 @@ static volatile uint32_t s_head = 0;  /* next write position */
 static volatile uint32_t s_tail = 0;  /* next read position  */
 
 static spinlock_t kbd_lock = SPINLOCK_INIT;
+
+/* Task blocked on kbd_read_interruptible — woken by buf_push */
+static aegis_task_t *s_kbd_waiter = 0;
 
 /* Shift state */
 static volatile int s_shift = 0;
@@ -57,6 +61,11 @@ buf_push(char c)
     if (next != s_tail) {   /* drop if full */
         s_buf[s_head] = c;
         s_head = next;
+    }
+    /* Wake any task blocked in kbd_read_interruptible */
+    if (s_kbd_waiter) {
+        sched_wake(s_kbd_waiter);
+        s_kbd_waiter = 0;
     }
     spin_unlock_irqrestore(&kbd_lock, fl);
 }
@@ -149,10 +158,10 @@ kbd_read(void)
      * lost-wakeup race.  cli restores the IF=0 invariant for the remainder
      * of the syscall.
      */
-    __asm__ volatile("sti");
-    while (!kbd_poll(&c))
-        __asm__ volatile("hlt");
-    __asm__ volatile("cli");
+    while (!kbd_poll(&c)) {
+        s_kbd_waiter = sched_current();
+        sched_block();
+    }
     return c;
 }
 
@@ -234,18 +243,15 @@ kbd_read_interruptible(int *interrupted)
 {
     char c = 0;
     *interrupted = 0;
-    __asm__ volatile("sti");
     for (;;) {
-        if (kbd_poll(&c)) {
-            __asm__ volatile("cli");
+        if (kbd_poll(&c))
             return c;
-        }
-        /* Check for pending signals before halting — use canonical helper */
         if (signal_check_pending()) {
-            __asm__ volatile("cli");
             *interrupted = 1;
             return '\0';
         }
-        __asm__ volatile("hlt");
+        /* Block until kbd ISR pushes a character and wakes us */
+        s_kbd_waiter = sched_current();
+        sched_block();
     }
 }

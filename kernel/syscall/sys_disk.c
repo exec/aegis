@@ -187,9 +187,8 @@ sys_fb_map(uint64_t arg1)
     if (!fb_get_phys_info(&fb_phys, &width, &height, &pitch))
         return (uint64_t)-19;  /* ENODEV — no framebuffer */
 
-    /* TODO: re-enable fb_lock_compositor once lumen rendering is stable.
-     * Disabled for debugging — allows printk/write(2,...) to remain visible. */
-    /* fb_lock_compositor(); */
+    /* Suppress kernel text output to FB — compositor now owns it */
+    fb_lock_compositor();
 
     uint32_t fb_bytes = pitch * height;
     uint32_t fb_pages = (fb_bytes + 0xFFF) / 0x1000;
