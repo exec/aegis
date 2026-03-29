@@ -110,26 +110,17 @@ main(void)
     int fb_h = (int)fb_info.height;
     int pitch_px = (int)(fb_info.pitch / (fb_info.bpp / 8));
 
-    /* Fork the terminal child BEFORE allocating the backbuffer.
-     * fork() copies the entire address space page-by-page via the
-     * kernel window map.  The backbuffer is ~8MB (~2000 pages) which
-     * adds 30+ seconds to fork on bare metal.  By forking first,
-     * we only copy ~300 pages (ELF + stack + small heap).
-     * If PTY setup fails, terminal_create still returns a valid
-     * window with an error message — lumen always renders. */
-    int term_pw = fb_w * 3 / 5;
-    int term_ph = fb_h * 3 / 5;
-    int term_cols = term_pw / FONT_W;
-    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
-    int master_fd = -1;
-    glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
-
-    /* Now allocate the large backbuffer — child is already forked */
+    /* Allocate backbuffer FIRST — before any fork.
+     * After fork, the child's execve holds vmm_window_lock for a long
+     * time (freeing forked pages + loading ELF).  Any parent syscall
+     * that touches vmm (malloc→mmap, open, etc.) blocks on that lock.
+     * By doing ALL allocations before fork, the parent's post-fork
+     * path is pure userspace memory operations — no kernel contention. */
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
     if (!backbuf)
         return 1;
 
-    /* Set stdin to raw mode: no echo, no canonical, no signals */
+    /* Set stdin to raw mode before fork — avoids post-fork ioctl */
     tcgetattr(0, &s_orig_termios);
     atexit(restore_terminal);
     struct termios raw = s_orig_termios;
@@ -138,31 +129,40 @@ main(void)
     raw.c_cc[VTIME] = 0;
     tcsetattr(0, TCSANOW, &raw);
 
-    /* Open mouse device */
+    /* Open mouse device before fork */
     int mouse_fd = open("/dev/mouse", O_RDONLY);
-
-    /* Set mouse fd to non-blocking */
     if (mouse_fd >= 0)
         fcntl(mouse_fd, F_SETFL, O_NONBLOCK);
 
-    /* Init compositor and cursor */
+    /* Init compositor and cursor before fork — pure memory ops */
     compositor_t comp;
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
 
-    /* Add terminal window */
+    /* Create terminal window (includes fork).
+     * Fork copies ~3000 pages (backbuffer + FB skip) which takes
+     * several seconds on bare metal.  After fork returns, the child
+     * runs execve in the background while the parent continues
+     * with pure memory operations (no vmm contention). */
+    int term_pw = fb_w * 3 / 5;
+    int term_ph = fb_h * 3 / 5;
+    int term_cols = term_pw / FONT_W;
+    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
+    int master_fd = -1;
+    glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
+
+    /* Everything below is pure userspace memory ops — no syscalls that
+     * contend with the child's execve on vmm_window_lock. */
     if (term_win) {
         term_win->x = (fb_w - term_win->surf_w) / 2;
         term_win->y = (fb_h - term_win->surf_h) / 2;
         comp_add_window(&comp, term_win);
     }
 
-    /* Create system info window */
     glyph_window_t *info_win = create_info_window(fb_w, fb_h);
     if (info_win)
         comp_add_window(&comp, info_win);
 
-    /* Focus and raise terminal above info window */
     if (term_win) {
         comp_raise_window(&comp, term_win);
         if (comp.focused)
@@ -171,7 +171,8 @@ main(void)
         term_win->focused_window = 1;
     }
 
-    /* Do initial full composite */
+    /* Do initial full composite — writes to backbuffer + memcpy to FB.
+     * All memory is already mapped, no syscalls needed. */
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
@@ -228,8 +229,7 @@ main(void)
                 activity = 1;
         }
 
-        /* Composite and cursor update. Only hide/show cursor when there's
-         * actual activity — idle hide/show causes WC read flicker. */
+        /* Composite and cursor update */
         if (activity) {
             cursor_hide();
             comp_composite(&comp);

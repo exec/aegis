@@ -199,18 +199,40 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     /* Set master non-blocking before fork */
     fcntl(master_fd, F_SETFL, O_NONBLOCK);
 
-    /* Fork child shell — disabled for debugging.
-     * PTY is open and unlocked but no child process uses it.
-     * This isolates whether the fork/child is what blocks rendering. */
-    (void)slave_fd;
-    (void)slave_path;
-    pid = 0; /* suppress unused warning */
-    (void)pid;
+    /* Fork child shell */
+    pid = fork();
+    if (pid < 0) {
+        fail_reason = "fork failed";
+        goto pty_failed;
+    }
 
-    /* Show that PTY is ready but shell not started */
+    if (pid == 0) {
+        /* child */
+        close(master_fd);
+        setsid();
+        slave_fd = open(slave_path, O_RDWR);
+        if (slave_fd < 0)
+            _exit(1);
+        dup2(slave_fd, 0);
+        dup2(slave_fd, 1);
+        dup2(slave_fd, 2);
+        if (slave_fd > 2)
+            close(slave_fd);
+
+        char *argv[] = {"/bin/oksh", NULL};
+        char *envp[] = {
+            "TERM=dumb",
+            "HOME=/root",
+            "PATH=/bin",
+            NULL
+        };
+        execve("/bin/oksh", argv, envp);
+        _exit(1);
+    }
+
+    /* parent — PTY succeeded */
     tp->master_fd = master_fd;
     *master_fd_out = master_fd;
-    term_grid_puts(tp, "PTY ready, shell disabled (debug)\n");
     term_render_content(win);
     return win;
 
