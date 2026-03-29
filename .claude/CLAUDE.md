@@ -295,7 +295,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | USB HID mouse (Phase 36) | ✅ | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **ThinkPad Zen 2 bare-metal PASS** |
 | Lumen compositor (Phase 37) | ✅ | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **ThinkPad Zen 2 bare-metal PASS** (slow rendering — optimization needed) |
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
-| Glyph + Lumen optimization (Phase 39) | 🔶 | libglyph.a widget toolkit (14 source files); dirty-rect compositor; mouse batching; skip-if-clean; fb_lock_compositor; i8042 flush; **PTY terminal broken** (slave unlock hangs lumen) |
+| Glyph + Lumen optimization (Phase 39) | 🔶 | libglyph.a widget toolkit (14 source files); dirty-rect compositor; mouse batching; skip-if-clean; fb_lock_compositor; i8042 flush; **BLOCKED: scheduler starvation** — see Phase 39 constraints |
 
 ### Known deviations
 
@@ -626,7 +626,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ## Phase 39 — Forward Constraints
 
-**Phase 39 status: 🔶 Code complete except PTY terminal. Needs QEMU debug + bare-metal retest.**
+**Phase 39 status: 🔶 BLOCKED. Lumen compositor renders without terminal, but scheduler starvation prevents rendering when a child process exists.**
 
 **What was implemented:**
 - Glyph widget toolkit (`user/glyph/`, 14 source files, libglyph.a): retained-mode widget tree with dirty-rect propagation. Widget types: label, button, textfield, checkbox, listview, scrollbar, image, progress, menubar, tabs. HBox/VBox layout containers. Window chrome (titlebar gradient, traffic-light close/min/max buttons, border, shadow).
@@ -635,30 +635,57 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 - Skip-if-clean: cursor hide/show only when there's actual input activity (eliminates WC read flicker on idle).
 - `fb_lock_compositor()`: kernel fb.c flag suppresses printk FB writes when compositor owns framebuffer.
 - i8042 flush after IOAPIC init: drains stale scancodes that held IRQ1 asserted, fixes ~2/3 cold boot keyboard failure on ThinkPad.
+- Kernel command line parsing (multiboot2 tag type 1) + /proc/cmdline.
+- Vigil boot mode filtering (text/graphical services).
+- Non-blocking terminal_create (graceful PTY failure path).
+- Fork MMIO page skip (VMM_FLAG_WC/UC in vmm_copy_user_pages).
+- Fork batch yield (release vmm_window_lock every 32 pages).
 
-**Forward constraints:**
+**THE BRICK WALL — Scheduler starvation on single-core:**
 
-1. **PTY terminal hang (CRITICAL, UNRESOLVED).** When `TIOCSPTLCK` unlocks the PTY slave and oksh starts, lumen hangs completely — no GUI renders. The unlock code is commented out in `user/lumen/terminal.c:120-126`. Without unlock, terminal window renders chrome but has no shell. Root cause unknown — needs `make gdb` debugging with breakpoints in pty.c (pts_open, master_read_fn) and oksh startup path. Possible causes: (a) oksh's job control startup (tcgetpgrp, SIGTTIN) blocks the child; (b) parent's main loop somehow blocks despite O_NONBLOCK on all fds; (c) session/controlling-terminal interaction between lumen's console TTY and child's setsid().
+The lumen compositor renders perfectly when terminal_create does NOT fork a child. The moment a child process exists (even one that immediately calls nanosleep(60s)), the parent (lumen) can never complete its first composite render. The child steals enough CPU that the full-screen fill + WC framebuffer memcpy (~8MB to MMIO) never finishes.
 
-2. **No ANSI escape parsing.** Terminal renders raw text only. Programs emitting ANSI codes display garbage. VT100 parser is future work.
+Root cause identified: `sys_nanosleep` and PTY read functions used `arch_wait_for_irq()` (sti;hlt;cli) busy-wait loops instead of `sched_block()`. Tasks stayed TASK_RUNNING while "sleeping", consuming 50% of scheduler timeslices on single-core even when doing no useful work.
 
-3. **No window resize.** Fixed-size windows. Resize requires client notification + buffer realloc.
+**Fix attempted but UNTESTED (may break boot oracle):**
+- Added `sleep_deadline` field to `aegis_task_t`
+- `sched_tick` checks deadlines, auto-wakes expired sleepers
+- `sys_nanosleep` sets deadline + calls `sched_block()` (zero CPU when sleeping)
+- PTY `pty_slave_read_raw` and `master_read_fn` use `sched_block()` + `sched_wake()` pairs
+- `pty_slave_write_out` wakes master reader, `master_write_fn` wakes slave reader
+- Close handlers wake the other side
 
-4. **Static clock.** No RTC syscall. Taskbar shows "12:00 AM" always.
+**WARNING:** The `sched_block`-based nanosleep produced 0 serial output on `make test` — the kernel may crash at boot. The `sched_tick` sleep deadline loop may have an issue (first-tick edge case, circular list traversal, or struct layout change breaking ctx_switch). This needs careful debugging before it can be committed as stable.
 
-5. **No compositor keyboard shortcuts.** Keyboard is raw ASCII from stdin. No Alt+Tab, no window switching via keyboard. Mouse-only window switching.
+**What works on bare metal (ThinkPad X13 Zen 2) WITHOUT terminal fork:**
+- Full GUI renders: dark background, window chrome, system info, taskbar
+- Mouse cursor, window close, window drag
+- Keyboard input to focused window
+- Compositor dirty-rect optimization
 
-6. **Polling loop, not event-driven.** 16ms nanosleep = ~60fps max / ~16ms input latency. Acceptable for v0.1.
+**Forward constraints (unchanged):**
 
-7. **No multi-process clients.** Lumen v0.1 is monolithic. External apps cannot create windows. Requires Phase 42 IPC (MAP_SHARED pixel buffers + fd passing).
+1. **No ANSI escape parsing.** Terminal renders raw text only.
+2. **No window resize.** Fixed-size windows.
+3. **Static clock.** No RTC syscall.
+4. **No compositor keyboard shortcuts.** Mouse-only window switching.
+5. **Polling loop, not event-driven.** 16ms nanosleep.
+6. **No multi-process clients.** Requires Phase 42 IPC.
+7. **Widget toolkit is libglyph.a (static).** Dynamic version deferred.
+8. **Desktop background is solid fill.** Gradient too slow at native resolution (draw_px per-pixel bounds check).
+9. **fb_lock_compositor disabled.** Temporarily commented out for debugging.
 
-8. **Widget toolkit is libglyph.a (static), not libglyph.so (dynamic).** Linked statically into lumen. Dynamic library version deferred until external clients exist (Phase 42).
+**To unblock Phase 39, the scheduler must be fixed so that:**
+1. `sys_nanosleep` properly blocks (TASK_BLOCKED, zero CPU)
+2. PTY read properly blocks (TASK_BLOCKED, woken by writer)
+3. `arch_wait_for_irq` is ONLY used by `task_idle` — nowhere else
+4. `make test` passes after these changes
 
-9. **Window drag triggers full-region gradient redraw.** Moving windows is visually slow because titlebar gradient is re-rendered each frame. Could cache the gradient to a bitmap.
+This is a prerequisite for any GUI work including Phase 40 (Citadel).
 
 ---
 
-*Last updated: 2026-03-28 — Phase 39 code complete. Glyph toolkit + dirty-rect compositor working on bare metal. PTY terminal shell blocked on unlock hang. Bare-metal retest pending after PTY fix.*
+*Last updated: 2026-03-29 — Phase 39 BLOCKED on scheduler starvation. Compositor works without terminal fork. sched_block fix attempted but untested (may crash at boot). ARM64 port catch-up is next priority while scheduler fix is debugged.*
 
 ---
 
