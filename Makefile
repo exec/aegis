@@ -639,27 +639,11 @@ test:
 clean:
 	rm -rf $(BUILD)
 	rm -f .init_stamp_*
-	$(MAKE) -C user/init clean 2>/dev/null; true
-	$(MAKE) -C user/hello clean
-	$(MAKE) -C user/shell clean
-	$(MAKE) -C user/ls clean
-	$(MAKE) -C user/cat clean
-	$(MAKE) -C user/echo clean
-	$(MAKE) -C user/pwd clean
-	$(MAKE) -C user/uname clean
-	$(MAKE) -C user/clear clean
-	$(MAKE) -C user/true clean
-	$(MAKE) -C user/false clean
-	$(MAKE) -C user/wc clean
-	$(MAKE) -C user/grep clean
-	$(MAKE) -C user/sort clean
-	$(MAKE) -C user/mkdir clean
-	$(MAKE) -C user/touch clean
-	$(MAKE) -C user/rm clean
-	$(MAKE) -C user/cp clean
-	$(MAKE) -C user/mv clean
-	$(MAKE) -C user/whoami clean 2>/dev/null; true
-	$(MAKE) -C user/oksh clean 2>/dev/null; true
-	$(MAKE) -C user/login clean 2>/dev/null; true
-	$(MAKE) -C user/dynlink_test clean 2>/dev/null; true
+	@for d in user/*/; do \
+		[ -f "$$d/Makefile" ] && $(MAKE) -C "$$d" clean 2>/dev/null; \
+	done; true
+	rm -f user/vigil/vigil user/vigictl/vigictl user/login/login.elf
+	rm -f user/dhcp/dhcp user/chronos/chronos user/lumen/lumen
+	rm -f user/httpd/httpd user/installer/installer
+	rm -f user/fb_test/fb_test user/mouse_test/mouse_test
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml

@@ -192,10 +192,7 @@ syscall_entry:
 proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — flushes TLB
-    ; SWAPGS removed — was causing iretq to read RIP=0 on AMD Zen 2.
-    ; The ISR entry path (isr_common_stub) handles SWAPGS on the return
-    ; from the first interrupt, and syscall_entry handles it on SYSCALL.
-    ; proc_enter_user only runs once per process (first ring-3 entry).
+    swapgs            ; switch from kernel GS.base (percpu) to user GS.base
     iretq
 
 ; fork_child_return was removed in Phase 15 fix.

@@ -8,6 +8,22 @@ reference/
 kernel/*_bin.c
 kernel/*_blob.c
 .init_stamp_*
+
+# User-space built binaries — NEVER track these.
+# The stale-binary catastrophe of 2026-03-28 was caused by git-tracked
+# vigil/vigictl binaries surviving make clean and git checkout.
 user/vigil/vigil
 user/vigictl/vigictl
 user/dhcp/dhcp
+user/chronos/chronos
+user/lumen/lumen
+user/httpd/httpd
+user/installer/installer
+user/login/login.elf
+user/fb_test/fb_test
+user/mouse_test/mouse_test
+user/thread_test/thread_test
+user/mmap_test/mmap_test
+user/proc_test/proc_test
+user/pty_test/pty_test
+user/dynlink_test/dynlink_test

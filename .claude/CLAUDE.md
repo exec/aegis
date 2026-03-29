@@ -11,9 +11,27 @@
 
 After completing any phase, STOP and insist on a bare-metal test before starting the next phase. If the user asks to continue without testing, **refuse**. Say: "We need to test this on the ThinkPad first. CLAUDE.md requires a bare-metal gate between phases."
 
-This is non-negotiable. QEMU is not sufficient — it hides real bugs (PIE binaries, IOAPIC routing, LAPIC timer interactions, musl version differences, AT_RANDOM requirements). We lost an entire day debugging 3 phases of accumulated untested changes. One phase at a time, tested on hardware, then proceed.
+This is non-negotiable. QEMU is not sufficient — it hides real bugs. One phase at a time, tested on hardware, then proceed. If hardware is unavailable, do audits/cleanup/docs — NOT new features.
 
-If hardware is unavailable, do audits/cleanup/docs — NOT new features.
+## MANDATORY: Build Hygiene — Nuclear Clean Before Every ISO
+
+**ALWAYS use this exact sequence when building an ISO for bare-metal testing:**
+
+```bash
+git clean -fdx --exclude=references --exclude=.worktrees
+rm -f user/vigil/vigil user/vigictl/vigictl user/login/login.elf
+make clean
+make INIT=vigil iso
+```
+
+**Why every step matters:**
+1. `git clean -fdx` — removes ALL untracked files. `make clean` only removes `build/`. Stale `.o` files, generated `*_bin.c` files, and old binaries in `user/*/` survive `make clean`.
+2. `rm -f user/vigil/vigil ...` — these are GIT-TRACKED binaries. `git clean` doesn't touch them. `make clean` doesn't touch them. They MUST be explicitly deleted or they persist across checkout/build cycles.
+3. `make INIT=vigil iso` — the default `INIT` is `oksh`, NOT `vigil`. Without `INIT=vigil`, the ISO boots into oksh, not the vigil init system. Plain `make iso` embeds the WRONG init binary.
+
+**The stale binary catastrophe (2026-03-28):** We spent an entire day debugging phantom panics caused by stale `user/vigil/vigil` (a git-tracked PIE binary from a different build environment) surviving every `make clean` and `git checkout`. Every "fix" we tested was running the same broken binary. Five AI agents, dozens of ISOs, hours of bisecting — all because `make clean` doesn't clean user binaries and `INIT=vigil` was never passed.
+
+**NEVER trust `make clean` alone. NEVER omit `INIT=vigil`. ALWAYS nuke user binaries.**
 
 ---
 
