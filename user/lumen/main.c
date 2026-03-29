@@ -149,9 +149,9 @@ main(void)
     int term_cols = term_pw / FONT_W;
     int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
     int master_fd = -1;
-    write(2, "lumen: term create\n", 19);
-    glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
-    write(2, "lumen: term done\n", 17);
+    write(2, "lumen: term skip (debug)\n", 25);
+    glyph_window_t *term_win = NULL; /* skip terminal for now — fork hangs */
+    (void)term_cols; (void)term_rows;
     if (term_win) {
         term_win->x = (fb_w - term_win->surf_w) / 2;
         term_win->y = (fb_h - term_win->surf_h) / 2;
