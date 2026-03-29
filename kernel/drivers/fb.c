@@ -583,6 +583,8 @@ fb_check_amd(void)
 /* ── Panic Bluescreen ──────────────────────────────────────────────────── */
 
 #include "terminus20.h"
+#include "logo_panic.h"
+#include "logo_boot.h"
 
 #define PANIC_BG    0x001133AAu   /* deep blue */
 #define PANIC_FG    0x00FFFFFFu   /* white */
@@ -634,6 +636,38 @@ _panic_draw_hex(uint32_t *px_x, uint32_t px_y, uint64_t val, uint32_t fg)
     _panic_draw_string(px_x, px_y, buf, fg);
 }
 
+/* Blit an RGBA logo onto the framebuffer with alpha blending.
+ * Pixel format: 0xAARRGGBB. bg = background color for blending. */
+static void
+_blit_logo_rgba(const uint32_t *data, uint32_t logo_w, uint32_t logo_h,
+                uint32_t dst_x, uint32_t dst_y, uint32_t bg)
+{
+    uint32_t bg_r = (bg >> 16) & 0xFF;
+    uint32_t bg_g = (bg >> 8)  & 0xFF;
+    uint32_t bg_b =  bg        & 0xFF;
+    uint32_t y, x;
+    for (y = 0; y < logo_h; y++) {
+        if (dst_y + y >= s_fb_height) break;
+        for (x = 0; x < logo_w; x++) {
+            if (dst_x + x >= s_fb_width) break;
+            uint32_t px = data[y * logo_w + x];
+            uint32_t a = (px >> 24) & 0xFF;
+            if (a == 0) continue;  /* fully transparent */
+            uint32_t r = (px >> 16) & 0xFF;
+            uint32_t g = (px >> 8)  & 0xFF;
+            uint32_t b =  px        & 0xFF;
+            if (a < 255) {
+                /* Alpha blend: out = fg * a/255 + bg * (255-a)/255 */
+                r = (r * a + bg_r * (255 - a)) / 255;
+                g = (g * a + bg_g * (255 - a)) / 255;
+                b = (b * a + bg_b * (255 - a)) / 255;
+            }
+            uint32_t idx = (dst_y + y) * s_pitch_px + (dst_x + x);
+            s_fb_va[idx] = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 void
 panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
                  uint64_t cr2, uint64_t rsp, uint64_t rbp,
@@ -658,10 +692,10 @@ panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
     uint32_t y = 60;
     uint32_t x;
 
-    /* Sad face */
-    x = margin_x;
-    _panic_draw_string(&x, y, ":(", PANIC_TITLE);
-    y += PANIC_FONT_H * 2;
+    /* Logo in top-left */
+    _blit_logo_rgba(logo_panic_data, LOGO_PANIC_W, LOGO_PANIC_H,
+                    margin_x, y, PANIC_BG);
+    y += LOGO_PANIC_H + PANIC_FONT_H;
 
     /* Title */
     x = margin_x;
@@ -737,4 +771,42 @@ panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
 halt:
     for (;;)
         __asm__ volatile("cli; hlt");
+}
+
+/* ── Boot Splash ───────────────────────────────────────────────────────── */
+
+#define SPLASH_BG 0x00111111u  /* dark charcoal */
+
+void
+fb_boot_splash(void)
+{
+    if (!fb_available || s_fb_va == (void *)0)
+        return;
+
+    /* Fill screen with dark background */
+    {
+        uint32_t total = s_fb_height * s_pitch_px;
+        uint32_t i;
+        for (i = 0; i < total; i++)
+            s_fb_va[i] = SPLASH_BG;
+    }
+
+    /* Center the logo */
+    uint32_t lx = (s_fb_width  > LOGO_BOOT_W) ? (s_fb_width  - LOGO_BOOT_W) / 2 : 0;
+    uint32_t ly = (s_fb_height > LOGO_BOOT_H) ? (s_fb_height - LOGO_BOOT_H) / 2 - 40 : 0;
+
+    _blit_logo_rgba(logo_boot_data, LOGO_BOOT_W, LOGO_BOOT_H,
+                    lx, ly, SPLASH_BG);
+
+    /* Tagline below logo */
+    {
+        const char *tag = "capability-based security kernel";
+        uint32_t tlen = 0;
+        const char *p = tag;
+        while (*p++) tlen++;
+        uint32_t tx = (s_fb_width > tlen * PANIC_FONT_W)
+                      ? (s_fb_width - tlen * PANIC_FONT_W) / 2 : 0;
+        uint32_t ty = ly + LOGO_BOOT_H + 30;
+        _panic_draw_string(&tx, ty, tag, 0x00888888u);
+    }
 }

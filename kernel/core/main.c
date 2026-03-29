@@ -69,6 +69,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     kva_init();             /* kernel virtual allocator — [KVA] OK           */
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
     fb_init();              /* linear framebuffer — [FB] OK or silent        */
+    fb_boot_splash();       /* show Aegis logo during boot                   */
     cap_init();             /* capability stub — [CAP] OK                    */
     smp_percpu_init_bsp();  /* per-CPU data — [SMP] OK                       */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */

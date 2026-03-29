@@ -43,6 +43,10 @@ int fb_get_phys_info(uint64_t *phys_out, uint32_t *width_out,
  * Called by sys_fb_map when a user compositor maps the FB. */
 void fb_lock_compositor(void);
 
+/* fb_boot_splash — display the Aegis logo centered on a dark background.
+ * Called once during early boot, after fb_init(). */
+void fb_boot_splash(void);
+
 /* panic_bluescreen — take over the framebuffer and display a panic screen.
  * Draws a blue background with Terminus font showing exception details.
  * Halts the CPU with cli; hlt. Never returns.
