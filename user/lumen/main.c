@@ -35,25 +35,17 @@ restore_terminal(void)
     tcsetattr(0, TCSANOW, &s_orig_termios);
 }
 
-static glyph_window_t *
-create_info_window(int fb_w, int fb_h)
+/* Store fb dimensions for info window render callback */
+static int s_fb_w, s_fb_h;
+
+static void
+info_render(glyph_window_t *win)
 {
-    int cols = 35;
-    int rows = 10;
-    int cw = cols * FONT_W;
-    int ch = rows * FONT_H;
-
-    glyph_window_t *win = glyph_window_create("System", cw, ch);
-    if (!win)
-        return NULL;
-
-    win->x = 20;
-    win->y = 20;
-
-    /* Draw static info content directly into the window surface */
     surface_t *s = &win->surface;
     int ox = GLYPH_BORDER_WIDTH;
     int oy = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
+    int cw = win->client_w;
+    int ch = win->client_h;
 
     draw_fill_rect(s, ox, oy, cw, ch, INFO_BG);
 
@@ -69,7 +61,7 @@ create_info_window(int fb_w, int fb_h)
     y += lh;
     draw_text(s, x, y, "Arch:     x86_64 (AMD64)", C_TEXT, INFO_BG);
     y += lh;
-    snprintf(buf, sizeof(buf), "Display:  %ux%u @ 32bpp", fb_w, fb_h);
+    snprintf(buf, sizeof(buf), "Display:  %ux%u @ 32bpp", s_fb_w, s_fb_h);
     draw_text(s, x, y, buf, C_TEXT, INFO_BG);
     y += lh;
     draw_text(s, x, y, "Security: Capability-based", C_TEXT, INFO_BG);
@@ -77,6 +69,27 @@ create_info_window(int fb_w, int fb_h)
     draw_text(s, x, y, "Shell:    oksh (OpenBSD ksh)", C_TEXT, INFO_BG);
     y += lh;
     draw_text(s, x, y, "Init:     Vigil supervisor", C_TEXT, INFO_BG);
+}
+
+static glyph_window_t *
+create_info_window(int fb_w, int fb_h)
+{
+    int cols = 35;
+    int rows = 10;
+    int cw = cols * FONT_W;
+    int ch = rows * FONT_H;
+
+    s_fb_w = fb_w;
+    s_fb_h = fb_h;
+
+    glyph_window_t *win = glyph_window_create("System", cw, ch);
+    if (!win)
+        return NULL;
+
+    win->x = 20;
+    win->y = 20;
+    win->on_render = info_render;
+    win->priv = (void *)1;  /* non-NULL so chrome skips client fill */
 
     return win;
 }

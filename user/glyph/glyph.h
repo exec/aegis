@@ -122,6 +122,7 @@ struct glyph_window {
     /* Callbacks for compositor integration */
     void (*on_key)(glyph_window_t *self, char key);
     void (*on_close)(glyph_window_t *self);
+    void (*on_render)(glyph_window_t *self);  /* custom client area render (after chrome) */
     void *priv;
 };
 

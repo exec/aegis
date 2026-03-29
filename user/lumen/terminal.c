@@ -94,8 +94,8 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
         /* other bytes (ANSI escapes, etc.) silently dropped */
     }
 
-    /* After writing, re-render content and mark dirty */
-    term_render_content(win);
+    /* Mark dirty — content will be re-rendered via on_render callback
+     * when glyph_window_render is called during composite. */
     glyph_window_mark_all_dirty(win);
 }
 
@@ -146,6 +146,7 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         return NULL;
     }
     win->on_key = term_on_key;
+    win->on_render = term_render_content;
 
     /* Allocate terminal private data */
     term_priv_t *tp = calloc(1, sizeof(*tp));

@@ -100,25 +100,34 @@ render_chrome(glyph_window_t *win)
     surface_t *s = &win->surface;
     int total_w = win->client_w + 2 * BD_W;
     int total_h = win->client_h + TB_H + 2 * BD_W;
+    int cx = client_ox();
+    int cy = client_oy();
     int focused = win->focused_window;
 
-    /* Shadow */
+    /* Shadow — drawn to the right and below the window frame */
     draw_fill_rect(s, SH_OFF, SH_OFF, total_w, total_h, C_CHROME_SHADOW);
 
-    /* Border fill */
-    draw_fill_rect(s, 0, 0, total_w, total_h, C_CHROME_BORDER);
+    /* Border — only the border strips, NOT the client area.
+     * Top border (above titlebar) */
+    draw_fill_rect(s, 0, 0, total_w, BD_W, C_CHROME_BORDER);
+    /* Left border */
+    draw_fill_rect(s, 0, BD_W, BD_W, TB_H + win->client_h + BD_W, C_CHROME_BORDER);
+    /* Right border */
+    draw_fill_rect(s, BD_W + win->client_w, BD_W, BD_W, TB_H + win->client_h + BD_W, C_CHROME_BORDER);
+    /* Bottom border */
+    draw_fill_rect(s, 0, BD_W + TB_H + win->client_h, total_w, BD_W, C_CHROME_BORDER);
 
     /* Titlebar gradient */
     uint32_t t1 = focused ? C_CHROME_TITLE1 : C_CHROME_UTITLE1;
     uint32_t t2 = focused ? C_CHROME_TITLE2 : C_CHROME_UTITLE2;
-    draw_gradient_v(s, BD_W, BD_W, win->client_w, TB_H, t1, t2);
+    draw_gradient_v(s, cx, BD_W, win->client_w, TB_H, t1, t2);
 
     /* Title text */
-    draw_text_t(s, BD_W + 50, BD_W + 5, win->title, C_CHROME_TITLE_T);
+    draw_text_t(s, cx + 50, BD_W + 5, win->title, C_CHROME_TITLE_T);
 
     /* Traffic-light buttons */
     int btn_y = CLOSE_BTN_Y;
-    int btn_x = BD_W + CLOSE_BTN_X;
+    int btn_x = cx + CLOSE_BTN_X;
 
     /* Close (red) */
     draw_fill_rect(s, btn_x, btn_y, BTN_RADIUS * 2, BTN_RADIUS * 2, C_CHROME_RED);
@@ -133,11 +142,10 @@ render_chrome(glyph_window_t *win)
     draw_fill_rect(s, btn_x + BTN_SPACING * 2, btn_y,
                    BTN_RADIUS * 2, BTN_RADIUS * 2, C_CHROME_GREEN);
 
-    /* Client area background — only fill if no custom content renderer (priv).
-     * Terminal and info windows render directly into the client area;
-     * filling white here would overwrite their content. */
+    /* Client area background — only for widget-tree windows.
+     * Windows with priv (terminal, info) render their own client content. */
     if (!win->priv)
-        draw_fill_rect(s, client_ox(), client_oy(), win->client_w, win->client_h, C_CHROME_CLIENT);
+        draw_fill_rect(s, cx, cy, win->client_w, win->client_h, C_CHROME_CLIENT);
 }
 
 void
@@ -146,8 +154,13 @@ glyph_window_render(glyph_window_t *win)
     if (!win || !win->has_dirty)
         return;
 
-    /* Render chrome */
+    /* Render chrome (border, titlebar, buttons) */
     render_chrome(win);
+
+    /* Custom content renderer (terminal, info window) — called AFTER chrome
+     * so it can draw into the client area without being overwritten. */
+    if (win->on_render)
+        win->on_render(win);
 
     /* Render widget tree into client area */
     if (win->root) {
