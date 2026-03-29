@@ -489,10 +489,14 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
             *conn_id_out = i;
             netdev_t *dev = netdev_get("eth0");
             s_tcp[i].dev = dev;
-            tcp_send_segment(dev, &s_tcp[i], TCP_SYN, (void *)0, 0);
             s_tcp[i].snd_nxt++;
             s_tcp[i].retransmit_at = (uint32_t)arch_get_ticks() + TCP_RTO_INITIAL;
+            /* Release tcp_lock BEFORE sending SYN.  tcp_send_segment calls
+             * ip_send → arp_resolve, which may block waiting for an ARP reply.
+             * Holding tcp_lock across that call deadlocks: the PIT ISR calls
+             * tcp_tick which tries to acquire tcp_lock. */
             spin_unlock_irqrestore(&tcp_lock, fl);
+            tcp_send_segment(dev, &s_tcp[i], TCP_SYN, (void *)0, 0);
             return 0;
         }
     }
