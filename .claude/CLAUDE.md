@@ -33,6 +33,8 @@ make INIT=vigil iso
 
 **NEVER trust `make clean` alone. NEVER omit `INIT=vigil`. ALWAYS nuke user binaries.**
 
+**NEVER use incremental builds for ISO creation.** Even `make -C user/lumen && make INIT=vigil iso` can produce a stale ISO — the rootfs.img is only rebuilt when Make thinks its dependencies changed, but timestamp-based dependency tracking misses cases where binaries were rebuilt in-place. The Makefile now forces rootfs deletion before rebuild, but always use the full nuclear sequence above.
+
 ---
 
 ## What Aegis Is

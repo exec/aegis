@@ -486,7 +486,11 @@ rootfs: $(ROOTFS)
 disk: $(DISK)
 
 # ── rootfs.img: standalone ext2 filesystem image (embedded in ISO as module) ──
+# ALWAYS rebuild rootfs — stale rootfs.img inside the ISO caused the
+# 2026-03-28 debugging catastrophe. Deleting it first ensures every
+# user binary is freshly written even on incremental builds.
 $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
+	@rm -f $(ROOTFS)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
 	/sbin/mke2fs -t ext2 -F -L aegis-root $(ROOTFS)
