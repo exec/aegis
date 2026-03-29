@@ -277,7 +277,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | ext2 double indirect | ✅ | i_block[13]; covers files up to ~67 MB; required for curl (1.3 MB) |
 | ext2 stat (inode mode) | ✅ | vfs.c stat paths now read actual inode.i_mode from disk; fixes 0644→0775 for /bin/ |
 | BearSSL + curl build | ✅ | tools/fetch-bearssl.sh + tools/build-curl.sh; curl 8.x statically linked; ext2-only via make disk |
-| curl HTTPS e2e | ✅ | DNS + TCP + TLS 1.2 (BearSSL ChaCha20-Poly1305) + HTTP/1.1; test_curl.py PASS (-k: CA bundle loading TBD) |
+| curl HTTPS e2e | 🔶 | Inbound TCP works (test_socket PASS). Outbound TCP connect from guest broken — see Phase 40b curl notes below |
 | Thread support (Phase 29) | ✅ | clone(CLONE_VM); per-thread TLS; fd_table_t refcount; futex WAIT/WAKE; tgid; clear_child_tid; test_threads.py PASS |
 | mprotect + mmap freelist (Phase 30) | ✅ | Real mprotect (W^X via NX/EFER.NXE); 64-slot VA freelist (best-fit + coalescing); test_mmap.py PASS |
 | /proc filesystem (Phase 31) | ✅ | VMA tracking (170-slot kva table); procfs VFS; /proc/self/maps,status,stat,exe,cmdline,fd; /proc/meminfo; CAP_KIND_PROC_READ; test_proc.py PASS |
@@ -684,9 +684,36 @@ Phase 39 delivered Glyph widget toolkit, dirty-rect compositor, scheduler busy-w
 
 **Fix (kernel/syscall/sys_socket.c):** Set `waiter_task` BEFORE checking data availability in `sys_accept`, `sys_recvfrom` (TCP + UDP), and `sys_connect`. If wake fires early, it sets RUNNING, so `sched_block` becomes a no-op.
 
+### test_curl / outbound TCP — STILL BROKEN (investigated 2026-03-29)
+
+**Symptom:** `curl -sk https://example.com` exits instantly with rc=7 (CURLE_COULDNT_CONNECT). No TLS handshake attempted. `curl -sv http://10.0.2.2` (SLIRP gateway, inbound-style via local subnet) works perfectly. test_socket (inbound TCP via SLIRP hostfwd) PASSES. Only outbound TCP to external IPs through SLIRP NAT is broken.
+
+**What was diagnosed:**
+- DNS resolution works (/etc/hosts has 104.18.27.120 for example.com, confirmed valid)
+- Host machine can reach example.com:443 via SLIRP from host curl
+- Guest `connect()` returns ECONNREFUSED (-111) immediately (not timeout)
+- Only 3 VNET RX packets after curl command (SYN-ACK exchange but connection fails)
+- `sys_connect` → `tcp_connect` → `tcp_send_segment` under `tcp_lock` was the original deadlock
+
+**What was tried and failed:**
+1. **IF-flag check in arp_resolve** — detected ISR context but was too aggressive: returned -1 even from syscall context where IRQs are disabled due to spinlocks. Broke ALL outbound TCP including HTTP to SLIRP gateway. Replaced with `g_in_netdev_poll` flag.
+2. **g_in_netdev_poll flag** — correctly identifies PIT ISR RX path only. Fixed test_socket (inbound accept works). But outbound connect still broken because...
+3. **tcp_connect release tcp_lock before SYN send** — moved `tcp_send_segment` after `spin_unlock_irqrestore` so arp_resolve can block safely. But tcp_tick could fire between unlock and send, seeing the SYN_SENT connection and potentially resetting it.
+4. **Far-future retransmit_at** — set `retransmit_at = ticks + RTO + 200` before unlock, real deadline after send. Didn't help — curl still exits instantly with rc=7.
+
+**Remaining theories:**
+- `tcp_send_segment` outside `tcp_lock` races with `tcp_tick` modifying the same `tcp_conn_t`. The connection may be getting reset by tcp_tick before the SYN-ACK arrives.
+- The SYN may be going out but SLIRP's SYN-ACK arrives during a window where the connection state is inconsistent.
+- musl's `getaddrinfo` returns a second garbage address `0.0.0.2` alongside the /etc/hosts entry — curl tries both, both fail, reports the last error.
+- The 3 VNET RX packets may be ARP reply + TCP RST rather than SYN-ACK.
+
+**What works:** Inbound TCP (SLIRP hostfwd → guest httpd), HTTP to SLIRP gateway (10.0.2.2), DHCP (UDP broadcast), ARP resolution. The TCP stack fundamentally works for server-side; the outbound connect path has a race condition or state corruption issue.
+
+**Next steps:** Add printk-level TCP debug logging (SYN sent, SYN-ACK received, RST received, state transitions) to see exactly what happens during outbound connect. Or use `make gdb` with breakpoints in tcp_connect/tcp_rx to trace the handshake.
+
 ---
 
-*Last updated: 2026-03-29 — Phase 40 + 40b complete. sys_spawn, desktop icons, ARP deadlock fix, proc_spawn PT_INTERP, socket wakeup race. test_socket PASS for first time. Bare-metal test pending.*
+*Last updated: 2026-03-29 — Phase 40 bare-metal PASS. test_socket PASS. test_curl outbound TCP still broken (see notes above).*
 
 ---
 
