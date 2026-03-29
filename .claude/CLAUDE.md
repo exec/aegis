@@ -294,7 +294,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Lumen compositor (Phase 37) | ✅ | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **ThinkPad Zen 2 bare-metal PASS** (slow rendering — optimization needed) |
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
 | Glyph + Lumen optimization (Phase 39) | ✅ | libglyph.a widget toolkit; dirty-rect compositor; scheduler busy-wait fixes; MMIO skip in fork; batch yield; **make test 25/25 PASS** |
-| Citadel + sys_spawn (Phase 40) | 🔶 | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **awaiting bare-metal test** |
+| Citadel + sys_spawn (Phase 40) | 🔶 | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **awaiting bare-metal test (lumen + PTY terminal)** |
 | Bug fixes (Phase 40b) | ✅ | ARP deadlock from ISR (test_socket root cause since Phase 26); proc_spawn PT_INTERP (q35 RIP=0x0); socket lost-wakeup race; test_socket DHCP wait; **make test + test_socket PASS** |
 
 ### Known deviations
@@ -634,7 +634,7 @@ Phase 39 delivered Glyph widget toolkit, dirty-rect compositor, scheduler busy-w
 
 ## Phase 40 — Forward Constraints
 
-**Phase 40 status: 🔶 Code complete, awaiting bare-metal test on ThinkPad.**
+**Phase 40 status: 🔶 Code complete, awaiting bare-metal test on ThinkPad. Key validation: lumen renders immediately AND PTY terminal works (shell prompt, typing, command output). This is the first bare-metal test of the sys_spawn terminal approach.**
 
 **What was implemented:**
 
