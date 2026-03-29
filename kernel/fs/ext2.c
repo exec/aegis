@@ -349,7 +349,12 @@ int ext2_readdir(uint32_t dir_inode, uint64_t index,
                     uint32_t k;
                     for (k = 0; k < nlen; k++) name_out[k] = de->name[k];
                     name_out[nlen] = '\0';
-                    *type_out = (de->file_type == EXT2_FT_DIR) ? 4u : 8u;
+                    if (de->file_type == EXT2_FT_DIR)
+                        *type_out = 4u;   /* DT_DIR */
+                    else if (de->file_type == EXT2_FT_SYMLINK)
+                        *type_out = 10u;  /* DT_LNK */
+                    else
+                        *type_out = 8u;   /* DT_REG */
                     spin_unlock_irqrestore(&ext2_lock, fl);
                     return 0;
                 }

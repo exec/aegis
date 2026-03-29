@@ -6,6 +6,8 @@
 #include "pty.h"
 #include "printk.h"
 #include "uaccess.h"
+#include "../sched/sched.h"
+#include "../proc/proc.h"
 #include <stdint.h>
 
 static ramfs_t s_run_ramfs;
@@ -160,6 +162,8 @@ ext2_vfs_stat_fn(void *priv, k_stat_t *st)
     st->st_ino     = (uint64_t)p->ino;
     st->st_nlink   = 1;
     st->st_mode    = (uint32_t)inode.i_mode; /* preserves type + permissions from disk */
+    st->st_uid     = (uint32_t)inode.i_uid;
+    st->st_gid     = (uint32_t)inode.i_gid;
     st->st_size    = (int64_t)sz;
     st->st_blksize = 4096;
     st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
