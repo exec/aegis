@@ -117,6 +117,12 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         return NULL;
     }
 
+    /* Unlock the slave (PTY pairs are created locked) */
+    {
+        int unlock = 0;
+        ioctl(master_fd, 0x40045431 /* TIOCSPTLCK */, &unlock);
+    }
+
     /* Build slave path */
     {
         const char *prefix = "/dev/pts/";
