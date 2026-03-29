@@ -209,9 +209,31 @@ main(void)
         term_win->focused_window = 1;
     }
 
-    /* Do initial full composite */
-    comp.full_redraw = 1;
-    comp_composite(&comp);
+    dbg_strip(0x00888888, 12); /* gray = about to composite */
+
+    /* Do initial full composite — inline for debugging */
+    {
+        /* Desktop gradient */
+        draw_gradient_v(&comp.back, 0, 0, comp.back.w, comp.back.h,
+                        0x001a1a2e, 0x0016213e);
+        dbg_strip(0x00AAAAAA, 13); /* light gray = gradient done */
+
+        /* Render and blit windows */
+        for (int wi = 0; wi < comp.nwindows; wi++) {
+            glyph_window_t *win = comp.windows[wi];
+            if (!win->visible) continue;
+            glyph_window_mark_all_dirty(win);
+            dbg_strip(0x00BB8800, 14 + wi); /* brownish = rendering window N */
+            glyph_window_render(win);
+            blit_window_to_back(&comp.back, win);
+        }
+        dbg_strip(0x00DDDDDD, 17); /* near-white = windows rendered */
+
+        /* Full flip */
+        memcpy(comp.fb.buf, comp.back.buf,
+               (size_t)comp.fb.pitch * (size_t)comp.fb.h * sizeof(uint32_t));
+        dbg_strip(0x0000FFFF, 18); /* cyan = flip done */
+    }
 
     /* Debug: verify backbuffer has content — check pixel at (100,100) */
     {
