@@ -96,13 +96,19 @@ pty_slave_write_out(tty_t *tty, const char *buf, uint32_t len)
 			break; /* output_buf full; partial write */
 		ring_push(pair->output_buf, &pair->output_head, (uint8_t)buf[i]);
 	}
+	/* Wake master reader if blocked */
+	if (i > 0 && pair->master_waiting) {
+		sched_wake(pair->master_waiting);
+		pair->master_waiting = 0;
+	}
 	return (int)i;
 }
 
 /*
  * pty_slave_read_raw -- called by tty_read to get one raw character
- * from the master's input.  Blocks (sti/hlt/cli) until data available,
+ * from the master's input.  Blocks via sched_block until data available,
  * master closes (hangup), or a signal interrupts.
+ * Woken by master_write_fn when it pushes data to input_buf.
  *
  * Returns 1 on success (char in *out), 0 if interrupted, -5 on hangup.
  */
@@ -126,8 +132,9 @@ pty_slave_read_raw(tty_t *tty, char *out, int *interrupted)
 			*interrupted = 1;
 			return 0;
 		}
-		/* Block: enable interrupts, halt until next IRQ, then disable. */
-		arch_wait_for_irq();
+		/* Block until master writes data or closes */
+		pair->slave_waiting = sched_current();
+		sched_block();
 	}
 }
 
@@ -175,9 +182,9 @@ try_acquire_ctty(pty_pair_t *pair)
 
 /*
  * master_read_fn -- read from the output_buf (what the slave wrote).
- * buf is a kernel buffer (kbuf from sys_read). Blocks until data
- * available or slave closes.  Respects vfs_read_nonblock (O_NONBLOCK):
- * returns -EAGAIN immediately when no data and nonblock is set.
+ * buf is a kernel buffer (kbuf from sys_read). Blocks via sched_block
+ * until data available or slave closes.  Woken by pty_slave_write_out.
+ * Respects vfs_read_nonblock (O_NONBLOCK): returns -EAGAIN immediately.
  */
 static int
 master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
@@ -202,8 +209,9 @@ master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 		/* Check for pending signals */
 		if (signal_check_pending())
 			return -4; /* EINTR */
-		/* Block until slave writes or closes */
-		arch_wait_for_irq();
+		/* Block until slave writes data or closes */
+		pair->master_waiting = sched_current();
+		sched_block();
 	}
 
 	/* Copy out as much as requested or available */
@@ -250,6 +258,11 @@ master_write_fn(void *priv, const void *buf, uint64_t len)
 			break; /* input_buf full; partial write */
 		ring_push(pair->input_buf, &pair->input_head, (uint8_t)kbuf[i]);
 	}
+	/* Wake slave reader if blocked */
+	if (i > 0 && pair->slave_waiting) {
+		sched_wake(pair->slave_waiting);
+		pair->slave_waiting = 0;
+	}
 	return (int)i;
 }
 
@@ -274,6 +287,11 @@ master_close_fn(void *priv)
 	}
 	pair->master_open = 0;
 	pair->master_refs = 0;
+	/* Wake slave reader — it will see master_open==0 and return EIO */
+	if (pair->slave_waiting) {
+		sched_wake(pair->slave_waiting);
+		pair->slave_waiting = 0;
+	}
 	if (!pair->slave_open)
 		pair->in_use = 0;
 	spin_unlock_irqrestore(&pair->lock, fl);
@@ -356,6 +374,11 @@ slave_close_fn(void *priv)
 	}
 	pair->slave_open = 0;
 	pair->slave_refs = 0;
+	/* Wake master reader — it will see slave_open==0 and return EOF */
+	if (pair->master_waiting) {
+		sched_wake(pair->master_waiting);
+		pair->master_waiting = 0;
+	}
 	if (!pair->master_open) {
 		pair->in_use = 0;
 	}

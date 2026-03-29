@@ -208,12 +208,27 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     }
 
     if (pid == 0) {
-        /* child — sleep forever to test if a live idle child
-         * prevents rendering (vs heavy execve work). */
-        for (;;) {
-            struct timespec ts = { 60, 0 };
-            nanosleep(&ts, 0);
-        }
+        /* child */
+        close(master_fd);
+        setsid();
+        slave_fd = open(slave_path, O_RDWR);
+        if (slave_fd < 0)
+            _exit(1);
+        dup2(slave_fd, 0);
+        dup2(slave_fd, 1);
+        dup2(slave_fd, 2);
+        if (slave_fd > 2)
+            close(slave_fd);
+
+        char *argv[] = {"/bin/oksh", NULL};
+        char *envp[] = {
+            "TERM=dumb",
+            "HOME=/root",
+            "PATH=/bin",
+            NULL
+        };
+        execve("/bin/oksh", argv, envp);
+        _exit(1);
     }
 
     /* parent — PTY succeeded */

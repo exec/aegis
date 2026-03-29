@@ -339,8 +339,11 @@ sys_access(uint64_t arg1, uint64_t arg2)
  * arg1 = user pointer to struct timespec { int64_t tv_sec; int64_t tv_nsec; }
  * arg2 = user pointer to remainder (NULL allowed; not populated)
  *
- * Uses sti; hlt; cli loop — yields to scheduler on each PIT tick (100 Hz).
- * Does not call sched_block; other tasks still run via preemption.
+ * Sets sleep_deadline in the task struct and calls sched_block().
+ * sched_tick auto-wakes the task when the deadline passes.
+ * This properly removes the task from scheduling, unlike the old
+ * sti;hlt;cli busy-wait which kept the task RUNNING and stole 50%
+ * of CPU from other tasks.
  */
 uint64_t
 sys_nanosleep(uint64_t arg1, uint64_t arg2)
@@ -355,9 +358,9 @@ sys_nanosleep(uint64_t arg1, uint64_t arg2)
                    + (uint64_t)ts.tv_nsec / 10000000ULL;
     if (ticks == 0 && ts.tv_nsec > 0) ticks = 1;
 
-    uint64_t deadline = arch_get_ticks() + ticks;
-    while (arch_get_ticks() < deadline)
-        arch_wait_for_irq();
+    aegis_task_t *cur = sched_current();
+    cur->sleep_deadline = arch_get_ticks() + ticks;
+    sched_block();
     return 0;
 }
 

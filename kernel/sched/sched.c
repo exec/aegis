@@ -492,6 +492,21 @@ sched_tick(void)
 
     spin_lock(&sched_lock);
 
+    /* Wake any tasks whose nanosleep deadline has passed. */
+    {
+        uint64_t now = arch_get_ticks();
+        aegis_task_t *t = cur->next;
+        aegis_task_t *stop = cur;
+        do {
+            if (t->state == TASK_BLOCKED && t->sleep_deadline != 0 &&
+                now >= t->sleep_deadline) {
+                t->sleep_deadline = 0;
+                t->state = TASK_RUNNING;
+            }
+            t = t->next;
+        } while (t != stop);
+    }
+
     aegis_task_t *old = cur;
     /* Skip blocked/zombie tasks. task_idle guarantees termination. */
     aegis_task_t *next = old;

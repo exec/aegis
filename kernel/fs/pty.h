@@ -4,6 +4,7 @@
 
 #include "vfs.h"
 #include "tty.h"
+#include "sched.h"
 #include "../core/spinlock.h"
 #include <stdint.h>
 
@@ -24,6 +25,8 @@ typedef struct {
     uint8_t  in_use;
     uint8_t  index;                       /* 0-15 */
     spinlock_t lock;                      /* per-pair lock for SMP safety */
+    aegis_task_t *master_waiting;         /* task blocked reading master */
+    aegis_task_t *slave_waiting;          /* task blocked reading slave */
 } pty_pair_t;
 
 /* ptmx_open -- allocate a PTY pair and return the master fd.
