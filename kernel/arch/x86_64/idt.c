@@ -19,6 +19,12 @@ extern void *isr_stubs[48];
 /* LAPIC timer vector stub (vector 0x30) defined in isr.asm */
 extern void *isr_stub_lapic_timer;
 
+/* Remapped PIC stubs (vectors 0xF0-0xFD) defined in isr.asm.
+ * pic_disable() remaps the 8259A to 0xF0-0xFF before masking.  On real
+ * hardware a pending PIC interrupt can arrive after STI at these vectors.
+ * Without IDT entries the CPU raises #GP. */
+extern void *isr_stubs_remap_pic[14];
+
 /* TLB shootdown IPI vector stub (vector 0xFE) defined in isr.asm */
 extern void *isr_stub_tlb_shootdown;
 
@@ -54,6 +60,13 @@ idt_init(void)
 
     /* Vector 0x30 — LAPIC timer interrupt (periodic, ~100Hz). */
     idt_gate_set(0x30, isr_stub_lapic_timer);
+
+    /* Vectors 0xF0-0xFD — remapped PIC vectors.  pic_disable() moves the
+     * 8259A to 0xF0-0xFF before masking.  On real hardware a pending PIC
+     * interrupt can be in-flight and delivered after STI.  These stubs
+     * catch it so isr_dispatch can silently drop it instead of #GP. */
+    for (int i = 0; i < 14; i++)
+        idt_gate_set((uint8_t)(0xF0 + i), isr_stubs_remap_pic[i]);
 
     /* Vector 0xFE — TLB shootdown IPI from tlb_shootdown().  The handler
      * does its own LAPIC EOI; isr_dispatch skips the normal EOI path. */
@@ -142,6 +155,11 @@ isr_dispatch(cpu_state_t *s)
         if (s->cs == ARCH_KERNEL_CS)
             panic_backtrace(s->rbp);
         for (;;) {}
+    } else if (s->vector >= 0xF0 && s->vector <= 0xFD) {
+        /* Remapped PIC vector — stale interrupt from 8259A during IOAPIC
+         * transition.  The PIC is already masked; just drop the interrupt.
+         * No EOI needed — PIC is dead, LAPIC didn't generate this. */
+        return;
     } else if (s->vector == 0xFE) {
         /* TLB shootdown IPI — handler does its own LAPIC EOI. */
         tlb_shootdown_handler();

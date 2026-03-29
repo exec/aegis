@@ -130,6 +130,27 @@ ISR_NOERR 0x2F ; IRQ15 — secondary ATA / spurious slave
 ; LAPIC timer vector 0x30 — periodic timer interrupt from local APIC.
 ISR_NOERR 0x30
 
+; Remapped PIC vectors 0xF0-0xFD — pic_disable() remaps the 8259A PIC to
+; vectors 0xF0-0xFF before masking.  On real hardware (especially laptops),
+; a pending PIC interrupt (EC, thermal, battery) can be in-flight during the
+; remap and delivered after STI.  Without IDT entries for these vectors, the
+; CPU raises #GP.  These stubs catch the stale interrupt and let isr_dispatch
+; silently drop it.  (0xFE and 0xFF already have stubs above.)
+ISR_NOERR 0xF0
+ISR_NOERR 0xF1
+ISR_NOERR 0xF2
+ISR_NOERR 0xF3
+ISR_NOERR 0xF4
+ISR_NOERR 0xF5
+ISR_NOERR 0xF6
+ISR_NOERR 0xF7
+ISR_NOERR 0xF8
+ISR_NOERR 0xF9
+ISR_NOERR 0xFA
+ISR_NOERR 0xFB
+ISR_NOERR 0xFC
+ISR_NOERR 0xFD
+
 ; TLB shootdown IPI vector 0xFE — sent by tlb_shootdown() to flush remote TLBs.
 ISR_NOERR 0xFE
 
@@ -257,6 +278,14 @@ isr_stubs:
 global isr_stub_lapic_timer
 isr_stub_lapic_timer:
     dq isr_0x30
+
+; Remapped PIC stubs (0xF0-0xFD) — idt.c references as: extern void *isr_stubs_remap_pic[14];
+global isr_stubs_remap_pic
+isr_stubs_remap_pic:
+    dq isr_0xF0, isr_0xF1, isr_0xF2, isr_0xF3
+    dq isr_0xF4, isr_0xF5, isr_0xF6, isr_0xF7
+    dq isr_0xF8, isr_0xF9, isr_0xFA, isr_0xFB
+    dq isr_0xFC, isr_0xFD
 
 ; TLB shootdown IPI stub — idt.c references as: extern void *isr_stub_tlb_shootdown;
 global isr_stub_tlb_shootdown
