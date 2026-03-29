@@ -200,10 +200,10 @@ comp_composite(compositor_t *c)
     if (c->full_redraw) {
         dbg_fb_strip(0x00FF0000, 14); /* red = entered full_redraw */
 
-        /* Desktop gradient */
-        draw_gradient_v(&c->back, 0, 0, c->back.w, c->back.h, C_BG1, C_BG2);
+        /* Desktop background — solid fill (gradient too slow at native res) */
+        draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
 
-        dbg_fb_strip(0x0000FF00, 15); /* green = gradient done */
+        dbg_fb_strip(0x0000FF00, 15); /* green = background done */
 
         /* Render and blit all windows */
         for (int i = 0; i < c->nwindows; i++) {
@@ -242,26 +242,17 @@ comp_composite(compositor_t *c)
     for (int i = 1; i < c->ndirty; i++)
         combined = glyph_rect_union(combined, c->dirty_rects[i]);
 
-    /* Redraw background in dirty region.
-     * Compute gradient colors as if rendering the full screen, but only
-     * write the rows within the dirty rect. */
+    /* Redraw background in dirty region — solid fill for performance */
     {
         int dy0 = combined.y < 0 ? 0 : combined.y;
         int dy1 = combined.y + combined.h;
         if (dy1 > c->back.h) dy1 = c->back.h;
-        int total_h = c->back.h > 1 ? c->back.h - 1 : 1;
-        for (int y = dy0; y < dy1; y++) {
-            int t = y * 255 / total_h;
-            uint32_t r = ((C_BG1 >> 16 & 0xFF) * (255 - t) + (C_BG2 >> 16 & 0xFF) * t) / 255;
-            uint32_t g = ((C_BG1 >> 8 & 0xFF) * (255 - t) + (C_BG2 >> 8 & 0xFF) * t) / 255;
-            uint32_t b = ((C_BG1 & 0xFF) * (255 - t) + (C_BG2 & 0xFF) * t) / 255;
-            uint32_t color = (r << 16) | (g << 8) | b;
-            int x0 = combined.x < 0 ? 0 : combined.x;
-            int x1 = combined.x + combined.w;
-            if (x1 > c->back.w) x1 = c->back.w;
+        int x0 = combined.x < 0 ? 0 : combined.x;
+        int x1 = combined.x + combined.w;
+        if (x1 > c->back.w) x1 = c->back.w;
+        for (int y = dy0; y < dy1; y++)
             for (int x = x0; x < x1; x++)
-                c->back.buf[y * c->back.pitch + x] = color;
-        }
+                c->back.buf[y * c->back.pitch + x] = C_BG1;
     }
 
     /* Render dirty windows and blit to backbuffer */
