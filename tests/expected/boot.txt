@@ -1,5 +1,6 @@
 [SERIAL] OK: COM1 initialized at 115200 baud
 [VGA] OK: text mode 80x25
+[CMDLINE] OK: /boot/aegis.elf boot=graphical
 [PMM] OK: 2047MB usable across 2 regions
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
 [VMM] OK: mapped-window allocator active

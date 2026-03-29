@@ -17,6 +17,7 @@
 #include "cap.h"
 #include "printk.h"
 #include "fd_table.h"
+#include "arch.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -323,6 +324,18 @@ gen_version(char *buf, uint32_t bufsz)
     return (uint32_t)(p - buf);
 }
 
+static uint32_t
+gen_kcmdline(char *buf, uint32_t bufsz)
+{
+    const char *cmdline = arch_get_cmdline();
+    char *p = buf;
+    (void)bufsz;
+    p = pfs_strcpy(p, cmdline);
+    *p++ = '\n';
+    *p = '\0';
+    return (uint32_t)(p - buf);
+}
+
 /* ── capability check ──────────────────────────────────────────────────── */
 
 static int
@@ -449,9 +462,15 @@ procfs_dir_readdir(void *priv, uint64_t index, char *name_out, uint8_t *type_out
         *type_out = 8; /* DT_REG */
         return 0;
     }
+    if (index == 3) {
+        pfs_strcpy(name_out, "cmdline");
+        name_out[7] = '\0';
+        *type_out = 8; /* DT_REG */
+        return 0;
+    }
 
     /* Enumerate user processes from circular task list */
-    uint64_t pidx = index - 3;
+    uint64_t pidx = index - 4;
     aegis_task_t *cur = sched_current();
     if (!cur)
         return -1;
@@ -651,6 +670,8 @@ procfs_open(const char *path, int flags, vfs_file_t *out)
         return procfs_open_global(gen_meminfo, out);
     if (pfs_streq(path, "version"))
         return procfs_open_global(gen_version, out);
+    if (pfs_streq(path, "cmdline"))
+        return procfs_open_global(gen_kcmdline, out);
 
     /* /proc/self/... → resolve to current pid */
     if (path[0] == 's' && path[1] == 'e' && path[2] == 'l' && path[3] == 'f') {

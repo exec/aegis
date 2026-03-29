@@ -295,6 +295,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | USB HID mouse (Phase 36) | ✅ | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **ThinkPad Zen 2 bare-metal PASS** |
 | Lumen compositor (Phase 37) | ✅ | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **ThinkPad Zen 2 bare-metal PASS** (slow rendering — optimization needed) |
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
+| Glyph + Lumen optimization (Phase 39) | 🔶 | libglyph.a widget toolkit (14 source files); dirty-rect compositor; mouse batching; skip-if-clean; fb_lock_compositor; i8042 flush; **PTY terminal broken** (slave unlock hangs lumen) |
 
 ### Known deviations
 
@@ -369,7 +370,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 36 | **USB HID mouse** — boot protocol + PS/2 mouse; /dev/mouse VFS; installer crypt() | ✅ Done |
 | 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | ✅ Done |
 | 38 | **SMP** — LAPIC+IOAPIC, ~30 spinlocks, SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown | ✅ Done |
-| 39 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
+| 39 | **Glyph** — widget toolkit (libglyph.a); dirty-rect compositor; PTY terminal fix | 🔶 PTY hang |
 | 40 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
 | 41 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
 | 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated. **Required for Glyph external apps**: MAP_SHARED pixel buffers, command pipe/socket for window create/destroy, fd passing for shared memory. Until Phase 42, all GUI apps are compiled into Lumen. | Not started |
@@ -620,6 +621,44 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 ---
 
 *Last updated: 2026-03-28 — Phases 36-38 bare-metal PASS on ThinkPad X13 Zen 2. IOAPIC #GP fixed (remapped PIC IDT stubs). CAP_KIND_FB added for framebuffer access. Lumen renders (slow — optimization future work).*
+
+---
+
+## Phase 39 — Forward Constraints
+
+**Phase 39 status: 🔶 Code complete except PTY terminal. Needs QEMU debug + bare-metal retest.**
+
+**What was implemented:**
+- Glyph widget toolkit (`user/glyph/`, 14 source files, libglyph.a): retained-mode widget tree with dirty-rect propagation. Widget types: label, button, textfield, checkbox, listview, scrollbar, image, progress, menubar, tabs. HBox/VBox layout containers. Window chrome (titlebar gradient, traffic-light close/min/max buttons, border, shadow).
+- Dirty-rect compositor: collect dirty rects from windows, union into bounding rect, only redraw overlapping windows, partial backbuffer→FB memcpy. Mouse movement ~4KB instead of ~8MB.
+- Mouse batching: drain all pending /dev/mouse events per frame, apply as single delta.
+- Skip-if-clean: cursor hide/show only when there's actual input activity (eliminates WC read flicker on idle).
+- `fb_lock_compositor()`: kernel fb.c flag suppresses printk FB writes when compositor owns framebuffer.
+- i8042 flush after IOAPIC init: drains stale scancodes that held IRQ1 asserted, fixes ~2/3 cold boot keyboard failure on ThinkPad.
+
+**Forward constraints:**
+
+1. **PTY terminal hang (CRITICAL, UNRESOLVED).** When `TIOCSPTLCK` unlocks the PTY slave and oksh starts, lumen hangs completely — no GUI renders. The unlock code is commented out in `user/lumen/terminal.c:120-126`. Without unlock, terminal window renders chrome but has no shell. Root cause unknown — needs `make gdb` debugging with breakpoints in pty.c (pts_open, master_read_fn) and oksh startup path. Possible causes: (a) oksh's job control startup (tcgetpgrp, SIGTTIN) blocks the child; (b) parent's main loop somehow blocks despite O_NONBLOCK on all fds; (c) session/controlling-terminal interaction between lumen's console TTY and child's setsid().
+
+2. **No ANSI escape parsing.** Terminal renders raw text only. Programs emitting ANSI codes display garbage. VT100 parser is future work.
+
+3. **No window resize.** Fixed-size windows. Resize requires client notification + buffer realloc.
+
+4. **Static clock.** No RTC syscall. Taskbar shows "12:00 AM" always.
+
+5. **No compositor keyboard shortcuts.** Keyboard is raw ASCII from stdin. No Alt+Tab, no window switching via keyboard. Mouse-only window switching.
+
+6. **Polling loop, not event-driven.** 16ms nanosleep = ~60fps max / ~16ms input latency. Acceptable for v0.1.
+
+7. **No multi-process clients.** Lumen v0.1 is monolithic. External apps cannot create windows. Requires Phase 42 IPC (MAP_SHARED pixel buffers + fd passing).
+
+8. **Widget toolkit is libglyph.a (static), not libglyph.so (dynamic).** Linked statically into lumen. Dynamic library version deferred until external clients exist (Phase 42).
+
+9. **Window drag triggers full-region gradient redraw.** Moving windows is visually slow because titlebar gradient is re-rendered each frame. Could cache the gradient to a bitmap.
+
+---
+
+*Last updated: 2026-03-28 — Phase 39 code complete. Glyph toolkit + dirty-rect compositor working on bare metal. PTY terminal shell blocked on unlock hang. Bare-metal retest pending after PTY fix.*
 
 ---
 

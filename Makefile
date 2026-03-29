@@ -524,9 +524,21 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-vigil-policy
 	printf 'VFS_OPEN VFS_READ VFS_WRITE AUTH\n' > /tmp/aegis-vigil-caps
 	printf 'root\n' > /tmp/aegis-vigil-user
-	printf 'write /tmp/aegis-vigil-run /etc/vigil/services/getty/run\nwrite /tmp/aegis-vigil-policy /etc/vigil/services/getty/policy\nwrite /tmp/aegis-vigil-caps /etc/vigil/services/getty/caps\nwrite /tmp/aegis-vigil-user /etc/vigil/services/getty/user\n' \
+	printf 'text\n' > /tmp/aegis-vigil-mode
+	printf 'write /tmp/aegis-vigil-run /etc/vigil/services/getty/run\nwrite /tmp/aegis-vigil-policy /etc/vigil/services/getty/policy\nwrite /tmp/aegis-vigil-caps /etc/vigil/services/getty/caps\nwrite /tmp/aegis-vigil-user /etc/vigil/services/getty/user\nwrite /tmp/aegis-vigil-mode /etc/vigil/services/getty/mode\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	rm -f /tmp/aegis-vigil-run /tmp/aegis-vigil-policy /tmp/aegis-vigil-caps /tmp/aegis-vigil-user
+	rm -f /tmp/aegis-vigil-run /tmp/aegis-vigil-policy /tmp/aegis-vigil-caps /tmp/aegis-vigil-user /tmp/aegis-vigil-mode
+	# lumen vigil service — graphical compositor (graphical mode only)
+	printf 'mkdir /etc/vigil/services/lumen\n' \
+	    | /sbin/debugfs -w $(ROOTFS)
+	printf '/bin/lumen\n' > /tmp/aegis-lumen-run
+	printf 'respawn\nmax_restarts=3\n' > /tmp/aegis-lumen-policy
+	printf 'FB VFS_OPEN VFS_READ VFS_WRITE\n' > /tmp/aegis-lumen-caps
+	printf 'root\n' > /tmp/aegis-lumen-user
+	printf 'graphical\n' > /tmp/aegis-lumen-mode
+	printf 'write /tmp/aegis-lumen-run /etc/vigil/services/lumen/run\nwrite /tmp/aegis-lumen-policy /etc/vigil/services/lumen/policy\nwrite /tmp/aegis-lumen-caps /etc/vigil/services/lumen/caps\nwrite /tmp/aegis-lumen-user /etc/vigil/services/lumen/user\nwrite /tmp/aegis-lumen-mode /etc/vigil/services/lumen/mode\n' \
+	    | /sbin/debugfs -w $(ROOTFS)
+	rm -f /tmp/aegis-lumen-run /tmp/aegis-lumen-policy /tmp/aegis-lumen-caps /tmp/aegis-lumen-user /tmp/aegis-lumen-mode
 	# httpd vigil service — binds :80, serves HTTP
 	printf 'mkdir /etc/vigil/services/httpd\n' \
 	    | /sbin/debugfs -w $(ROOTFS)

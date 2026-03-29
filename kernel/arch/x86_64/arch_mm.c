@@ -34,11 +34,12 @@ typedef struct {
     uint32_t reserved;
 } mb2_mmap_entry_t;
 
+#define MB2_TAG_CMDLINE  1
+#define MB2_TAG_MODULE   3
 #define MB2_TAG_MMAP     6
+#define MB2_TAG_FB       8
 #define MB2_TAG_ACPI_OLD 14   /* ACPI 1.0 RSDP (32-bit, RSDT) */
 #define MB2_TAG_ACPI_NEW 15   /* ACPI 2.0+ RSDP (64-bit, XSDT) */
-#define MB2_TAG_FB       8
-#define MB2_TAG_MODULE   3
 #define MB2_MEM_AVAIL    1
 #define MAX_REGIONS      32
 
@@ -68,6 +69,7 @@ static uint64_t s_module_phys = 0;   /* physical start of first multiboot2 modul
 static uint64_t s_module_size = 0;   /* byte size of first module */
 static uint64_t s_module2_phys = 0;  /* physical start of second module (ESP image) */
 static uint64_t s_module2_size = 0;  /* byte size of second module */
+static char s_cmdline[256];          /* kernel command line from GRUB */
 
 /* Two static entries: first 1MB + multiboot2 info region.
  * Slot [1] is filled in arch_mm_init once mb_info address is known.
@@ -101,6 +103,18 @@ void arch_mm_init(void *mb_info)
 
         if (tag->type == 0)   /* end tag */
             break;
+
+        if (tag->type == MB2_TAG_CMDLINE) {
+            /* Command line tag: type(4) + size(4) + NUL-terminated string */
+            const char *str = (const char *)(p + sizeof(mb2_tag_t));
+            uint32_t slen = tag->size - (uint32_t)sizeof(mb2_tag_t);
+            if (slen > sizeof(s_cmdline) - 1)
+                slen = sizeof(s_cmdline) - 1;
+            uint32_t ci;
+            for (ci = 0; ci < slen && str[ci] != '\0'; ci++)
+                s_cmdline[ci] = str[ci];
+            s_cmdline[ci] = '\0';
+        }
 
         if (tag->type == MB2_TAG_MMAP) {
             const mb2_mmap_tag_t *mmap = (const mb2_mmap_tag_t *)p;
@@ -233,4 +247,10 @@ arch_get_module2(uint64_t *phys_out, uint64_t *size_out)
     *phys_out = s_module2_phys;
     *size_out = s_module2_size;
     return 1;
+}
+
+const char *
+arch_get_cmdline(void)
+{
+    return s_cmdline;
 }

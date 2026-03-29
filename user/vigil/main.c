@@ -28,6 +28,7 @@ typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 typedef struct {
     char     name[64];
     char     run_cmd[256];
+    char     mode[16];         /* "graphical", "text", or "" (always) */
     policy_t policy;
     int      max_restarts;
     pid_t    pid;
@@ -37,12 +38,16 @@ typedef struct {
     int      needs_net_socket; /* 1 if caps file listed NET_SOCKET */
     int      needs_net_admin;  /* 1 if caps file listed NET_ADMIN */
     int      needs_disk_admin; /* 1 if caps file listed DISK_ADMIN */
+    int      needs_fb;         /* 1 if caps file listed FB */
 } service_t;
+
+#define SVC_CAP_FB          12u
 
 static service_t s_svcs[VIGIL_MAX_SERVICES];
 static int       s_nsvc = 0;
 static volatile int s_got_usr1  = 0;
 static volatile int s_got_term  = 0;
+static char s_boot_mode[16] = "text"; /* default to text if no cmdline */
 
 struct linux_dirent64 {
     unsigned long long d_ino;
@@ -109,6 +114,12 @@ load_service(const char *name)
     s->needs_net_socket = (strstr(caps_buf, "NET_SOCKET") != NULL);
     s->needs_net_admin  = (strstr(caps_buf, "NET_ADMIN")  != NULL);
     s->needs_disk_admin = (strstr(caps_buf, "DISK_ADMIN") != NULL);
+    s->needs_fb         = (strstr(caps_buf, "FB")         != NULL);
+
+    /* Read optional boot mode filter */
+    s->mode[0] = '\0';
+    snprintf(path, sizeof(path), "%s/%s/mode", VIGIL_SERVICES_DIR, name);
+    read_file(path, s->mode, sizeof(s->mode));
 
     s->pid      = -1;
     s->restarts = 0;
@@ -136,6 +147,8 @@ start_service(service_t *s)
         if (s->needs_disk_admin)
             syscall(361, (long)SVC_CAP_DISK_ADMIN,
                     (long)(SVC_CAP_RIGHTS_READ | SVC_CAP_RIGHTS_WRITE));
+        if (s->needs_fb)
+            syscall(361, (long)SVC_CAP_FB, (long)SVC_CAP_RIGHTS_READ);
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed
@@ -242,6 +255,23 @@ main(void)
 {
     vigil_log("starting");
 
+    /* Detect boot mode from kernel command line */
+    {
+        char cmdline[256] = "";
+        read_file("/proc/cmdline", cmdline, sizeof(cmdline));
+        if (strstr(cmdline, "boot=graphical"))
+            memcpy(s_boot_mode, "graphical", 10);
+        else if (strstr(cmdline, "boot=text"))
+            memcpy(s_boot_mode, "text", 5);
+        /* else keep default "text" */
+        char msg[80] = "boot mode: ";
+        size_t ml = strlen(msg);
+        size_t bl = strlen(s_boot_mode);
+        memcpy(msg + ml, s_boot_mode, bl);
+        msg[ml + bl] = '\0';
+        vigil_log(msg);
+    }
+
     /* write PID file */
     {
         char pidbuf[32];
@@ -273,8 +303,15 @@ main(void)
     }
 
     int i;
-    for (i = 0; i < s_nsvc; i++)
+    for (i = 0; i < s_nsvc; i++) {
+        /* Skip services whose mode doesn't match boot mode */
+        if (s_svcs[i].mode[0] != '\0' &&
+            strcmp(s_svcs[i].mode, s_boot_mode) != 0) {
+            s_svcs[i].active = 0;
+            continue;
+        }
         start_service(&s_svcs[i]);
+    }
 
     while (!s_got_term) {
         if (s_got_usr1) {

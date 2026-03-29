@@ -117,13 +117,11 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         return NULL;
     }
 
-    /* TODO: unlock slave with TIOCSPTLCK once PTY child shell hang is fixed.
-     * When unlocked, oksh starts but causes lumen to hang (no GUI renders).
-     * For now, leave locked — terminal shows chrome but no shell. */
-    /* {
+    /* Unlock slave so child can open /dev/pts/N */
+    {
         int unlock = 0;
-        ioctl(master_fd, 0x40045431, &unlock);
-    } */
+        ioctl(master_fd, 0x40045431 /* TIOCSPTLCK */, &unlock);
+    }
 
     /* Build slave path */
     {

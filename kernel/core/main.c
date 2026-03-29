@@ -57,6 +57,13 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_init();            /* serial_init + vga_init                        */
     arch_pat_init();        /* PAT MSR: PA1=WC for framebuffer mapping       */
     arch_mm_init(mb_info);  /* parse multiboot2 memory map                   */
+    {
+        const char *cmdline = arch_get_cmdline();
+        if (cmdline[0])
+            printk("[CMDLINE] OK: %s\n", cmdline);
+        else
+            printk("[CMDLINE] OK: (none)\n");
+    }
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */
     kva_init();             /* kernel virtual allocator — [KVA] OK           */
