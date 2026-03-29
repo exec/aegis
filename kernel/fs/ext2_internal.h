@@ -15,6 +15,15 @@
 #ifndef ENAMETOOLONG
 #define ENAMETOOLONG 36
 #endif
+#ifndef EACCES
+#define EACCES       13
+#endif
+#ifndef EINVAL
+#define EINVAL       22
+#endif
+#ifndef ELOOP
+#define ELOOP        40
+#endif
 
 /* ── Shared state — defined in ext2.c ──────────────────────────────────── */
 extern blkdev_t *s_dev;

@@ -13,6 +13,7 @@
 #define S_IFDIR  0040000U  /* directory */
 #define S_IFCHR  0020000U  /* character device */
 #define S_IFIFO  0010000U  /* FIFO / pipe */
+#define S_IFLNK  0120000U  /* symbolic link */
 
 /* makedev — encode major/minor into rdev field (Linux encoding) */
 #define makedev(maj, min) \

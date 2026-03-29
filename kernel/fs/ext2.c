@@ -221,116 +221,7 @@ uint32_t ext2_block_num(const ext2_inode_t *inode,
     return 0;   /* triple indirect not supported */
 }
 
-/* ------------------------------------------------------------------ */
-/* ext2_open — walk path from root inode 2                             */
-/* ------------------------------------------------------------------ */
-
-int ext2_open(const char *path, uint32_t *inode_out)
-{
-    if (!s_mounted)
-        return -1;
-
-    uint32_t current_ino = EXT2_ROOT_INODE;
-
-    /* skip leading slashes */
-    while (*path == '/')
-        path++;
-
-    /* If path is empty (root dir itself) */
-    if (*path == '\0') {
-        *inode_out = current_ino;
-        return 0;
-    }
-
-    while (*path != '\0') {
-        /* Extract next component into a local buffer */
-        char component[256];
-        uint32_t clen = 0;
-        while (*path != '\0' && *path != '/') {
-            if (clen < 255)
-                component[clen++] = *path;
-            path++;
-        }
-        component[clen] = '\0';
-
-        /* Skip trailing slashes between components */
-        while (*path == '/')
-            path++;
-
-        /* Prevent directory escape via ".." — clamp to filesystem root. */
-        if (component[0] == '.' && component[1] == '.' && component[2] == '\0') {
-            current_ino = EXT2_ROOT_INODE;
-            continue;
-        }
-
-        /* Read current directory inode */
-        ext2_inode_t inode;
-        if (ext2_read_inode(current_ino, &inode) < 0)
-            return -1;
-
-        /* Must be a directory */
-        if ((inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR)
-            return -1;
-
-        /* Search directory entries for component */
-        int found = 0;
-        uint32_t pos = 0;
-
-        while (pos < inode.i_size) {
-            uint32_t file_block = pos / s_block_size;
-            uint32_t blk = ext2_block_num(&inode, file_block);
-            if (blk == 0)
-                break;
-            uint8_t *data = cache_get_slot(blk);
-            if (!data)
-                return -1;
-            uint32_t block_pos = pos % s_block_size;
-            while (block_pos < s_block_size) {
-                ext2_dirent_t *de =
-                    (ext2_dirent_t *)(data + block_pos);
-                if (de->rec_len < 8 || block_pos + de->rec_len > s_block_size)
-                    break;
-                if (de->inode == 0) {
-                    block_pos += de->rec_len;
-                    pos += de->rec_len;
-                    continue;
-                }
-                if (de->name_len == (uint8_t)clen) {
-                    /* manual name compare */
-                    uint32_t k;
-                    int match = 1;
-                    for (k = 0; k < clen; k++) {
-                        if (de->name[k] != component[k]) {
-                            match = 0;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        current_ino = de->inode;
-                        found = 1;
-                        break;
-                    }
-                }
-                block_pos += de->rec_len;
-                pos += de->rec_len;
-            }
-            if (found)
-                break;
-            /* Advance to next block if we didn't break out */
-            if (!found) {
-                uint32_t block_end = (file_block + 1) * s_block_size;
-                if (pos < block_end)
-                    pos = block_end;
-            }
-        }
-
-        if (!found)
-            return -1;
-    }
-
-    *inode_out = current_ino;
-    return 0;
-}
+/* ext2_open moved below ext2_is_dir — now a thin wrapper around ext2_open_ex */
 
 /* ------------------------------------------------------------------ */
 /* ext2_read                                                           */
@@ -483,6 +374,412 @@ int ext2_is_dir(uint32_t ino)
     ext2_inode_t inode;
     if (ext2_read_inode(ino, &inode) < 0) return 0;
     return ((inode.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_check_perm — POSIX DAC permission check (no root bypass)      */
+/* ------------------------------------------------------------------ */
+
+int ext2_check_perm(uint32_t ino, uint16_t proc_uid, uint16_t proc_gid, int want)
+{
+    ext2_inode_t inode;
+    if (ext2_read_inode(ino, &inode) < 0)
+        return -EIO;
+
+    uint16_t mode = inode.i_mode;
+    uint16_t perm;
+
+    if (inode.i_uid == proc_uid) {
+        perm = (mode >> 6) & 7;
+    } else if (inode.i_gid == proc_gid) {
+        perm = (mode >> 3) & 7;
+    } else {
+        perm = mode & 7;
+    }
+
+    if ((perm & want) == (uint16_t)want)
+        return 0;
+    return -EACCES;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_read_symlink_target — read symlink target from inode           */
+/* ------------------------------------------------------------------ */
+
+int ext2_read_symlink_target(uint32_t ino, char *buf, uint32_t bufsiz)
+{
+    ext2_inode_t inode;
+    if (ext2_read_inode(ino, &inode) < 0)
+        return -EIO;
+
+    if ((inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFLNK)
+        return -EINVAL;
+
+    uint32_t tlen = inode.i_size;
+    if (tlen == 0)
+        return 0;
+    if (tlen >= bufsiz)
+        tlen = bufsiz - 1;
+
+    if (inode.i_size <= 60) {
+        /* Fast symlink — target stored in i_block[] */
+        uint8_t *src = (uint8_t *)inode.i_block;
+        uint32_t i;
+        for (i = 0; i < tlen; i++)
+            buf[i] = (char)src[i];
+        buf[tlen] = '\0';
+        return (int)tlen;
+    }
+
+    /* Slow symlink — target in first data block */
+    uint32_t blk = inode.i_block[0];
+    if (blk == 0)
+        return -EIO;
+    uint8_t *data = cache_get_slot(blk);
+    if (!data)
+        return -EIO;
+
+    uint32_t i;
+    for (i = 0; i < tlen; i++)
+        buf[i] = (char)data[i];
+    buf[tlen] = '\0';
+    return (int)tlen;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_open_ex — path walk with symlink following                     */
+/* ------------------------------------------------------------------ */
+
+int ext2_open_ex(const char *path, uint32_t *inode_out, int follow_final)
+{
+    if (!s_mounted)
+        return -1;
+
+    char resolved[512];
+    uint32_t depth = 0;
+    uint32_t plen, i;
+
+    /* Copy path into resolved buffer */
+    plen = 0;
+    while (path[plen] != '\0' && plen < 510)
+        plen++;
+    for (i = 0; i < plen; i++)
+        resolved[i] = path[i];
+    resolved[plen] = '\0';
+
+restart_walk:
+    {
+        const char *p = resolved;
+        uint32_t current_ino = EXT2_ROOT_INODE;
+
+        /* skip leading slashes */
+        while (*p == '/')
+            p++;
+
+        /* Root dir itself */
+        if (*p == '\0') {
+            *inode_out = current_ino;
+            return 0;
+        }
+
+        while (*p != '\0') {
+            /* Extract next component */
+            char component[256];
+            uint32_t clen = 0;
+            while (*p != '\0' && *p != '/') {
+                if (clen < 255)
+                    component[clen++] = *p;
+                p++;
+            }
+            component[clen] = '\0';
+
+            /* Skip trailing slashes */
+            while (*p == '/')
+                p++;
+
+            int is_final = (*p == '\0');
+
+            /* ".." — clamp to root */
+            if (component[0] == '.' && component[1] == '.' && component[2] == '\0') {
+                current_ino = EXT2_ROOT_INODE;
+                continue;
+            }
+
+            /* Read current directory inode */
+            ext2_inode_t dir_inode;
+            if (ext2_read_inode(current_ino, &dir_inode) < 0)
+                return -1;
+
+            /* Must be a directory */
+            if ((dir_inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR)
+                return -1;
+
+            /* Search directory entries for component */
+            int found = 0;
+            uint32_t child_ino = 0;
+            uint32_t pos = 0;
+
+            while (pos < dir_inode.i_size) {
+                uint32_t file_block = pos / s_block_size;
+                uint32_t blk = ext2_block_num(&dir_inode, file_block);
+                if (blk == 0)
+                    break;
+                uint8_t *data = cache_get_slot(blk);
+                if (!data)
+                    return -1;
+                uint32_t block_pos = pos % s_block_size;
+                while (block_pos < s_block_size) {
+                    ext2_dirent_t *de =
+                        (ext2_dirent_t *)(data + block_pos);
+                    if (de->rec_len < 8 || block_pos + de->rec_len > s_block_size)
+                        break;
+                    if (de->inode == 0) {
+                        block_pos += de->rec_len;
+                        pos += de->rec_len;
+                        continue;
+                    }
+                    if (de->name_len == (uint8_t)clen) {
+                        uint32_t k;
+                        int match = 1;
+                        for (k = 0; k < clen; k++) {
+                            if (de->name[k] != component[k]) {
+                                match = 0;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            child_ino = de->inode;
+                            found = 1;
+                            break;
+                        }
+                    }
+                    block_pos += de->rec_len;
+                    pos += de->rec_len;
+                }
+                if (found)
+                    break;
+                if (!found) {
+                    uint32_t block_end = (file_block + 1) * s_block_size;
+                    if (pos < block_end)
+                        pos = block_end;
+                }
+            }
+
+            if (!found)
+                return -1;
+
+            /* Check if resolved inode is a symlink */
+            ext2_inode_t child_node;
+            if (ext2_read_inode(child_ino, &child_node) < 0)
+                return -1;
+
+            if ((child_node.i_mode & EXT2_S_IFMT) == EXT2_S_IFLNK) {
+                /* Final component and no-follow requested: return the symlink inode */
+                if (is_final && !follow_final) {
+                    *inode_out = child_ino;
+                    return 0;
+                }
+
+                /* Follow the symlink */
+                depth++;
+                if (depth > SYMLINK_MAX_DEPTH)
+                    return -ELOOP;
+
+                char target[256];
+                int tlen = ext2_read_symlink_target(child_ino, target, sizeof(target));
+                if (tlen < 0)
+                    return tlen;
+
+                /* Build new path: target + "/" + remaining */
+                char newpath[512];
+                uint32_t np = 0;
+                uint32_t ti;
+
+                for (ti = 0; ti < (uint32_t)tlen && np < 510; ti++)
+                    newpath[np++] = target[ti];
+
+                /* Append remaining path if any */
+                if (*p != '\0') {
+                    if (np < 510)
+                        newpath[np++] = '/';
+                    while (*p != '\0' && np < 510)
+                        newpath[np++] = *p++;
+                }
+                newpath[np] = '\0';
+
+                /* Copy newpath into resolved */
+                for (i = 0; i < np; i++)
+                    resolved[i] = newpath[i];
+                resolved[np] = '\0';
+
+                goto restart_walk;
+            }
+
+            current_ino = child_ino;
+        }
+
+        *inode_out = current_ino;
+        return 0;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_open — thin wrapper around ext2_open_ex (follow all symlinks)  */
+/* ------------------------------------------------------------------ */
+
+int ext2_open(const char *path, uint32_t *inode_out)
+{
+    return ext2_open_ex(path, inode_out, 1);
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_symlink — create a symbolic link                               */
+/* ------------------------------------------------------------------ */
+
+int ext2_symlink(const char *linkpath, const char *target)
+{
+    if (!s_mounted)
+        return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
+
+    uint32_t parent_ino;
+    const char *basename;
+    if (ext2_lookup_parent(linkpath, &parent_ino, &basename) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
+
+    /* Measure target length */
+    uint32_t tlen = 0;
+    while (target[tlen] != '\0')
+        tlen++;
+
+    uint32_t new_ino = ext2_alloc_inode(0);
+    if (new_ino == 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
+
+    ext2_inode_t inode;
+    uint32_t ci;
+    for (ci = 0; ci < sizeof(inode); ci++)
+        ((uint8_t *)&inode)[ci] = 0;
+    inode.i_mode = EXT2_S_IFLNK | 0777;
+    inode.i_size = tlen;
+    inode.i_links_count = 1;
+
+    if (tlen <= 60) {
+        /* Fast symlink — target stored directly in i_block[] */
+        uint8_t *dst = (uint8_t *)inode.i_block;
+        for (ci = 0; ci < tlen; ci++)
+            dst[ci] = (uint8_t)target[ci];
+    } else {
+        /* Slow symlink — allocate data block */
+        uint32_t blk = ext2_alloc_block(0);
+        if (blk == 0) {
+            spin_unlock_irqrestore(&ext2_lock, fl);
+            return -1;
+        }
+        inode.i_block[0] = blk;
+        inode.i_blocks = s_block_size / 512;
+
+        uint8_t *data = cache_get_slot(blk);
+        if (!data) {
+            spin_unlock_irqrestore(&ext2_lock, fl);
+            return -1;
+        }
+        /* Zero the block first */
+        for (ci = 0; ci < s_block_size; ci++)
+            data[ci] = 0;
+        /* Copy target */
+        for (ci = 0; ci < tlen; ci++)
+            data[ci] = (uint8_t)target[ci];
+        cache_mark_dirty(blk);
+    }
+
+    ext2_write_inode(new_ino, &inode);
+    int r = ext2_dir_add_entry(parent_ino, new_ino, basename, EXT2_FT_SYMLINK);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return r;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_readlink — read symlink target by path (no-follow final)       */
+/* ------------------------------------------------------------------ */
+
+int ext2_readlink(const char *path, char *buf, uint32_t bufsiz)
+{
+    if (!s_mounted)
+        return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
+
+    uint32_t ino;
+    if (ext2_open_ex(path, &ino, 0) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
+
+    int r = ext2_read_symlink_target(ino, buf, bufsiz);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return r;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_chmod — change permission bits                                 */
+/* ------------------------------------------------------------------ */
+
+int ext2_chmod(const char *path, uint16_t mode)
+{
+    if (!s_mounted)
+        return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
+
+    uint32_t ino;
+    if (ext2_open_ex(path, &ino, 1) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
+
+    ext2_inode_t inode;
+    if (ext2_read_inode(ino, &inode) < 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -EIO;
+    }
+
+    /* Preserve type bits (upper 4), replace permission bits (lower 12) */
+    inode.i_mode = (inode.i_mode & EXT2_S_IFMT) | (mode & 0x0FFF);
+    ext2_write_inode(ino, &inode);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_chown — change owner and/or group                              */
+/* ------------------------------------------------------------------ */
+
+int ext2_chown(const char *path, uint16_t uid, uint16_t gid, int follow)
+{
+    if (!s_mounted)
+        return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
+
+    uint32_t ino;
+    if (ext2_open_ex(path, &ino, follow) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
+
+    ext2_inode_t inode;
+    if (ext2_read_inode(ino, &inode) < 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -EIO;
+    }
+
+    inode.i_uid = uid;
+    inode.i_gid = gid;
+    ext2_write_inode(ino, &inode);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */

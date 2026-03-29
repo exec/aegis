@@ -106,6 +106,13 @@ typedef struct __attribute__((packed)) {
 #define EXT2_S_IFMT   0xF000
 #define EXT2_S_IFREG  0x8000
 #define EXT2_S_IFDIR  0x4000
+#define EXT2_S_IFLNK  0xA000
+
+/* Directory entry file type for symlinks */
+#define EXT2_FT_SYMLINK  7
+
+/* Maximum symlink depth before returning ELOOP */
+#define SYMLINK_MAX_DEPTH 8
 
 /* Mount an ext2 filesystem from the named block device.
  * Returns 0 on success, -1 on failure. */
@@ -126,6 +133,22 @@ int ext2_file_size(uint32_t inode_num);
 int ext2_readdir(uint32_t dir_inode, uint64_t index,
                  char *name_out, uint8_t *type_out);
 int ext2_is_dir(uint32_t ino);
+
+/* Symlink operations */
+int ext2_symlink(const char *linkpath, const char *target);
+int ext2_readlink(const char *path, char *buf, uint32_t bufsiz);
+int ext2_read_symlink_target(uint32_t ino, char *buf, uint32_t bufsiz);
+
+/* Permission check — POSIX DAC (no root bypass) */
+int ext2_check_perm(uint32_t ino, uint16_t proc_uid, uint16_t proc_gid, int want);
+
+/* Metadata modification */
+int ext2_chmod(const char *path, uint16_t mode);
+int ext2_chown(const char *path, uint16_t uid, uint16_t gid, int follow);
+
+/* Path walk with symlink following control.
+ * follow_final: 1 = follow symlinks on final component, 0 = no-follow (lstat). */
+int ext2_open_ex(const char *path, uint32_t *inode_out, int follow_final);
 
 /* Flush all dirty cache slots to disk */
 void ext2_sync(void);
