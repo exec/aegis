@@ -294,7 +294,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Lumen compositor (Phase 37) | ✅ | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **ThinkPad Zen 2 bare-metal PASS** (slow rendering — optimization needed) |
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
 | Glyph + Lumen optimization (Phase 39) | ✅ | libglyph.a widget toolkit; dirty-rect compositor; scheduler busy-wait fixes; MMIO skip in fork; batch yield; **make test 25/25 PASS** |
-| Citadel + sys_spawn (Phase 40) | 🔶 | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **awaiting bare-metal test (lumen + PTY terminal)** |
+| Citadel + sys_spawn (Phase 40) | ✅ | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **ThinkPad Zen 2 bare-metal PASS** (gradual lag + freeze after ~60s — optimization needed) |
 | Bug fixes (Phase 40b) | ✅ | ARP deadlock from ISR (test_socket root cause since Phase 26); proc_spawn PT_INTERP (q35 RIP=0x0); socket lost-wakeup race; test_socket DHCP wait; **make test + test_socket PASS** |
 
 ### Known deviations
@@ -371,7 +371,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | ✅ Done |
 | 38 | **SMP** — LAPIC+IOAPIC, ~30 spinlocks, SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown | ✅ Done |
 | 39 | **Glyph** — widget toolkit (libglyph.a); dirty-rect compositor; PTY terminal fix | 🔶 PTY hang |
-| 40 | **Citadel** — sys_spawn syscall; lumen terminal via spawn (no fork); desktop icons; /bin/sh shell | 🔶 Awaiting bare-metal |
+| 40 | **Citadel** — sys_spawn syscall; lumen terminal via spawn (no fork); desktop icons; /bin/sh shell | ✅ Done |
 | 41 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
 | 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated. **Required for Glyph external apps**: MAP_SHARED pixel buffers, command pipe/socket for window create/destroy, fd passing for shared memory. Until Phase 42, all GUI apps are compiled into Lumen. | Not started |
 | 43 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
@@ -634,7 +634,7 @@ Phase 39 delivered Glyph widget toolkit, dirty-rect compositor, scheduler busy-w
 
 ## Phase 40 — Forward Constraints
 
-**Phase 40 status: 🔶 Code complete, awaiting bare-metal test on ThinkPad. Key validation: lumen renders immediately AND PTY terminal works (shell prompt, typing, command output). This is the first bare-metal test of the sys_spawn terminal approach.**
+**Phase 40 status: ✅ Complete. ThinkPad Zen 2 bare-metal PASS (2026-03-29).** Lumen renders immediately, PTY terminal works (shell prompt, typing, output), desktop icons work, multi-terminal via click. Gradual lag + freeze after ~60s — likely dirty-rect accumulation or memory leak in terminal rendering. Optimization deferred.
 
 **What was implemented:**
 
