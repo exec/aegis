@@ -185,11 +185,6 @@ main(void)
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
         if (n == 1) {
-            /* DEBUG: flash top-left 10x10 block green on each keystroke */
-            for (int dy = 0; dy < 10; dy++)
-                for (int dx = 0; dx < 10; dx++)
-                    fb[dy * pitch_px + dx] = 0x0000FF00;
-
             comp_handle_key(&comp, kbd_byte);
             activity = 1;
         }
@@ -221,10 +216,6 @@ main(void)
                 n = read(master_fd, pty_buf, sizeof(pty_buf));
                 if (n <= 0)
                     break;
-                /* DEBUG: flash red block when PTY data arrives */
-                for (int dy = 0; dy < 10; dy++)
-                    for (int dx = 12; dx < 22; dx++)
-                        fb[dy * pitch_px + dx] = 0x00FF0000;
                 terminal_write(term_win, pty_buf, (int)n);
                 pty_activity = 1;
             }
