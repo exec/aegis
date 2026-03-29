@@ -106,14 +106,24 @@ main(void)
         write(2, "lumen: fb_map failed\n", 20);
         return 1;
     }
-    /* Debug: fill screen blue to confirm FB is mapped and writable */
-    {
-        uint32_t *fb_tmp = (uint32_t *)(uintptr_t)fb_info.addr;
-        int tmp_pitch = (int)(fb_info.pitch / (fb_info.bpp / 8));
-        for (int y = 0; y < (int)fb_info.height; y++)
-            for (int x = 0; x < (int)fb_info.width; x++)
-                fb_tmp[y * tmp_pitch + x] = 0x00336699;
-    }
+    /* Debug: color checkpoints — fill top strip with color at each stage.
+     * Strip 0 (y=0..19)  = blue    = FB mapped
+     * Strip 1 (y=20..39) = green   = backbuffer allocated
+     * Strip 2 (y=40..59) = yellow  = compositor init done
+     * Strip 3 (y=60..79) = cyan    = terminal created
+     * Strip 4 (y=80..99) = magenta = first composite done
+     * If screen is blue only, it stalled after FB map. */
+    #define DBG_STRIP_H 20
+    #define dbg_strip(color, strip) do { \
+        uint32_t *_fb = (uint32_t *)(uintptr_t)fb_info.addr; \
+        int _p = (int)(fb_info.pitch / (fb_info.bpp / 8)); \
+        int _y0 = (strip) * DBG_STRIP_H; \
+        for (int _y = _y0; _y < _y0 + DBG_STRIP_H && _y < (int)fb_info.height; _y++) \
+            for (int _x = 0; _x < (int)fb_info.width; _x++) \
+                _fb[_y * _p + _x] = (color); \
+    } while(0)
+
+    dbg_strip(0x00336699, 0); /* blue = FB mapped */
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
@@ -126,6 +136,7 @@ main(void)
         write(2, "lumen: malloc failed\n", 21);
         return 1;
     }
+    dbg_strip(0x0033CC33, 1); /* green = backbuffer allocated */
 
     /* Set stdin to raw mode: no echo, no canonical, no signals */
     tcgetattr(0, &s_orig_termios);
@@ -143,12 +154,11 @@ main(void)
     if (mouse_fd >= 0)
         fcntl(mouse_fd, F_SETFL, O_NONBLOCK);
 
-    write(2, "lumen: init compositor\n", 22);
-
     /* Init compositor and cursor */
     compositor_t comp;
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
+    dbg_strip(0x00CCCC33, 2); /* yellow = compositor init done */
 
     /* No fprintf to stderr — it goes through console/printk which
      * writes to the framebuffer, interfering with compositor output. */
@@ -159,7 +169,9 @@ main(void)
     int term_cols = term_pw / FONT_W;
     int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
     int master_fd = -1;
+    dbg_strip(0x0033CCCC, 3); /* cyan = about to create terminal */
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
+    dbg_strip(0x00CC33CC, 4); /* magenta = terminal_create returned */
     if (term_win) {
         /* Center the terminal */
         term_win->x = (fb_w - term_win->surf_w) / 2;
@@ -181,15 +193,12 @@ main(void)
         term_win->focused_window = 1;
     }
 
-    write(2, "lumen: entering event loop\n", 26);
-
     /* Do initial full composite */
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
-
-    write(2, "lumen: first frame rendered\n", 27);
+    dbg_strip(0x00FF6600, 5); /* orange = first composite done */
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
