@@ -381,17 +381,6 @@ fb_init(void)
     uint32_t fb_pages, i;
     uint8_t *region;
 
-    {
-        int tag_seen, raw_type, raw_bpp;
-        arch_get_fb_raw_info(&tag_seen, &raw_type, &raw_bpp);
-        if (!tag_seen) {
-            printk("[FB] WARN: no framebuffer tag from GRUB (text mode boot)\n");
-        } else if (raw_type != 1 || raw_bpp != 32) {
-            printk("[FB] WARN: unsupported framebuffer: type=%u bpp=%u (need type=1 bpp=32)\n",
-                   (uint32_t)raw_type, (uint32_t)raw_bpp);
-        }
-    }
-
     if (!arch_get_fb_info(&info))
         return;
 

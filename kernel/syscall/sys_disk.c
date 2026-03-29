@@ -179,8 +179,8 @@ sys_fb_map(uint64_t arg1)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     if (cap_check(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_DISK_ADMIN, CAP_RIGHTS_READ) != 0)
-        return (uint64_t)-(int64_t)19; /* ENODEV — disguise as no device */
+                  CAP_KIND_FB, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)1; /* EPERM */
 
     uint64_t fb_phys;
     uint32_t width, height, pitch;

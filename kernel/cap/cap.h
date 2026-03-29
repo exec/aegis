@@ -26,6 +26,7 @@ typedef struct {
 #define CAP_KIND_THREAD_CREATE 9u /* may call clone(CLONE_VM) */
 #define CAP_KIND_PROC_READ  10u  /* may read /proc/[other-pid] */
 #define CAP_KIND_DISK_ADMIN 11u  /* may perform raw block device I/O */
+#define CAP_KIND_FB         12u  /* may map framebuffer into userspace */
 
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)

@@ -896,6 +896,7 @@ sys_execve(syscall_frame_t *frame,
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ, CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_FB,        CAP_RIGHTS_READ);
         /* DISK_ADMIN and AUTH are NOT in the baseline — they propagate only
          * via vigil exec_caps for specific binaries (installer, login). */
 

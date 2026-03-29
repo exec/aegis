@@ -108,10 +108,6 @@ typedef struct {
  * was found, 0 otherwise. */
 int arch_get_fb_info(arch_fb_info_t *out);
 
-/* arch_get_fb_raw_info — return raw MB2 framebuffer tag info for diagnostics.
- * tag_seen=1 if a framebuffer tag was present (regardless of type/bpp). */
-void arch_get_fb_raw_info(int *tag_seen, int *raw_type, int *raw_bpp);
-
 /* arch_get_module — return physical address and size of the first multiboot2
  * module (rootfs image loaded by GRUB). Returns 1 if a module was found,
  * 0 if no module present (diskless boot). */

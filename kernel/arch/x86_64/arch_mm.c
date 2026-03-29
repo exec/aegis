@@ -64,9 +64,6 @@ static uint32_t           region_count = 0;
 static uint64_t s_rsdp_v1_phys = 0;   /* ACPI 1.0 RSDP (type-14 tag) */
 static uint64_t s_rsdp_v2_phys = 0;   /* ACPI 2.0+ RSDP (type-15 tag) */
 static arch_fb_info_t s_fb_info;       /* zeroed at startup; addr==0 means absent */
-static uint8_t s_fb_tag_seen;         /* 1 if MB2 framebuffer tag was present */
-static uint8_t s_fb_raw_type;         /* raw type from MB2 tag (before filtering) */
-static uint8_t s_fb_raw_bpp;          /* raw bpp from MB2 tag */
 static uint64_t s_module_phys = 0;   /* physical start of first multiboot2 module (rootfs) */
 static uint64_t s_module_size = 0;   /* byte size of first module */
 static uint64_t s_module2_phys = 0;  /* physical start of second module (ESP image) */
@@ -159,11 +156,6 @@ void arch_mm_init(void *mb_info)
 
         if (tag->type == MB2_TAG_FB) {
             const mb2_fb_tag_t *fb = (const mb2_fb_tag_t *)p;
-            /* Save raw tag info for later diagnostic (printed by fb_init
-             * via printk after serial+VGA are both ready). */
-            s_fb_raw_type = fb->framebuffer_type;
-            s_fb_raw_bpp  = fb->framebuffer_bpp;
-            s_fb_tag_seen = 1;
             /* Only accept 32-bpp linear (type==1) framebuffers. */
             if (fb->framebuffer_type == 1 && fb->framebuffer_bpp == 32) {
                 s_fb_info.addr   = fb->framebuffer_addr;
@@ -179,7 +171,6 @@ void arch_mm_init(void *mb_info)
         p += (tag->size + 7) & ~7U;
     }
 
-    /* fb_init() reads these via arch_get_fb_raw_info() for diagnostic. */
 }
 
 uint32_t arch_mm_region_count(void)
@@ -223,13 +214,6 @@ arch_get_fb_info(arch_fb_info_t *out)
     return 1;
 }
 
-void
-arch_get_fb_raw_info(int *tag_seen, int *raw_type, int *raw_bpp)
-{
-    *tag_seen = s_fb_tag_seen;
-    *raw_type = s_fb_raw_type;
-    *raw_bpp  = s_fb_raw_bpp;
-}
 
 int
 arch_get_module(uint64_t *phys_out, uint64_t *size_out)
