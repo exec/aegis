@@ -140,6 +140,27 @@ sys_rt_sigreturn(syscall_frame_t *frame)
     frame->r8       = (uint64_t)sf.gregs[REG_R8];
     frame->r9       = (uint64_t)sf.gregs[REG_R9];
     frame->r10      = (uint64_t)sf.gregs[REG_R10];
+
+    /* SECURITY (X1): Validate restored RIP is canonical and in user space.
+     * On Intel, SYSRET with a non-canonical RCX causes #GP in ring 0 — this
+     * is the CVE-2014-4699 class of vulnerability. A malicious signal frame
+     * could set RIP to a non-canonical address (e.g. 0x8000000000000000) to
+     * trigger a kernel-mode #GP. Reject any RIP above the user-space ceiling. */
+    if (frame->rip > 0x00007FFFFFFFFFFF) {
+        sched_exit(); /* non-canonical or kernel RIP — kill the process */
+        __builtin_unreachable();
+    }
+
+    /* SECURITY (X2): Sanitize restored RFLAGS to prevent privilege escalation.
+     * The signal frame is user-controlled — a crafted frame could set:
+     *   IF=0  → disable interrupts, hanging the system
+     *   IOPL=3 → grant user-mode direct I/O port access
+     *   NT=1  → crash on iret (nested task flag)
+     *   TF=1  → single-step trap flood
+     *   AC=1  → alignment check exceptions
+     * Preserve only arithmetic flags (CF, PF, AF, ZF, SF, OF) and DF.
+     * Force IF=1 (interrupts enabled), IOPL=0, NT=0, TF=0, AC=0. */
+    frame->rflags = (frame->rflags & 0xCD5) | 0x202;
 #endif
 
     /* Restore signal mask from saved uc_sigmask */

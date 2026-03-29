@@ -100,10 +100,8 @@ static uint64_t
 alloc_table(void)
 {
     uint64_t phys = pmm_alloc_page();
-    if (phys == 0) {
-        printk("[VMM] FAIL: out of memory allocating page table\n");
-        for (;;) {}
-    }
+    if (phys == 0)
+        return 0;   /* OOM — caller must handle gracefully */
     uint64_t *t = vmm_window_map(phys);
     int i;
     for (i = 0; i < 512; i++)
@@ -157,6 +155,8 @@ ensure_table_phys(uint64_t parent_phys, uint64_t idx, uint64_t extra_flags)
 
     if (!(entry & VMM_FLAG_PRESENT)) {
         uint64_t child = alloc_table();   /* uses window internally */
+        if (child == 0)
+            return 0;                     /* OOM — propagate to caller */
         parent = vmm_window_map(parent_phys);
         parent[idx] = child | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | extra_flags);
         vmm_window_unmap();
@@ -250,8 +250,11 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
     uint64_t pt_idx   = (virt >> 12) & 0x1FF;
 
     uint64_t pdpt_phys = ensure_table_phys(s_pml4_phys, pml4_idx, 0);
+    if (pdpt_phys == 0) goto oom;
     uint64_t pd_phys   = ensure_table_phys(pdpt_phys,   pdpt_idx, 0);
+    if (pd_phys == 0) goto oom;
     uint64_t pt_phys   = ensure_table_phys(pd_phys,     pd_idx,   0);
+    if (pt_phys == 0) goto oom;
 
     uint64_t *pt = vmm_window_map(pt_phys);
     if (pt[pt_idx] & VMM_FLAG_PRESENT) {
@@ -264,6 +267,12 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
     vmm_window_unmap();
 
     spin_unlock_irqrestore(&vmm_window_lock, fl);
+    return;
+
+oom:
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
+    printk("[VMM] FAIL: out of memory in vmm_map_page\n");
+    for (;;) {}
 }
 
 void
@@ -417,6 +426,10 @@ vmm_create_user_pml4(void)
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
 
     uint64_t new_pml4_phys = alloc_table();   /* zeroed by alloc_table */
+    if (new_pml4_phys == 0) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        return 0;   /* OOM — caller must handle gracefully */
+    }
 
     /* Copy kernel high entries [256..511] from master PML4.
      * This makes the kernel higher-half accessible in every user process's
@@ -441,8 +454,9 @@ vmm_create_user_pml4(void)
     return new_pml4_phys;
 }
 
-/* vmm_map_user_page_nolock — internal helper, caller must hold vmm_window_lock. */
-static void
+/* vmm_map_user_page_nolock — internal helper, caller must hold vmm_window_lock.
+ * Returns 0 on success, -1 on OOM (page table allocation failure). */
+static int
 vmm_map_user_page_nolock(uint64_t pml4_phys, uint64_t virt,
                          uint64_t phys, uint64_t flags)
 {
@@ -452,8 +466,11 @@ vmm_map_user_page_nolock(uint64_t pml4_phys, uint64_t virt,
     uint64_t pt_idx   = (virt >> 12) & 0x1FF;
 
     uint64_t pdpt_phys = ensure_table_phys(pml4_phys,  pml4_idx, VMM_FLAG_USER);
+    if (pdpt_phys == 0) return -1;
     uint64_t pd_phys   = ensure_table_phys(pdpt_phys,  pdpt_idx, VMM_FLAG_USER);
+    if (pd_phys == 0) return -1;
     uint64_t pt_phys   = ensure_table_phys(pd_phys,    pd_idx,   VMM_FLAG_USER);
+    if (pt_phys == 0) return -1;
 
     uint64_t *pt = vmm_window_map(pt_phys);
     if (pt[pt_idx] & VMM_FLAG_PRESENT) {
@@ -463,6 +480,7 @@ vmm_map_user_page_nolock(uint64_t pml4_phys, uint64_t virt,
     }
     pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
+    return 0;
 }
 
 void
@@ -479,7 +497,11 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     }
 
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
-    vmm_map_user_page_nolock(pml4_phys, virt, phys, flags);
+    if (vmm_map_user_page_nolock(pml4_phys, virt, phys, flags) < 0) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        printk("[VMM] FAIL: out of memory in vmm_map_user_page\n");
+        for (;;) {}
+    }
     spin_unlock_irqrestore(&vmm_window_lock, fl);
 }
 
@@ -507,33 +529,55 @@ vmm_free_user_pml4(uint64_t pml4_phys)
 {
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     int i, j, k, l;
+
+    /* Read all 256 user-half PML4 entries in one window mapping. */
+    uint64_t pml4_entries[256];
+    uint64_t *pml4 = vmm_window_map(pml4_phys);
+    for (i = 0; i < 256; i++)
+        pml4_entries[i] = pml4[i];
+    vmm_window_unmap();
+
     for (i = 0; i < 256; i++) {
-        uint64_t pml4e = ((uint64_t *)vmm_window_map(pml4_phys))[i];
-        vmm_window_unmap();
+        uint64_t pml4e = pml4_entries[i];
         if (!(pml4e & VMM_FLAG_PRESENT)) continue;
         uint64_t pdpt_phys = ARCH_PTE_ADDR(pml4e);
 
+        /* Read all 512 PDPT entries in one window mapping. */
+        uint64_t pdpt_entries[512];
+        uint64_t *pdpt = vmm_window_map(pdpt_phys);
+        for (j = 0; j < 512; j++)
+            pdpt_entries[j] = pdpt[j];
+        vmm_window_unmap();
+
         for (j = 0; j < 512; j++) {
-            uint64_t pdpte = ((uint64_t *)vmm_window_map(pdpt_phys))[j];
-            vmm_window_unmap();
+            uint64_t pdpte = pdpt_entries[j];
             if (!(pdpte & VMM_FLAG_PRESENT)) continue;
             if (pdpte & PTE_PS) continue; /* 1GB page — unexpected, skip */
             uint64_t pd_phys = ARCH_PTE_ADDR(pdpte);
 
+            /* Read all 512 PD entries in one window mapping. */
+            uint64_t pd_entries[512];
+            uint64_t *pd = vmm_window_map(pd_phys);
+            for (k = 0; k < 512; k++)
+                pd_entries[k] = pd[k];
+            vmm_window_unmap();
+
             for (k = 0; k < 512; k++) {
-                uint64_t pde = ((uint64_t *)vmm_window_map(pd_phys))[k];
-                vmm_window_unmap();
+                uint64_t pde = pd_entries[k];
                 if (!(pde & VMM_FLAG_PRESENT)) continue;
                 if (pde & PTE_PS) continue; /* 2MB page — unexpected, skip */
                 uint64_t pt_phys = ARCH_PTE_ADDR(pde);
 
+                /* Hold window open across all 512 PT entries.
+                 * pmm_free_page does not use vmm_window_map. */
+                uint64_t *pt = vmm_window_map(pt_phys);
                 for (l = 0; l < 512; l++) {
-                    uint64_t pte = ((uint64_t *)vmm_window_map(pt_phys))[l];
-                    vmm_window_unmap();
+                    uint64_t pte = pt[l];
                     if (pte == 0) continue;
                     uint64_t phys = ARCH_PTE_ADDR(pte);
                     if (phys) pmm_free_page(phys);
                 }
+                vmm_window_unmap();
                 pmm_free_page(pt_phys);
             }
             pmm_free_page(pd_phys);
@@ -769,7 +813,11 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
                     uint64_t va = (pml4i << 39) | (pdpti << 30) |
                                   (pdi   << 21) | (pti   << 12);
 
-                    vmm_map_user_page_nolock(dst_pml4, va, dst_phys, flags);
+                    if (vmm_map_user_page_nolock(dst_pml4, va, dst_phys, flags) < 0) {
+                        pmm_free_page(dst_phys);
+                        spin_unlock_irqrestore(&vmm_window_lock, fl);
+                        return -1;
+                    }
 
                     /* Yield to interrupts periodically so the system
                      * stays responsive during large forks. */

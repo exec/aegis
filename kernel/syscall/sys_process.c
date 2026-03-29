@@ -865,7 +865,12 @@ sys_execve(syscall_frame_t *frame,
         elf_size = vf.size;
     }
 
-    /* 4. Free all user leaf pages; reuse PML4 and page-table structure */
+    /* 4. Free all user leaf pages; reuse PML4 and page-table structure.
+     * POINT OF NO RETURN: after this line, the old process image is destroyed.
+     * Any failure below (elf_load, interpreter load, stack alloc) must kill
+     * the process via sched_exit -- returning an error would SYSRET to
+     * unmapped memory. This matches Linux: after flush_old_exec, failures
+     * are fatal (SIGKILL). */
     vmm_free_user_pages(proc->pml4_phys);
     vmm_switch_to(proc->pml4_phys);   /* reload CR3 to flush stale TLBs */
 
@@ -921,8 +926,11 @@ sys_execve(syscall_frame_t *frame,
     int has_interp = 0;
     __builtin_memset(&interp_er, 0, sizeof(interp_er));
 
-    if (elf_load(proc->pml4_phys, elf_data, (size_t)elf_size, 0, &er) != 0)
-        { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
+    if (elf_load(proc->pml4_phys, elf_data, (size_t)elf_size, 0, &er) != 0) {
+        /* Past point of no return -- old image destroyed. Kill process. */
+        sched_exit();
+        __builtin_unreachable();
+    }
     /* Free ext2 buffer immediately after ELF is loaded (pages already mapped). */
     if (ext2_buf) {
         kva_free_pages(ext2_buf, ext2_pages);
@@ -946,14 +954,14 @@ sys_execve(syscall_frame_t *frame,
         } else {
             vfs_file_t vf;
             int vr = vfs_open(er.interp, 0, &vf);
-            if (vr != 0) { ret = (uint64_t)-(int64_t)2; goto done; }  /* ENOENT */
+            if (vr != 0) { sched_exit(); __builtin_unreachable(); }
             interp_pages = (vf.size + 4095ULL) / 4096ULL;
             interp_buf = kva_alloc_pages(interp_pages);
-            if (!interp_buf) { ret = (uint64_t)-(int64_t)12; goto done; }  /* ENOMEM */
+            if (!interp_buf) { sched_exit(); __builtin_unreachable(); }
             int rr = vf.ops->read(vf.priv, interp_buf, 0, vf.size);
             if (rr < 0) {
                 kva_free_pages(interp_buf, interp_pages);
-                ret = (uint64_t)-(int64_t)5; goto done;  /* EIO */
+                sched_exit(); __builtin_unreachable();
             }
             interp_data = (const uint8_t *)interp_buf;
             interp_size = vf.size;
@@ -962,7 +970,7 @@ sys_execve(syscall_frame_t *frame,
         if (elf_load(proc->pml4_phys, interp_data, (size_t)interp_size,
                      INTERP_BASE, &interp_er) != 0) {
             if (interp_buf) kva_free_pages(interp_buf, interp_pages);
-            ret = (uint64_t)-(int64_t)8; goto done;  /* ENOEXEC */
+            sched_exit(); __builtin_unreachable();
         }
         if (interp_buf) kva_free_pages(interp_buf, interp_pages);
     }
@@ -973,10 +981,9 @@ sys_execve(syscall_frame_t *frame,
         for (pn = 0; pn < USER_STACK_NPAGES; pn++) {
             uint64_t phys = pmm_alloc_page();
             if (!phys) {
-                /* Free all user pages already mapped (ELF + partial stack) */
-                vmm_free_user_pages(proc->pml4_phys);
-                ret = (uint64_t)-(int64_t)12;
-                goto done;  /* ENOMEM */
+                /* Past point of no return -- kill process */
+                sched_exit();
+                __builtin_unreachable();
             }
             vmm_zero_page(phys);
             vmm_map_user_page(proc->pml4_phys,
