@@ -156,6 +156,19 @@ void arch_mm_init(void *mb_info)
 
         if (tag->type == MB2_TAG_FB) {
             const mb2_fb_tag_t *fb = (const mb2_fb_tag_t *)p;
+            /* Diagnostic: log FB tag details before filtering.
+             * Runs before printk — use raw serial. */
+            {
+                const char *types[] = {"EGA","RGB","???","???","???"};
+                uint8_t t = fb->framebuffer_type < 3 ? fb->framebuffer_type : 2;
+                serial_write_string("[FB] mb2 tag: type=");
+                serial_write_string(types[t]);
+                serial_write_string(fb->framebuffer_bpp == 32 ? " bpp=32" :
+                                    fb->framebuffer_bpp == 24 ? " bpp=24" :
+                                    fb->framebuffer_bpp == 16 ? " bpp=16" :
+                                    fb->framebuffer_bpp == 8  ? " bpp=8"  : " bpp=?");
+                serial_write_string("\r\n");
+            }
             /* Only accept 32-bpp linear (type==1) framebuffers. */
             if (fb->framebuffer_type == 1 && fb->framebuffer_bpp == 32) {
                 s_fb_info.addr   = fb->framebuffer_addr;
@@ -170,6 +183,9 @@ void arch_mm_init(void *mb_info)
         /* Tags are 8-byte aligned */
         p += (tag->size + 7) & ~7U;
     }
+
+    if (s_fb_info.addr == 0)
+        serial_write_string("[FB] no framebuffer tag from GRUB\r\n");
 }
 
 uint32_t arch_mm_region_count(void)
