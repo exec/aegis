@@ -738,6 +738,10 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
                     vmm_window_unmap();
                     if (!(pte & VMM_FLAG_PRESENT)) continue;
                     if (!(pte & VMM_FLAG_USER)) continue;
+                    /* Skip MMIO pages (WC/UC) — framebuffer, device MMIO.
+                     * Copying MMIO via memcpy is extremely slow or can
+                     * stall the CPU.  Child doesn't need these. */
+                    if (pte & (VMM_FLAG_WC | VMM_FLAG_UCMINUS)) continue;
 
                     uint64_t src_phys = pte & ~0x8000000000000FFFULL;
                     /* Preserve all PTE flags including bit 63 (NX/XD bit). */
