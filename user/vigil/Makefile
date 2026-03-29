@@ -1,6 +1,5 @@
-MUSL_DIR = ../../build/musl-dynamic
-CC       = $(MUSL_DIR)/usr/bin/musl-gcc
-CFLAGS   = -static -O2 -fno-pie -no-pie -Wall -Wextra
+CC      = musl-gcc
+CFLAGS  = -static -O2 -Wall -Wextra
 TARGET  = vigil
 
 $(TARGET): main.c

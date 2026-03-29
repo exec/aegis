@@ -1,6 +1,5 @@
-MUSL_DIR = ../../build/musl-dynamic
-CC       = $(MUSL_DIR)/usr/bin/musl-gcc
-CFLAGS   = -O2 -static -fno-pie -no-pie -Wall -Wextra
+CC      = musl-gcc
+CFLAGS  = -O2 -static -Wall -Wextra
 
 login.elf: main.c
 	$(CC) $(CFLAGS) -o login.elf main.c
