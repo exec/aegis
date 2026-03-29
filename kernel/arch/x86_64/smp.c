@@ -215,8 +215,8 @@ ap_entry(void)
     /* Load the shared IDT (same gate table as BSP — at a fixed kernel VA) */
     arch_load_idt();
 
-    /* Start LAPIC timer on this AP for preemptive scheduling */
-    lapic_timer_init();
+    /* LAPIC timer disabled on APs — causes #GP on Zen 2 bare metal.
+     * TODO: debug vector 0x30 ISR gate on real hardware. */
 
     /* Signal BSP that we are online */
     g_ap_online[my_idx] = 1;
