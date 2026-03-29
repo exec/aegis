@@ -285,10 +285,10 @@ user/shell/shell.elf:
 user/oksh/oksh.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/oksh
 
-user/login/login.elf:
+user/login/login.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/login
 
-user/vigil/vigil: user/vigil/main.c
+user/vigil/vigil: user/vigil/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/vigil
 
 user/vigictl/vigictl: user/vigictl/main.c $(MUSL_BUILT)
