@@ -295,6 +295,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
 | Glyph + Lumen optimization (Phase 39) | ✅ | libglyph.a widget toolkit; dirty-rect compositor; scheduler busy-wait fixes; MMIO skip in fork; batch yield; **make test 25/25 PASS** |
 | Citadel + sys_spawn (Phase 40) | 🔶 | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **awaiting bare-metal test** |
+| Bug fixes (Phase 40b) | ✅ | ARP deadlock from ISR (test_socket root cause since Phase 26); proc_spawn PT_INTERP (q35 RIP=0x0); socket lost-wakeup race; test_socket DHCP wait; **make test + test_socket PASS** |
 
 ### Known deviations
 
@@ -625,25 +626,67 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ## Phase 39 — Forward Constraints
 
-**Phase 39 status: 🔶 Scheduler fixes DONE (make test 25/25 PASS). Needs bare-metal retest with PTY terminal.**
+**Phase 39 status: ✅ Complete. make test 25/25 PASS.**
 
-**What was implemented (Phase 39 + 39b):**
-- Glyph widget toolkit (libglyph.a, 14 source files): retained-mode widget tree, 10 widget types, HBox/VBox layout, window chrome (titlebar gradient, traffic-light buttons, border, shadow).
-- Dirty-rect compositor, mouse batching, skip-if-clean, fb_lock_compositor, i8042 flush.
-- Kernel command line parsing (multiboot2 tag type 1), /proc/cmdline, vigil boot mode filtering.
-- Non-blocking terminal_create (graceful PTY failure path).
-- Fork MMIO page skip (VMM_FLAG_WC/UC), fork batch yield (every 32 pages).
-- **Scheduler busy-wait elimination (CRITICAL FIX):** sys_nanosleep, pty_slave_read_raw, master_read_fn, and kbd_read_interruptible all converted from arch_wait_for_irq busy-wait to sched_block. sleep_deadline field on aegis_task_t with auto-wake in sched_tick. PTY master/slave use sched_wake on data write and close.
-
-**Remaining Phase 39 items:**
-1. Bare-metal retest with PTY terminal (fork+oksh child) on ThinkPad
-2. Desktop gradient replaced with solid fill (draw_px per-pixel bounds check too slow at native res)
-3. No ANSI escape parsing, no window resize, no Alt+Tab, no RTC clock
-4. No multi-process GUI clients (Phase 42 IPC required)
+Phase 39 delivered Glyph widget toolkit, dirty-rect compositor, scheduler busy-wait elimination, fork MMIO skip, kernel command line parsing, and vigil boot modes. The embedded terminal (fork inside compositor) was abandoned due to bare-metal performance — resolved in Phase 40 with sys_spawn.
 
 ---
 
-*Last updated: 2026-03-29 — Scheduler fixes complete. make test 25/25 PASS. Bare-metal retest pending.*
+## Phase 40 — Forward Constraints
+
+**Phase 40 status: 🔶 Code complete, awaiting bare-metal test on ThinkPad.**
+
+**What was implemented:**
+
+1. **sys_spawn syscall (514)** — creates a process from an ELF path WITHOUT fork. Fresh PML4, direct ELF load, no page copy, no vmm_window_lock contention. Handles PT_INTERP (dynamic linking), SysV ABI stack with full auxv, capabilities (baseline + exec_caps). stdio_fd parameter for PTY slave remapping. Child starts in new session.
+
+2. **Lumen terminal rewrite** — `terminal_create` uses sys_spawn instead of fork+exec. Opens PTY master+slave, calls `sys_spawn("/bin/sh", ..., slave_fd)`. No pre-fork allocation gymnastics needed. Uses /bin/sh (not oksh).
+
+3. **Desktop icons** — Terminal and System icons drawn via compositor `on_draw_desktop` callback. Click Terminal icon → spawn new terminal window via sys_spawn. Multi-terminal support via `glyph_window_t.tag` field (stores PTY master fd).
+
+4. **fb_lock_compositor re-enabled** in sys_fb_map.
+
+**Forward constraints:**
+
+1. **sys_spawn child has no controlling terminal.** setsid is implicit (sid=pid) but TIOCSCTTY is not called. Job control (Ctrl-C, SIGTSTP) won't work in spawned terminals. The shell works for basic I/O.
+
+2. **Desktop icons are simple clickable rectangles.** No drag, no right-click, no icon rearrangement.
+
+3. **No multi-process GUI clients.** Phase 42 IPC required for external Glyph apps.
+
+4. **No ANSI escape parsing.** Terminal renders raw text only. VT100 parser is future work.
+
+---
+
+## Phase 40b — Bug Fixes (2026-03-29)
+
+**All fixes verified: make test 25/25 PASS, test_socket PASS (first time since Phase 26).**
+
+### ARP deadlock from ISR context (root cause of test_socket since Phase 26)
+
+**Root cause:** When `tcp_rx` receives a SYN and sends SYN-ACK, `ip_send` → `arp_resolve` blocks with `arch_wait_for_irq` while holding `netdev_lock` + `tcp_lock` (called from PIT ISR via virtio_net_poll). The next PIT tick tries to acquire those locks → permanent deadlock. No more packets ever processed.
+
+**Why gateway ARP was uncached:** DHCP uses broadcasts exclusively — no ARP entry created for gateway (10.0.2.2). First unicast sender (chronos NTP) resolves it, but if TCP SYN arrives first → deadlock.
+
+**Fix (kernel/net/eth.c + kernel/syscall/sys_socket.c):**
+1. `arp_resolve` detects ISR context (IF flag check) and returns -1 instead of blocking. TCP retransmit timer re-sends SYN-ACK on next tick when ARP is cached.
+2. `sys_netcfg` (op=0, called by DHCP) proactively resolves gateway ARP from safe syscall context.
+
+### proc_spawn missing PT_INTERP (root cause of q35-without-NVMe RIP=0x0)
+
+**Root cause:** `proc_spawn` loaded the main ELF but never checked `er.interp` for a dynamic linker. Dynamically-linked init binaries (e.g., INIT=oksh) jumped through unresolved PLT stubs to address 0x0.
+
+**Fix (kernel/proc/proc.c):** Added interpreter loading mirroring `sys_execve`'s pattern. Also added full auxv (AT_PHDR, AT_PHNUM, AT_PAGESZ, AT_ENTRY, AT_BASE, AT_PHENT) and fixed stack layout (old layout overlapped auxv with string data).
+
+### Socket lost-wakeup race in accept/recv/connect
+
+**Root cause:** `waiter_task` was set AFTER checking the data queue. If `sock_wake` fired between the empty-queue check and `sched_block` while `waiter_task` was still NULL, the wakeup was silently lost → `accept()` blocked forever.
+
+**Fix (kernel/syscall/sys_socket.c):** Set `waiter_task` BEFORE checking data availability in `sys_accept`, `sys_recvfrom` (TCP + UDP), and `sys_connect`. If wake fires early, it sets RUNNING, so `sched_block` becomes a no-op.
+
+---
+
+*Last updated: 2026-03-29 — Phase 40 + 40b complete. sys_spawn, desktop icons, ARP deadlock fix, proc_spawn PT_INTERP, socket wakeup race. test_socket PASS for first time. Bare-metal test pending.*
 
 ---
 
@@ -655,25 +698,25 @@ Eight parallel agents audited the kernel against Unix best practices, Linux/xv6 
 
 | ID | Issue | File | Status |
 |----|-------|------|--------|
-| X1 | **SYSRET non-canonical RIP via sigreturn** — user-controlled `sf.gregs[REG_RIP]` restored without canonicality check. On Intel, SYSRET with non-canonical RCX causes #GP in ring 0 (CVE-2014-4699 class). | sys_signal.c:138 | **TODO** |
-| X2 | **Sigreturn restores unmasked RFLAGS** — user can set IF=0 (system hang), IOPL=3 (I/O bypass), NT=1 (crash). Fix: `frame->rflags = (restored & 0xCD5) \| 0x202`. | sys_signal.c:138 | **TODO** |
-| X3 | **execve destroys old image before new loads** — `vmm_free_user_pages` runs before `elf_load`. If elf_load fails, process has no address space, SYSRET returns to unmapped memory. | sys_process.c:869 | **TODO** |
-| X4 | **alloc_table panics on OOM** — `alloc_table()` in vmm.c does `for(;;){}` on OOM instead of returning error. Low-memory fork hard-crashes kernel. | vmm.c:104 | **TODO** |
+| X1 | **SYSRET non-canonical RIP via sigreturn** | sys_signal.c | ✅ Fixed Phase 39 |
+| X2 | **Sigreturn RFLAGS sanitization** | sys_signal.c | ✅ Fixed Phase 39 |
+| X3 | **execve point-of-no-return** | sys_process.c | ✅ Fixed Phase 39 |
+| X4 | **alloc_table OOM returns error** | vmm.c | ✅ Fixed Phase 39 |
 
 ### HIGH — Fix Soon
 
 | ID | Issue | File | Status |
 |----|-------|------|--------|
-| C2 | **Orphan zombies never reparented to init** — parent exits without waitpid, children become unreapable zombies forever. Linux reparents to PID 1. | sys_process.c | **TODO** |
+| C2 | **Orphan reparenting to init** | sys_process.c | ✅ Fixed Phase 39 |
 | C5 | **SYSRET signal delivery saves incomplete registers** — only r8-r10, rip, rflags, rsp saved. Callee-saved registers (rbx, rbp, r12-r15) corrupted after signal handler. ISR path is correct. | signal.c:360 | **TODO** |
-| C3 | **sys_fork leaks fd_table + VMA on partial failure** — OOM after fd_table_copy but before sched_add leaks 1+ KVA pages. | sys_process.c | **TODO** |
+| C3 | **sys_fork leak fix (fd_table + VMA)** | sys_process.c | ✅ Fixed Phase 39 |
 
 ### MEDIUM — Track and Fix
 
 | ID | Issue | File | Status |
 |----|-------|------|--------|
-| C6 | **epoll_wait lost-wakeup risk** — `nready` checked outside lock, then `waiter_task` set and block. ISR-delivered epoll_notify between check and set loses wake. | epoll.c:164 | **TODO** |
-| P2 | **vmm_free_user_pml4 excessive invlpg** — per-entry window map/unmap (1024 invlpg per PT page). Should hold window open across 512-entry scan. | vmm.c:506 | **TODO** |
+| C6 | **epoll_wait lost-wakeup** | epoll.c | ✅ Fixed Phase 39 |
+| P2 | **vmm_free_user_pml4 optimization** | vmm.c | ✅ Fixed Phase 39 |
 | M1 | **sched_wake has no memory barrier** — safe on x86, broken on ARM64 (store reordering). | sched.c:352 | **TODO** |
 | M2 | **mmap freelist has no lock for CLONE_VM threads** — safe single-core, corruption on SMP. | sys_memory.c | **TODO** |
 | M3 | **vmm_window_lock > pmm_lock ordering fragile** — non-nested today but undocumented. Future code could create ABBA deadlock. | vmm.c | Document |
