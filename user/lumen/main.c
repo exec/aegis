@@ -102,8 +102,18 @@ main(void)
 
     /* Map framebuffer via sys_fb_map (513) */
     long ret = syscall(513, &fb_info);
-    if (ret < 0)
+    if (ret < 0) {
+        write(2, "lumen: fb_map failed\n", 20);
         return 1;
+    }
+    /* Debug: fill screen blue to confirm FB is mapped and writable */
+    {
+        uint32_t *fb_tmp = (uint32_t *)(uintptr_t)fb_info.addr;
+        int tmp_pitch = (int)(fb_info.pitch / (fb_info.bpp / 8));
+        for (int y = 0; y < (int)fb_info.height; y++)
+            for (int x = 0; x < (int)fb_info.width; x++)
+                fb_tmp[y * tmp_pitch + x] = 0x00336699;
+    }
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
@@ -112,8 +122,10 @@ main(void)
 
     /* Allocate backbuffer */
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
-    if (!backbuf)
+    if (!backbuf) {
+        write(2, "lumen: malloc failed\n", 21);
         return 1;
+    }
 
     /* Set stdin to raw mode: no echo, no canonical, no signals */
     tcgetattr(0, &s_orig_termios);
@@ -130,6 +142,8 @@ main(void)
     /* Set mouse fd to non-blocking */
     if (mouse_fd >= 0)
         fcntl(mouse_fd, F_SETFL, O_NONBLOCK);
+
+    write(2, "lumen: init compositor\n", 22);
 
     /* Init compositor and cursor */
     compositor_t comp;
@@ -166,6 +180,16 @@ main(void)
         comp.focused = term_win;
         term_win->focused_window = 1;
     }
+
+    write(2, "lumen: entering event loop\n", 26);
+
+    /* Do initial full composite */
+    comp.full_redraw = 1;
+    cursor_hide();
+    comp_composite(&comp);
+    cursor_show(comp.cursor_x, comp.cursor_y);
+
+    write(2, "lumen: first frame rendered\n", 27);
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
