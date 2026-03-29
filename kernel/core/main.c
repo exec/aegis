@@ -94,6 +94,13 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
     ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */
+    /* Flush i8042 output buffer after PIC→IOAPIC transition.
+     * Stale scancodes from BIOS/GRUB can hold IRQ1 asserted on the
+     * i8042, preventing new keyboard interrupts until the buffer is
+     * drained.  This fixes intermittent "no keyboard on boot" on bare
+     * metal (2/3 boots affected on ThinkPad X13 Zen 2). */
+    while (inb(0x64) & 0x01)
+        (void)inb(0x60);
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
