@@ -370,7 +370,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 39 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
 | 40 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
 | 41 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
-| 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated | Not started |
+| 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated. **Required for Glyph external apps**: MAP_SHARED pixel buffers, command pipe/socket for window create/destroy, fd passing for shared memory. Until Phase 42, all GUI apps are compiled into Lumen. | Not started |
 | 43 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 44 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
 | 45 | Release | Not started |
