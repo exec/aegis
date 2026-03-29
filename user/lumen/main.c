@@ -102,8 +102,11 @@ main(void)
 
     /* Map framebuffer via sys_fb_map (513) */
     long ret = syscall(513, &fb_info);
-    if (ret < 0)
+    if (ret < 0) {
+        write(2, "lumen: fb_map failed\n", 20);
         return 1;
+    }
+    write(2, "lumen: fb ok\n", 13);
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
@@ -112,8 +115,11 @@ main(void)
 
     /* Allocate backbuffer */
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
-    if (!backbuf)
+    if (!backbuf) {
+        write(2, "lumen: malloc fail\n", 19);
         return 1;
+    }
+    write(2, "lumen: backbuf ok\n", 18);
 
     /* Set stdin to raw mode: no echo, no canonical, no signals */
     tcgetattr(0, &s_orig_termios);
@@ -135,6 +141,7 @@ main(void)
     compositor_t comp;
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
+    write(2, "lumen: comp ok\n", 15);
 
     /* Create terminal window: 3/5 of screen, centered */
     int term_pw = fb_w * 3 / 5;
@@ -142,7 +149,9 @@ main(void)
     int term_cols = term_pw / FONT_W;
     int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
     int master_fd = -1;
+    write(2, "lumen: term create\n", 19);
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
+    write(2, "lumen: term done\n", 17);
     if (term_win) {
         /* Center the terminal */
         term_win->x = (fb_w - term_win->surf_w) / 2;
@@ -165,10 +174,12 @@ main(void)
     }
 
     /* Do initial full composite */
+    write(2, "lumen: composite\n", 17);
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
+    write(2, "lumen: running\n", 15);
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
