@@ -125,4 +125,18 @@ int vfs_open(const char *path, int flags, vfs_file_t *out);
  * Returns 0 on success, -2 (ENOENT) if not found. */
 int vfs_stat_path(const char *path, k_stat_t *out);
 
+/* vfs_stat_path_ex — stat with symlink-follow control.
+ * follow: 1 = follow symlinks (stat), 0 = no-follow (lstat).
+ * For non-ext2 paths, delegates to vfs_stat_path (no symlinks).
+ * Returns 0 on success, -2 (ENOENT) if not found. */
+int vfs_stat_path_ex(const char *path, k_stat_t *out, int follow);
+
+/* vfs_fchmod — change mode of an open ext2 file descriptor.
+ * Returns 0 on success, -1 if not an ext2 fd. */
+int vfs_fchmod(vfs_file_t *f, uint16_t mode);
+
+/* vfs_fchown — change owner/group of an open ext2 file descriptor.
+ * Returns 0 on success, -1 if not an ext2 fd. */
+int vfs_fchown(vfs_file_t *f, uint16_t uid, uint16_t gid);
+
 #endif /* VFS_H */

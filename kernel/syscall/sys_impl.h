@@ -164,6 +164,14 @@ uint64_t sys_setgid(uint64_t gid_arg);
 uint64_t sys_sync(void);
 uint64_t sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr);
 uint64_t sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr);
+uint64_t sys_lstat(uint64_t arg1, uint64_t arg2);
+uint64_t sys_symlink(uint64_t arg1, uint64_t arg2);
+uint64_t sys_readlink(uint64_t arg1, uint64_t arg2, uint64_t arg3);
+uint64_t sys_chmod(uint64_t arg1, uint64_t arg2);
+uint64_t sys_fchmod(uint64_t arg1, uint64_t arg2);
+uint64_t sys_chown(uint64_t arg1, uint64_t arg2, uint64_t arg3);
+uint64_t sys_fchown(uint64_t arg1, uint64_t arg2, uint64_t arg3);
+uint64_t sys_lchown(uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
 /* ── sys_signal.c ───────────────────────────────────────────────────────── */
 uint64_t sys_rt_sigaction(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);

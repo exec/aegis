@@ -120,6 +120,7 @@ int ext2_mount(const char *devname);
 
 /* Low-level inode access */
 int ext2_read_inode(uint32_t ino, ext2_inode_t *out);
+int ext2_write_inode(uint32_t ino, const ext2_inode_t *inode);
 
 /* File operations for VFS integration */
 int ext2_open(const char *path, uint32_t *inode_out);

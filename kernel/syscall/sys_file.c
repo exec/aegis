@@ -321,17 +321,34 @@ sys_fstat(uint64_t arg1, uint64_t arg2)
 /*
  * sys_access — syscall 21
  * arg1 = user pointer to path string, arg2 = mode (F_OK=0, R_OK=4, W_OK=2, X_OK=1)
- * Returns 0 if file exists, -ENOENT otherwise (no permission checks).
+ * Returns 0 if accessible, -ENOENT if not found, -EACCES if permission denied.
  */
 uint64_t
 sys_access(uint64_t arg1, uint64_t arg2)
 {
-    (void)arg2;
     char path[256];
     if (stat_copy_path(arg1, path, sizeof(path)) != 0)
         return (uint64_t)-(int64_t)14; /* EFAULT */
     k_stat_t ks;
-    return (vfs_stat_path(path, &ks) == 0) ? 0 : (uint64_t)-(int64_t)2;
+    if (vfs_stat_path(path, &ks) != 0)
+        return (uint64_t)-(int64_t)2; /* ENOENT */
+
+    /* F_OK (mode==0): existence check only */
+    if (arg2 == 0) return 0;
+
+    /* For ext2 files, check permission bits via ext2_check_perm.
+     * Non-ext2 files (procfs, /dev, initrd): just check existence. */
+    uint32_t ino = 0;
+    if (ext2_open(path, &ino) == 0) {
+        aegis_process_t *proc = (aegis_process_t *)sched_current();
+        int want = 0;
+        if (arg2 & 4) want |= 4; /* R_OK */
+        if (arg2 & 2) want |= 2; /* W_OK */
+        if (arg2 & 1) want |= 1; /* X_OK */
+        int r = ext2_check_perm(ino, (uint16_t)proc->uid, (uint16_t)proc->gid, want);
+        if (r != 0) return (uint64_t)-(int64_t)13; /* EACCES */
+    }
+    return 0;
 }
 
 /*
@@ -873,4 +890,226 @@ sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr)
     copy_from_user(&sec, (const void *)(uintptr_t)timespec_uptr, 8);
     arch_clock_settime(sec);
     return 0;
+}
+
+/* ── Helper: resolve relative path against cwd ──────────────────────── */
+
+static int
+resolve_path(const char *kpath, const char *cwd, char *out, uint32_t outsz)
+{
+    if (kpath[0] == '/') {
+        uint32_t i;
+        for (i = 0; i < outsz - 1 && kpath[i]; i++)
+            out[i] = kpath[i];
+        out[i] = '\0';
+        return 0;
+    }
+    uint32_t cwdlen = 0;
+    while (cwd[cwdlen]) cwdlen++;
+    uint32_t pathlen = 0;
+    while (kpath[pathlen]) pathlen++;
+    uint32_t sep = (cwdlen > 0 && cwd[cwdlen - 1] == '/') ? 0u : 1u;
+    if (cwdlen + sep + pathlen >= outsz)
+        return -36; /* ENAMETOOLONG */
+    __builtin_memcpy(out, cwd, cwdlen);
+    if (sep) out[cwdlen] = '/';
+    __builtin_memcpy(out + cwdlen + sep, kpath, pathlen + 1);
+    return 0;
+}
+
+/* ── Symlink, readlink, chmod, chown syscalls ────────────────────────── */
+
+/*
+ * sys_lstat — syscall 6
+ * Like sys_stat but does not follow symlinks on the final component.
+ */
+uint64_t
+sys_lstat(uint64_t arg1, uint64_t arg2)
+{
+    char path[256];
+    if (stat_copy_path(arg1, path, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    k_stat_t ks;
+    int rc = vfs_stat_path_ex(path, &ks, 0);
+    if (rc != 0) return (uint64_t)-(int64_t)2; /* ENOENT */
+
+    if (!user_ptr_valid(arg2, sizeof(ks)))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    copy_to_user((void *)(uintptr_t)arg2, &ks, sizeof(ks));
+    return 0;
+}
+
+/*
+ * sys_symlink — syscall 88
+ * arg1 = user pointer to target string (stored as-is)
+ * arg2 = user pointer to linkpath string (resolved against cwd)
+ */
+uint64_t
+sys_symlink(uint64_t arg1, uint64_t arg2)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    char target[256], linkpath[256], resolved[256];
+    if (copy_path_from_user(target, arg1, sizeof(target)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    if (copy_path_from_user(linkpath, arg2, sizeof(linkpath)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    /* Resolve linkpath against cwd (target is stored as-is) */
+    if (resolve_path(linkpath, proc->cwd, resolved, sizeof(resolved)) != 0)
+        return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+
+    int r = ext2_symlink(resolved, target);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
+}
+
+/*
+ * sys_readlink — syscall 89
+ * arg1 = user pointer to path string
+ * arg2 = user pointer to output buffer
+ * arg3 = buffer size
+ */
+uint64_t
+sys_readlink(uint64_t arg1, uint64_t arg2, uint64_t arg3)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_READ, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    char path[256], resolved[256];
+    if (copy_path_from_user(path, arg1, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
+        return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+
+    char kbuf[256];
+    uint32_t bufsiz = (uint32_t)arg3;
+    if (bufsiz > sizeof(kbuf)) bufsiz = sizeof(kbuf);
+
+    int n = ext2_readlink(resolved, kbuf, bufsiz);
+    if (n < 0) return (uint64_t)(int64_t)n;
+
+    if (!user_ptr_valid(arg2, (uint64_t)n))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    copy_to_user((void *)(uintptr_t)arg2, kbuf, (uint32_t)n);
+    return (uint64_t)n;
+}
+
+/*
+ * sys_chmod — syscall 90
+ * arg1 = user pointer to path string
+ * arg2 = mode (permission bits)
+ */
+uint64_t
+sys_chmod(uint64_t arg1, uint64_t arg2)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    char path[256], resolved[256];
+    if (copy_path_from_user(path, arg1, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
+        return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+
+    int r = ext2_chmod(resolved, (uint16_t)arg2);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
+}
+
+/*
+ * sys_fchmod — syscall 91
+ * arg1 = fd, arg2 = mode (permission bits)
+ */
+uint64_t
+sys_fchmod(uint64_t arg1, uint64_t arg2)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
+    if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    int r = vfs_fchmod(f, (uint16_t)arg2);
+    if (r < 0) return (uint64_t)-(int64_t)22; /* EINVAL — not an ext2 fd */
+    return 0;
+}
+
+/*
+ * sys_chown — syscall 92
+ * arg1 = user pointer to path, arg2 = uid, arg3 = gid
+ * Follows symlinks.
+ */
+uint64_t
+sys_chown(uint64_t arg1, uint64_t arg2, uint64_t arg3)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    char path[256], resolved[256];
+    if (copy_path_from_user(path, arg1, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
+        return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+
+    int r = ext2_chown(resolved, (uint16_t)arg2, (uint16_t)arg3, 1);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
+}
+
+/*
+ * sys_fchown — syscall 93
+ * arg1 = fd, arg2 = uid, arg3 = gid
+ */
+uint64_t
+sys_fchown(uint64_t arg1, uint64_t arg2, uint64_t arg3)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
+    if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    int r = vfs_fchown(f, (uint16_t)arg2, (uint16_t)arg3);
+    if (r < 0) return (uint64_t)-(int64_t)22; /* EINVAL — not an ext2 fd */
+    return 0;
+}
+
+/*
+ * sys_lchown — syscall 94
+ * Like sys_chown but does not follow symlinks.
+ */
+uint64_t
+sys_lchown(uint64_t arg1, uint64_t arg2, uint64_t arg3)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    char path[256], resolved[256];
+    if (copy_path_from_user(path, arg1, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
+        return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+
+    int r = ext2_chown(resolved, (uint16_t)arg2, (uint16_t)arg3, 0);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }

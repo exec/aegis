@@ -434,3 +434,94 @@ vfs_stat_path(const char *path, k_stat_t *out)
 
     return -2;
 }
+
+/*
+ * vfs_stat_path_ex — stat with symlink-follow control.
+ *
+ * follow: 1 = follow symlinks on final component (stat behavior)
+ *         0 = do not follow (lstat behavior)
+ *
+ * For non-ext2 paths (procfs, /dev, /tmp, /run, initrd), delegates to
+ * vfs_stat_path — those filesystems have no symlinks.
+ * For ext2 paths, uses ext2_open_ex with the follow parameter.
+ * Also populates st_uid and st_gid from the on-disk inode.
+ */
+int
+vfs_stat_path_ex(const char *path, k_stat_t *out, int follow)
+{
+    if (!path || !out) return -2;
+
+    /* Non-ext2 paths: no symlinks, delegate to vfs_stat_path */
+    if ((path[0]=='/' && path[1]=='p' && path[2]=='r' && path[3]=='o' &&
+         path[4]=='c' && (path[5]=='/' || path[5]=='\0')) ||
+        (path[0]=='/' && path[1]=='d' && path[2]=='e' && path[3]=='v' &&
+         (path[4]=='/' || path[4]=='\0')) ||
+        (path[0]=='/' && path[1]=='t' && path[2]=='m' && path[3]=='p' &&
+         (path[4]=='/' || path[4]=='\0')) ||
+        (path[0]=='/' && path[1]=='r' && path[2]=='u' && path[3]=='n' &&
+         (path[4]=='/' || path[4]=='\0')))
+        return vfs_stat_path(path, out);
+
+    /* ext2 primary — use ext2_open_ex for symlink control */
+    {
+        uint32_t ino = 0;
+        if (ext2_open_ex(path, &ino, follow) == 0) {
+            ext2_inode_t inode;
+            int sz = ext2_file_size(ino);
+            if (sz < 0) sz = 0;
+            __builtin_memset(out, 0, sizeof(*out));
+            out->st_dev     = 2;
+            out->st_ino     = (uint64_t)ino;
+            out->st_nlink   = 1;
+            if (ext2_read_inode(ino, &inode) == 0) {
+                out->st_mode = (uint32_t)inode.i_mode;
+                out->st_uid  = (uint32_t)inode.i_uid;
+                out->st_gid  = (uint32_t)inode.i_gid;
+            } else {
+                out->st_mode = S_IFREG | 0644;
+            }
+            out->st_size    = (int64_t)sz;
+            out->st_blksize = 4096;
+            out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+            return 0;
+        }
+    }
+
+    /* initrd fallback */
+    if (initrd_stat_entry(path, out) == 0)
+        return 0;
+
+    return -2;
+}
+
+/*
+ * vfs_fchmod — change permission bits on an open ext2 fd.
+ * Returns 0 on success, -1 if not an ext2 fd.
+ */
+int
+vfs_fchmod(vfs_file_t *f, uint16_t mode)
+{
+    if (!f || f->ops != &s_ext2_ops) return -1;
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)f->priv;
+    ext2_inode_t inode;
+    if (ext2_read_inode(p->ino, &inode) != 0) return -1;
+    /* Preserve file type bits, replace permission bits */
+    inode.i_mode = (inode.i_mode & 0xF000) | (mode & 0x0FFF);
+    return ext2_write_inode(p->ino, &inode);
+}
+
+/*
+ * vfs_fchown — change owner/group on an open ext2 fd.
+ * Returns 0 on success, -1 if not an ext2 fd.
+ */
+int
+vfs_fchown(vfs_file_t *f, uint16_t uid, uint16_t gid)
+{
+    if (!f || f->ops != &s_ext2_ops) return -1;
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)f->priv;
+    ext2_inode_t inode;
+    if (ext2_read_inode(p->ino, &inode) != 0) return -1;
+    inode.i_uid = uid;
+    inode.i_gid = gid;
+    return ext2_write_inode(p->ino, &inode);
+}

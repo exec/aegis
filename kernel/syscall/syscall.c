@@ -31,7 +31,10 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  63: num = 0;   break;  /* read */
     case  64: num = 1;   break;  /* write */
     case  66: num = 20;  break;  /* writev */
-    /* readlinkat: not supported, let it fall through to ENOSYS */
+    case  36: num = 88; arg1 = arg2; arg2 = arg3; break;  /* symlinkat → symlink (skip dirfd) */
+    case  78: num = 89; arg1 = arg2; arg2 = arg3; arg3 = arg4; break;  /* readlinkat → readlink (skip dirfd) */
+    case  53: num = 90; arg1 = arg2; arg2 = arg3; break;  /* fchmodat → chmod (skip dirfd+flags) */
+    case  54: num = 92; arg1 = arg2; arg2 = arg3; arg3 = arg4; break;  /* fchownat → chown (skip dirfd+flags) */
     case  79: num = 5;   break;  /* fstatat → fstat (approx) */
     case  80: num = 5;   break;  /* fstat */
     case  82: num = 162; break;  /* fsync → sync */
@@ -95,7 +98,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  3: return sys_close(arg1);
     case  4: return sys_stat(arg1, arg2);
     case  5: return sys_fstat(arg1, arg2);
-    case  6: return sys_stat(arg1, arg2);   /* lstat = stat (no symlinks) */
+    case  6: return sys_lstat(arg1, arg2);
     case  8: return sys_lseek(arg1, arg2, arg3);
     case 21: return sys_access(arg1, arg2);
     case 35: return sys_nanosleep(arg1, arg2);
@@ -148,6 +151,13 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  82: return sys_rename(arg1, arg2);
     case  83: return sys_mkdir(arg1, arg2);
     case  87: return sys_unlink(arg1);
+    case  88: return sys_symlink(arg1, arg2);
+    case  89: return sys_readlink(arg1, arg2, arg3);
+    case  90: return sys_chmod(arg1, arg2);
+    case  91: return sys_fchmod(arg1, arg2);
+    case  92: return sys_chown(arg1, arg2, arg3);
+    case  93: return sys_fchown(arg1, arg2, arg3);
+    case  94: return sys_lchown(arg1, arg2, arg3);
     case 257: return sys_openat(arg1, arg2, arg3, arg4);
     case 162: return sys_sync();
     case 227: return sys_clock_settime(arg1, arg2);
