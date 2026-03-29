@@ -10,6 +10,8 @@
 #ifndef FB_H
 #define FB_H
 
+#include <stdint.h>
+
 /* fb_init — detect framebuffer from arch_get_fb_info(), map it, clear screen.
  * No-op (silent) if no framebuffer was provided by GRUB. */
 void fb_init(void);
@@ -40,5 +42,13 @@ int fb_get_phys_info(uint64_t *phys_out, uint32_t *width_out,
 /* fb_lock_compositor — suppress kernel text output to the framebuffer.
  * Called by sys_fb_map when a user compositor maps the FB. */
 void fb_lock_compositor(void);
+
+/* panic_bluescreen — take over the framebuffer and display a panic screen.
+ * Draws a blue background with Terminus font showing exception details.
+ * Halts the CPU with cli; hlt. Never returns.
+ * Safe to call from ISR context with IRQs disabled. */
+void panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
+                      uint64_t cr2, uint64_t rsp, uint64_t rbp,
+                      uint64_t rax, uint64_t rbx);
 
 #endif /* FB_H */

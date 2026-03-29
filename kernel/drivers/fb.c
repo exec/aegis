@@ -579,3 +579,162 @@ fb_check_amd(void)
            (uint32_t)amd->device_id);
     printk("[FB] WARN: ensure GRUB boots in UEFI mode (AMD APUs lack VBE)\n");
 }
+
+/* ── Panic Bluescreen ──────────────────────────────────────────────────── */
+
+#include "terminus20.h"
+
+#define PANIC_BG    0x001133AAu   /* deep blue */
+#define PANIC_FG    0x00FFFFFFu   /* white */
+#define PANIC_TITLE 0x00FFFFFFu   /* white title */
+#define PANIC_DIM   0x00AABBCCu   /* dimmed text for secondary info */
+#define PANIC_FONT_W 10
+#define PANIC_FONT_H 20
+
+static void
+_panic_draw_char(uint32_t px_x, uint32_t px_y, char c, uint32_t fg)
+{
+    const uint8_t *glyph = &font_terminus[(uint8_t)c * PANIC_FONT_H * 2];
+    uint32_t row, col;
+    for (row = 0; row < PANIC_FONT_H; row++) {
+        uint16_t bits = ((uint16_t)glyph[row * 2] << 8) | glyph[row * 2 + 1];
+        for (col = 0; col < PANIC_FONT_W; col++) {
+            uint32_t color = (bits & (0x8000u >> col)) ? fg : PANIC_BG;
+            uint32_t idx = (px_y + row) * s_pitch_px + (px_x + col);
+            s_fb_va[idx] = color;
+        }
+    }
+}
+
+static void
+_panic_draw_string(uint32_t *px_x, uint32_t px_y, const char *s, uint32_t fg)
+{
+    while (*s) {
+        if (*px_x + PANIC_FONT_W > s_fb_width)
+            break;
+        _panic_draw_char(*px_x, px_y, *s, fg);
+        *px_x += PANIC_FONT_W;
+        s++;
+    }
+}
+
+static void
+_panic_draw_hex(uint32_t *px_x, uint32_t px_y, uint64_t val, uint32_t fg)
+{
+    char buf[19]; /* "0x" + 16 hex digits + NUL */
+    buf[0] = '0';
+    buf[1] = 'x';
+    int i;
+    for (i = 15; i >= 0; i--) {
+        uint8_t nib = (uint8_t)(val & 0xF);
+        buf[2 + i] = (nib < 10) ? ('0' + nib) : ('a' + nib - 10);
+        val >>= 4;
+    }
+    buf[18] = '\0';
+    _panic_draw_string(px_x, px_y, buf, fg);
+}
+
+void
+panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
+                 uint64_t cr2, uint64_t rsp, uint64_t rbp,
+                 uint64_t rax, uint64_t rbx)
+{
+    if (!fb_available || s_fb_va == (void *)0)
+        goto halt;
+
+    /* Take over the framebuffer unconditionally */
+    s_fb_locked = 0;
+
+    /* Fill screen with blue */
+    {
+        uint32_t total = s_fb_height * s_pitch_px;
+        uint32_t i;
+        for (i = 0; i < total; i++)
+            s_fb_va[i] = PANIC_BG;
+    }
+
+    /* Layout: centered content block */
+    uint32_t margin_x = 60;
+    uint32_t y = 60;
+    uint32_t x;
+
+    /* Sad face */
+    x = margin_x;
+    _panic_draw_string(&x, y, ":(", PANIC_TITLE);
+    y += PANIC_FONT_H * 2;
+
+    /* Title */
+    x = margin_x;
+    _panic_draw_string(&x, y, "Aegis ran into a problem and needs to stop.", PANIC_TITLE);
+    y += PANIC_FONT_H * 2;
+
+    /* Exception info */
+    x = margin_x;
+    _panic_draw_string(&x, y, "Exception: ", PANIC_DIM);
+    {
+        const char *name = "unknown";
+        switch (vector) {
+        case  0: name = "#DE divide error"; break;
+        case  6: name = "#UD invalid opcode"; break;
+        case  8: name = "#DF double fault"; break;
+        case 13: name = "#GP general protection"; break;
+        case 14: name = "#PF page fault"; break;
+        }
+        _panic_draw_string(&x, y, name, PANIC_FG);
+    }
+    y += PANIC_FONT_H + 4;
+
+    /* RIP */
+    x = margin_x;
+    _panic_draw_string(&x, y, "RIP:    ", PANIC_DIM);
+    _panic_draw_hex(&x, y, rip, PANIC_FG);
+    y += PANIC_FONT_H + 4;
+
+    /* Error code */
+    x = margin_x;
+    _panic_draw_string(&x, y, "Error:  ", PANIC_DIM);
+    _panic_draw_hex(&x, y, error_code, PANIC_FG);
+    y += PANIC_FONT_H + 4;
+
+    /* CR2 (for page faults) */
+    if (vector == 14) {
+        x = margin_x;
+        _panic_draw_string(&x, y, "CR2:    ", PANIC_DIM);
+        _panic_draw_hex(&x, y, cr2, PANIC_FG);
+        y += PANIC_FONT_H + 4;
+    }
+
+    /* RSP */
+    x = margin_x;
+    _panic_draw_string(&x, y, "RSP:    ", PANIC_DIM);
+    _panic_draw_hex(&x, y, rsp, PANIC_FG);
+    y += PANIC_FONT_H + 4;
+
+    /* RBP */
+    x = margin_x;
+    _panic_draw_string(&x, y, "RBP:    ", PANIC_DIM);
+    _panic_draw_hex(&x, y, rbp, PANIC_FG);
+    y += PANIC_FONT_H + 4;
+
+    /* RAX, RBX */
+    x = margin_x;
+    _panic_draw_string(&x, y, "RAX:    ", PANIC_DIM);
+    _panic_draw_hex(&x, y, rax, PANIC_FG);
+    y += PANIC_FONT_H + 4;
+
+    x = margin_x;
+    _panic_draw_string(&x, y, "RBX:    ", PANIC_DIM);
+    _panic_draw_hex(&x, y, rbx, PANIC_FG);
+    y += PANIC_FONT_H * 2;
+
+    /* Hint */
+    x = margin_x;
+    _panic_draw_string(&x, y, "Resolve addresses: make sym ADDR=<rip>", PANIC_DIM);
+    y += PANIC_FONT_H + 4;
+    x = margin_x;
+    _panic_draw_string(&x, y, "This information is also on the serial console.", PANIC_DIM);
+
+halt:
+    for (;;)
+        __asm__ volatile("cli; hlt");
+}

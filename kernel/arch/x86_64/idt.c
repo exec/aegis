@@ -9,6 +9,7 @@
 #include "tlb.h"
 #include "printk.h"
 #include "arch.h"
+#include "../../drivers/fb.h"
 
 /* 256 entries: full IDT covering all x86-64 interrupt vectors */
 static aegis_idt_gate_t s_idt[256];
@@ -154,7 +155,13 @@ isr_dispatch(cpu_state_t *s)
          * For ring-3 faults (CS=ARCH_USER_CS) rbp is a user-space pointer — skip. */
         if (s->cs == ARCH_KERNEL_CS)
             panic_backtrace(s->rbp);
-        for (;;) {}
+        {
+            uint64_t cr2_val = 0;
+            if (s->vector == 14)
+                __asm__ volatile("mov %%cr2, %0" : "=r"(cr2_val));
+            panic_bluescreen(s->vector, s->rip, s->error_code,
+                             cr2_val, s->rsp, s->rbp, s->rax, s->rbx);
+        }
     } else if (s->vector >= 0xF0 && s->vector <= 0xFD) {
         /* Remapped PIC vector — stale interrupt from 8259A during IOAPIC
          * transition.  The PIC is already masked; just drop the interrupt.
@@ -215,7 +222,8 @@ isr_dispatch(cpu_state_t *s)
     if (s->cs == ARCH_USER_CS && (s->ss & ~(uint64_t)3) != (ARCH_USER_DS & ~(uint64_t)3)) {
         printk("[PANIC] corrupt ring-3 iretq frame vec=%lu rip=0x%lx rsp=0x%lx ss=0x%lx\n",
                s->vector, s->rip, s->rsp, s->ss);
-        for (;;) {}
+        panic_bluescreen(s->vector, s->rip, s->ss,
+                         0, s->rsp, s->rbp, s->rax, s->rbx);
     }
 
     /* Normalize SS RPL=3 for iretq back to ring-3.
