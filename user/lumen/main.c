@@ -211,10 +211,22 @@ main(void)
 
     /* Do initial full composite */
     comp.full_redraw = 1;
-    cursor_hide();
     comp_composite(&comp);
-    cursor_show(comp.cursor_x, comp.cursor_y);
-    dbg_strip(0x00FF6600, 5); /* orange = first composite done */
+
+    /* Debug: verify backbuffer has content — check pixel at (100,100) */
+    {
+        uint32_t px = backbuf[100 * pitch_px + 100];
+        if (px == 0)
+            dbg_strip(0x00FF0000, 5); /* red = backbuffer is black (gradient failed) */
+        else
+            dbg_strip(0x0000FF00, 5); /* green = backbuffer has content */
+    }
+
+    /* Debug: force a direct copy of first 200 rows from backbuf to fb */
+    for (int y = 0; y < 200 && y < fb_h; y++)
+        memcpy(&fb[y * pitch_px], &backbuf[y * pitch_px],
+               (size_t)fb_w * sizeof(uint32_t));
+    dbg_strip(0x00FF6600, 11); /* orange = manual flip done */
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
