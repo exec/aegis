@@ -169,15 +169,29 @@ ioapic_init(void)
     uint32_t ver = ioapic_read(IOAPIC_VER);
     s_max_redir = (ver >> 16) & 0xFF;
 
+    /* Diagnostic: dump ISOs and IOAPIC state before touching anything */
+    printk("[IOAPIC] addr=0x%x ver=0x%x max_redir=%u bsp_apic_id=%u\n",
+           (uint32_t)g_ioapic_addr, ver, s_max_redir, (uint32_t)g_bsp_apic_id);
+    for (uint32_t i = 0; i < g_madt_iso_count; i++) {
+        printk("[IOAPIC] ISO: source=%u gsi=%u flags=0x%x\n",
+               (uint32_t)g_madt_iso[i].source_irq,
+               g_madt_iso[i].gsi,
+               (uint32_t)g_madt_iso[i].flags);
+    }
+    uint16_t sci_irq = acpi_get_sci_irq();
+    printk("[IOAPIC] SCI IRQ=%u\n", (uint32_t)sci_irq);
+
     /* Mask all redirection entries first */
     for (uint32_t pin = 0; pin <= s_max_redir; pin++) {
         ioapic_write_redir((uint8_t)pin,
                            REDIR_MASK_BIT | (0x20 + pin), /* masked, dummy vector */
                            0);
     }
+    printk("[IOAPIC] all pins masked\n");
 
     /* Disable the legacy 8259A PIC */
     pic_disable();
+    printk("[IOAPIC] PIC disabled\n");
 
     /* Route standard IRQs to BSP:
      *   PIT     (ISA IRQ 0)  → vector 0x20 (may be remapped to pin 2 by ISO)
@@ -186,13 +200,16 @@ ioapic_init(void)
      *   SCI     (from FADT)  → vector for the SCI IRQ
      */
     route_irq(0,  0x20, g_bsp_apic_id);    /* PIT timer */
+    printk("[IOAPIC] routed PIT\n");
     route_irq(1,  0x21, g_bsp_apic_id);    /* PS/2 keyboard */
+    printk("[IOAPIC] routed KBD\n");
     route_irq(12, 0x2C, g_bsp_apic_id);    /* PS/2 mouse */
+    printk("[IOAPIC] routed PS/2 mouse\n");
 
     /* Route ACPI SCI interrupt if known */
-    uint16_t sci_irq = acpi_get_sci_irq();
     if (sci_irq > 0 && sci_irq < 16) {
         route_irq((uint8_t)sci_irq, 0x20 + (uint8_t)sci_irq, g_bsp_apic_id);
+        printk("[IOAPIC] routed SCI\n");
     }
 
     s_active = 1;
