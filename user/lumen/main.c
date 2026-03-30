@@ -8,6 +8,7 @@
 #include <time.h>
 #include <sys/syscall.h>
 #include <errno.h>
+#include <signal.h>
 
 #include <glyph.h>
 #include "cursor.h"
@@ -219,6 +220,10 @@ main(void)
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
     if (!backbuf)
         return 1;
+
+    /* Ignore job control signals — compositor always reads keyboard */
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
 
     /* Set stdin to raw mode */
     tcgetattr(0, &s_orig_termios);
