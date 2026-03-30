@@ -514,7 +514,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	/sbin/mke2fs -t ext2 -F -L aegis-root $(ROOTFS)
 	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\nmkdir /lib\nmkdir /root\nmkdir /proc\nmkdir /dev\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
+	@printf '\n _______ _______  ______ _____ _______\n |_____| |______ |  ____   |   |______\n |     | |______ |_____| __|__ ______|\n\n Aegis 1.0.0 "Ambient Argus"\n\n' > /tmp/aegis-motd
 	# Dynamic linker / shared library — written as two separate files
 	# (ext2 now supports symlinks but debugfs symlink cmd is inconsistent)
 	printf 'write build/musl-dynamic/usr/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/usr/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \

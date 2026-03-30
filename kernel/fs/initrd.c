@@ -8,10 +8,17 @@
 #define EISDIR 21
 #endif
 
-/* /etc/motd content — starts with '[' so it survives the make test ANSI filter.
+/* /etc/motd content — displayed by stsh on login.
  * The filter keeps only lines starting with '['; content not matching is
  * silently dropped from the serial diff. */
-static const char s_motd[] = "[MOTD] Welcome to Aegis\n";
+static const char s_motd[] =
+    "\n"
+    " _______ _______  ______ _____ _______\n"
+    " |_____| |______ |  ____   |   |______\n"
+    " |     | |______ |_____| __|__ ______|\n"
+    "\n"
+    " Aegis 1.0.0 \"Ambient Argus\"\n"
+    "\n";
 static const char s_passwd[] = "root:x:0:0:root:/root:/bin/stsh\n";
 static const char s_shadow[] =
     "root:$6$5a3b9c1d2e4f6789$fvwyIjdmyvB59hifGMRFrcwhBb4cH0.3nRy2j2LpCk."
