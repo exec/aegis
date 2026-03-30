@@ -177,6 +177,13 @@ main(void)
                 int n = (int)read(0, &c, 1);
                 if (n <= 0) break;
                 if (c == '\n' || c == '\r') break;
+                if (c == '\x7f' || c == '\b') {
+                    if (pi > 0) {
+                        pi--;
+                        write(1, "\b \b", 3);
+                    }
+                    continue;
+                }
                 password[pi++] = c;
                 write(1, "*", 1);
             }
