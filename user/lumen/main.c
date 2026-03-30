@@ -7,6 +7,7 @@
 #include <termios.h>
 #include <time.h>
 #include <sys/syscall.h>
+#include <errno.h>
 
 #include <glyph.h>
 #include "cursor.h"
@@ -274,23 +275,33 @@ main(void)
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
+        dbg_key_count++;
         if (n == 1) {
-            dbg_key_count++;
             int mfd = (comp.focused && comp.focused->tag > 0)
                       ? comp.focused->tag : -1;
             int wr = -99;
             if (mfd >= 0)
                 wr = (int)write(mfd, &kbd_byte, 1);
             snprintf(dbg_line, sizeof(dbg_line),
-                     "KEY 0x%02x '%c' #%d  focus=%s mfd=%d wr=%d   ",
+                     "KEY 0x%02x '%c'  focus=%s mfd=%d wr=%d   ",
                      (unsigned char)kbd_byte,
                      (kbd_byte >= 0x20 && kbd_byte < 0x7f) ? kbd_byte : '.',
-                     dbg_key_count,
                      comp.focused ? "yes" : "no",
                      mfd, wr);
             /* Key already written to PTY above; skip comp_handle_key
              * to avoid double-write.  TODO: remove debug overlay. */
             activity = 1;
+        } else {
+            /* Show read result every ~60 frames to avoid flicker */
+            if ((dbg_key_count % 60) == 0) {
+                extern int errno;
+                snprintf(dbg_line, sizeof(dbg_line),
+                         "read(0)=%d errno=%d  poll#%d  focus=%s nwin=%d   ",
+                         (int)n, errno, dbg_key_count,
+                         comp.focused ? "yes" : "no",
+                         comp.nwindows);
+                activity = 1;  /* force redraw to show debug */
+            }
         }
 
         /* Poll mouse -- BATCH: drain all pending events */
