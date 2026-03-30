@@ -18,7 +18,7 @@
 #include <sys/syscall.h>
 
 /* sys_spawn: create process from ELF path without fork.
- * syscall(514, path, argv, envp, stdio_fd) */
+ * syscall(514, path, argv, envp, stdio_fd, cap_mask) */
 #define SYS_SPAWN 514
 
 typedef struct {
@@ -216,7 +216,7 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         char *argv[] = {"-sh", NULL};  /* leading '-' = login shell */
         char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=dumb", NULL};
 
-        long pid = syscall(SYS_SPAWN, "/bin/sh", argv, envp, slave_fd);
+        long pid = syscall(SYS_SPAWN, "/bin/sh", argv, envp, slave_fd, 0);
         if (pid < 0) {
             fail_reason = "sys_spawn failed";
             goto pty_failed;

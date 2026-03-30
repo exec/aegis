@@ -1436,7 +1436,8 @@ sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
  */
 uint64_t
 sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
-          uint64_t envp_uptr, uint64_t stdio_fd_arg)
+          uint64_t envp_uptr, uint64_t stdio_fd_arg,
+          uint64_t cap_mask_uptr)
 {
     (void)envp_uptr;
 
@@ -1766,33 +1767,73 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
     child->signal_mask     = 0;
     __builtin_memset(child->sigactions, 0, sizeof(child->sigactions));
 
-    /* 12. Capabilities: baseline + exec_caps applied and consumed. */
+    /* 12. Capabilities: baseline + exec_caps, OR cap_mask if provided. */
     {
         uint32_t ci;
         for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
             child->caps[ci].kind   = CAP_KIND_NULL;
             child->caps[ci].rights = 0;
         }
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,   CAP_RIGHTS_READ);
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,  CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
-        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_FB,         CAP_RIGHTS_READ);
 
-        /* Apply parent's pre-registered exec_caps, then consume them. */
-        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
-            if (parent->exec_caps[ci].kind != CAP_KIND_NULL) {
+        if (cap_mask_uptr != 0) {
+            /* cap_mask mode: caller must hold CAP_DELEGATE */
+            if (cap_check(parent->caps, CAP_TABLE_SIZE,
+                          CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ) != 0) {
+                kva_free_pages(kstack, 4);
+                result = (uint64_t)-(int64_t)ENOCAP;
+                goto fail_child;
+            }
+
+            /* Copy cap_mask from userspace */
+            cap_slot_t mask[CAP_TABLE_SIZE];
+            if (!user_ptr_valid(cap_mask_uptr, sizeof(mask))) {
+                kva_free_pages(kstack, 4);
+                result = (uint64_t)-(int64_t)14;  /* EFAULT */
+                goto fail_child;
+            }
+            copy_from_user(mask, (const void *)cap_mask_uptr,
+                           sizeof(mask));
+
+            /* Validate and apply: caller can only grant caps it holds */
+            for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+                if (mask[ci].kind == CAP_KIND_NULL)
+                    continue;
+                if (mask[ci].kind >= 16u) {
+                    kva_free_pages(kstack, 4);
+                    result = (uint64_t)-(int64_t)22;  /* EINVAL */
+                    goto fail_child;
+                }
+                if (cap_check(parent->caps, CAP_TABLE_SIZE,
+                              mask[ci].kind, mask[ci].rights) != 0) {
+                    kva_free_pages(kstack, 4);
+                    result = (uint64_t)-(int64_t)ENOCAP;
+                    goto fail_child;
+                }
                 cap_grant(child->caps, CAP_TABLE_SIZE,
-                          parent->exec_caps[ci].kind,
-                          parent->exec_caps[ci].rights);
-                parent->exec_caps[ci].kind   = CAP_KIND_NULL;
-                parent->exec_caps[ci].rights = 0;
+                          mask[ci].kind, mask[ci].rights);
+            }
+            /* exec_caps NOT applied in cap_mask mode */
+        } else {
+            /* Normal mode: baseline + exec_caps */
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,   CAP_RIGHTS_READ);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,  CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_FB,         CAP_RIGHTS_READ);
+
+            for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+                if (parent->exec_caps[ci].kind != CAP_KIND_NULL) {
+                    cap_grant(child->caps, CAP_TABLE_SIZE,
+                              parent->exec_caps[ci].kind,
+                              parent->exec_caps[ci].rights);
+                    parent->exec_caps[ci].kind   = CAP_KIND_NULL;
+                    parent->exec_caps[ci].rights = 0;
+                }
             }
         }
 
-        /* Zero child's exec_caps. */
         for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
             child->exec_caps[ci].kind   = CAP_KIND_NULL;
             child->exec_caps[ci].rights = 0;
@@ -1879,8 +1920,9 @@ sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen)
 
     copy_bytes = nslots * sizeof(cap_slot_t);
 
-    if (copy_to_user((void *)buf_uptr, target->caps, copy_bytes) != 0)
+    if (!user_ptr_valid(buf_uptr, copy_bytes))
         return (uint64_t)-(int64_t)14;  /* EFAULT */
+    copy_to_user((void *)buf_uptr, target->caps, copy_bytes);
 
     return nslots;
 }
