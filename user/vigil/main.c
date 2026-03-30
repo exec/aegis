@@ -54,6 +54,7 @@ static int       s_nsvc = 0;
 static volatile int s_got_usr1  = 0;
 static volatile int s_got_term  = 0;
 static char s_boot_mode[16] = "text"; /* default to text if no cmdline */
+static int  s_quiet = 0;             /* 1 = suppress startup messages */
 
 struct linux_dirent64 {
     unsigned long long d_ino;
@@ -66,6 +67,7 @@ struct linux_dirent64 {
 static void
 vigil_log(const char *msg)
 {
+    if (s_quiet) return;
     write(1, "vigil: ", 7);
     write(1, msg, strlen(msg));
     write(1, "\n", 1);
@@ -164,6 +166,17 @@ start_service(service_t *s)
             syscall(361, (long)SVC_CAP_CAP_DELEGATE, (long)SVC_CAP_RIGHTS_READ);
         if (s->needs_cap_query)
             syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_READ);
+
+        /* In quiet mode, redirect stdout/stderr to /dev/null for non-getty
+         * services so daemon chatter doesn't pollute the login screen. */
+        if (s_quiet && !s->needs_auth) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, 1);
+                dup2(devnull, 2);
+                close(devnull);
+            }
+        }
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed
@@ -279,6 +292,9 @@ main(void)
         else if (strstr(cmdline, "boot=text"))
             memcpy(s_boot_mode, "text", 5);
         /* else keep default "text" */
+        if (strstr(cmdline, "quiet"))
+            s_quiet = 1;
+
         char msg[80] = "boot mode: ";
         size_t ml = strlen(msg);
         size_t bl = strlen(s_boot_mode);

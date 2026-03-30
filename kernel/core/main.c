@@ -63,6 +63,15 @@ kernel_main(uint32_t mb_magic, void *mb_info)
             printk("[CMDLINE] OK: %s\n", cmdline);
         else
             printk("[CMDLINE] OK: (none)\n");
+        /* boot=quiet: suppress kernel messages on VGA/FB, serial only */
+        {
+            const char *q = cmdline;
+            while (*q) {
+                if (q[0]=='q' && q[1]=='u' && q[2]=='i' && q[3]=='e' && q[4]=='t')
+                    { printk_set_quiet(1); break; }
+                q++;
+            }
+        }
     }
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */

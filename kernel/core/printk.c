@@ -20,6 +20,13 @@
  */
 
 static spinlock_t printk_lock = SPINLOCK_INIT;
+static int printk_quiet = 0;  /* 1 = suppress VGA+FB, serial only */
+
+void
+printk_set_quiet(int q)
+{
+    printk_quiet = q;
+}
 
 /* Emit a single character to all active output sinks. */
 static void
@@ -32,10 +39,10 @@ emit_char(char c)
     buf[0] = c;
     buf[1] = '\0';
     serial_write_string(buf);
-    if (vga_available) {
+    if (!printk_quiet && vga_available) {
         vga_write_string(buf);
     }
-    if (fb_available) {
+    if (!printk_quiet && fb_available) {
         fb_write_string(buf);
     }
 }
@@ -46,19 +53,19 @@ emit_string(const char *s)
 {
     if (s == (void *)0) {
         serial_write_string("(null)");
-        if (vga_available) {
+        if (!printk_quiet && vga_available) {
             vga_write_string("(null)");
         }
-        if (fb_available) {
+        if (!printk_quiet && fb_available) {
             fb_write_string("(null)");
         }
         return;
     }
     serial_write_string(s);
-    if (vga_available) {
+    if (!printk_quiet && vga_available) {
         vga_write_string(s);
     }
-    if (fb_available) {
+    if (!printk_quiet && fb_available) {
         fb_write_string(s);
     }
 }
