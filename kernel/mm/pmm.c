@@ -2,6 +2,7 @@
 #include "arch.h"     /* aegis_mem_region_t, arch_mm_region_count/get_regions */
 #include "printk.h"
 #include "spinlock.h"
+#include "../drivers/fb.h"
 #include <stdint.h>
 #include <stddef.h>
 /* Note: -nostdinc blocks string.h even from GCC freestanding headers.
@@ -171,7 +172,7 @@ void pmm_free_page(uint64_t addr)
         p = append_str(p, "\n");
         *p = '\0';
         printk("%s", buf);
-        for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
+        panic_halt("[PMM] FAIL: pmm_free_page called with unaligned addr");
     }
     uint64_t idx = addr / PAGE_SIZE;
     if (idx >= PMM_MAX_PAGES) {

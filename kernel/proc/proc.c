@@ -12,6 +12,7 @@
 #include "spinlock.h"
 #include "random.h"
 #include "initrd.h"
+#include "../drivers/fb.h"
 #include "vfs.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -86,7 +87,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 
     if (elf_load(proc->pml4_phys, elf_data, elf_len, 0, &er) != 0) {
         printk("[PROC] FAIL: ELF parse error\n");
-        for (;;) {}
+        panic_halt("[PROC] FAIL: ELF parse error");
     }
 
     /* If the ELF has a PT_INTERP (dynamically linked), load the interpreter
@@ -108,18 +109,18 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
             int vr = vfs_open(er.interp, 0, &vf);
             if (vr != 0) {
                 printk("[PROC] FAIL: interpreter not found: %s\n", er.interp);
-                for (;;) {}
+                panic_halt("[PROC] FAIL: interpreter not found: ...");
             }
             interp_pages = (vf.size + 4095ULL) / 4096ULL;
             interp_buf = kva_alloc_pages(interp_pages);
             if (!interp_buf) {
                 printk("[PROC] FAIL: OOM loading interpreter\n");
-                for (;;) {}
+                panic_halt("[PROC] FAIL: OOM loading interpreter");
             }
             int rr = vf.ops->read(vf.priv, interp_buf, 0, vf.size);
             if (rr < 0) {
                 printk("[PROC] FAIL: error reading interpreter\n");
-                for (;;) {}
+                panic_halt("[PROC] FAIL: error reading interpreter");
             }
             interp_data = (const uint8_t *)interp_buf;
             interp_size = vf.size;
@@ -128,7 +129,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         if (elf_load(proc->pml4_phys, interp_data, (size_t)interp_size,
                      INTERP_BASE, &interp_er) != 0) {
             printk("[PROC] FAIL: interpreter ELF parse error\n");
-            for (;;) {}
+            panic_halt("[PROC] FAIL: interpreter ELF parse error");
         }
         if (interp_buf)
             kva_free_pages(interp_buf, interp_pages);
@@ -152,7 +153,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
             uint64_t user_stack_phys = pmm_alloc_page();
             if (!user_stack_phys) {
                 printk("[PROC] FAIL: OOM allocating user stack\n");
-                for (;;) {}
+                panic_halt("[PROC] FAIL: OOM allocating user stack");
             }
             vmm_zero_page(user_stack_phys);
             vmm_map_user_page(proc->pml4_phys,
@@ -310,7 +311,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->fd_table = fd_table_alloc();
     if (!proc->fd_table) {
         printk("[PROC] FAIL: OOM allocating fd_table\n");
-        for (;;) {}
+        panic_halt("[PROC] FAIL: OOM allocating fd_table");
     }
 
     /* Zero cap table — all slots start empty.
@@ -372,63 +373,63 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_VFS_OPEN, CAP_RIGHTS_READ) < 0) {
         printk("[CAP] FAIL: cap_grant VFS_OPEN returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant VFS_OPEN returned -ENOCAP");
     }
 
     /* Grant write capability. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) < 0) {
         printk("[CAP] FAIL: cap_grant VFS_WRITE returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant VFS_WRITE returned -ENOCAP");
     }
 
     /* Grant read capability. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_VFS_READ, CAP_RIGHTS_READ) < 0) {
         printk("[CAP] FAIL: cap_grant VFS_READ returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant VFS_READ returned -ENOCAP");
     }
 
     /* Grant auth capability — login needs CAP_KIND_AUTH to open /etc/shadow. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_AUTH, CAP_RIGHTS_READ) < 0) {
         printk("[CAP] FAIL: cap_grant AUTH returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant AUTH returned -ENOCAP");
     }
 
     /* Grant cap-delegation capability (reserved for future use). */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_CAP_GRANT, CAP_RIGHTS_READ) < 0) {
         printk("[CAP] FAIL: cap_grant CAP_GRANT returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant CAP_GRANT returned -ENOCAP");
     }
 
     /* Grant setuid capability — login calls sys_setuid/setgid after auth. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_SETUID, CAP_RIGHTS_WRITE) < 0) {
         printk("[CAP] FAIL: cap_grant SETUID returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant SETUID returned -ENOCAP");
     }
 
     /* Grant network socket capability — required for sys_socket. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ) < 0) {
         printk("[CAP] FAIL: cap_grant NET_SOCKET returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant NET_SOCKET returned -ENOCAP");
     }
 
     /* Grant network admin capability — required for sys_netcfg (DHCP daemon). */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_NET_ADMIN, CAP_RIGHTS_WRITE) < 0) {
         printk("[CAP] FAIL: cap_grant NET_ADMIN returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant NET_ADMIN returned -ENOCAP");
     }
 
     /* Grant proc_read capability — reading other processes' /proc. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_PROC_READ, CAP_RIGHTS_READ) < 0) {
         printk("[CAP] FAIL: cap_grant PROC_READ returned -ENOCAP\n");
-        for (;;) {}
+        panic_halt("[CAP] FAIL: cap_grant PROC_READ returned -ENOCAP");
     }
 
     /* Pre-open fd 1 (stdout) to the console device.

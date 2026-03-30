@@ -5,6 +5,7 @@
 #include "printk.h"
 #include "spinlock.h"
 #include "tlb.h"
+#include "../drivers/fb.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -122,7 +123,7 @@ alloc_table_early(void)
     uint64_t phys = pmm_alloc_page();
     if (phys == 0) {
         printk("[VMM] FAIL: out of memory allocating page table\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: out of memory allocating page table");
     }
     /* SAFETY: identity map [0..1GB) is active (boot.asm pd_lo fills 512 entries);
      * phys must be within that range. PMM starts above _kernel_end. */
@@ -235,11 +236,11 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
 {
     if (virt & ~VMM_PAGE_MASK) {
         printk("[VMM] FAIL: vmm_map_page virt not aligned\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_map_page virt not aligned");
     }
     if (phys & ~VMM_PAGE_MASK) {
         printk("[VMM] FAIL: vmm_map_page phys not aligned\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_map_page phys not aligned");
     }
 
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
@@ -261,7 +262,7 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_map_page double-map\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_map_page double-map");
     }
     pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
@@ -272,7 +273,7 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
 oom:
     spin_unlock_irqrestore(&vmm_window_lock, fl);
     printk("[VMM] FAIL: out of memory in vmm_map_page\n");
-    for (;;) {}
+    panic_halt("[VMM] FAIL: out of memory in vmm_map_page");
 }
 
 void
@@ -280,7 +281,7 @@ vmm_unmap_page(uint64_t virt)
 {
     if (virt & ~VMM_PAGE_MASK) {
         printk("[VMM] FAIL: vmm_unmap_page virt not aligned\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_unmap_page virt not aligned");
     }
 
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
@@ -302,7 +303,7 @@ vmm_unmap_page(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pml4)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_unmap_page not mapped (pml4)");
     }
 
     uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));  /* overwrites PTE */
@@ -311,7 +312,7 @@ vmm_unmap_page(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pdpt)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_unmap_page not mapped (pdpt)");
     }
 
     uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));    /* overwrites PTE */
@@ -320,13 +321,13 @@ vmm_unmap_page(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pd)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_unmap_page not mapped (pd)");
     }
     if (pde & (1UL << 7)) {
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page called on huge-page-backed address\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_unmap_page called on huge-page-backed address");
     }
 
     uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));      /* overwrites PTE */
@@ -335,7 +336,7 @@ vmm_unmap_page(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pt)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_unmap_page not mapped (pt)");
     }
     pt[pt_idx] = 0;
     vmm_window_unmap();          /* single unmap at the end of the walk */
@@ -362,7 +363,7 @@ vmm_phys_of(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pml4)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_phys_of not mapped (pml4)");
     }
 
     uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
@@ -371,7 +372,7 @@ vmm_phys_of(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pdpt)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_phys_of not mapped (pdpt)");
     }
 
     uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
@@ -380,13 +381,13 @@ vmm_phys_of(uint64_t virt)
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pd)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_phys_of not mapped (pd)");
     }
     if (pde & (1UL << 7)) {
         vmm_window_unmap();
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of called on huge-page-backed address\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_phys_of called on huge-page-backed address");
     }
 
     uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
@@ -396,7 +397,7 @@ vmm_phys_of(uint64_t virt)
     if (!(pte & VMM_FLAG_PRESENT)) {
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: vmm_phys_of not mapped (pt)\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_phys_of not mapped (pt)");
     }
     uint64_t result = ARCH_PTE_ADDR(pte);
     spin_unlock_irqrestore(&vmm_window_lock, fl);
@@ -476,7 +477,7 @@ vmm_map_user_page_nolock(uint64_t pml4_phys, uint64_t virt,
     if (pt[pt_idx] & VMM_FLAG_PRESENT) {
         vmm_window_unmap();
         printk("[VMM] FAIL: vmm_map_user_page double-map\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_map_user_page double-map");
     }
     pt[pt_idx] = phys | arch_pte_from_flags(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
@@ -489,18 +490,18 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
 {
     if (virt & ~VMM_PAGE_MASK) {
         printk("[VMM] FAIL: vmm_map_user_page virt not aligned\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_map_user_page virt not aligned");
     }
     if (phys & ~VMM_PAGE_MASK) {
         printk("[VMM] FAIL: vmm_map_user_page phys not aligned\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: vmm_map_user_page phys not aligned");
     }
 
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     if (vmm_map_user_page_nolock(pml4_phys, virt, phys, flags) < 0) {
         spin_unlock_irqrestore(&vmm_window_lock, fl);
         printk("[VMM] FAIL: out of memory in vmm_map_user_page\n");
-        for (;;) {}
+        panic_halt("[VMM] FAIL: out of memory in vmm_map_user_page");
     }
     spin_unlock_irqrestore(&vmm_window_lock, fl);
 }

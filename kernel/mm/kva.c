@@ -4,6 +4,7 @@
 #include "printk.h"
 #include "arch.h"
 #include "spinlock.h"
+#include "../drivers/fb.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -46,7 +47,7 @@ kva_alloc_pages(uint64_t n)
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
             printk("[KVA] FAIL: out of memory\n");
-            for (;;) {}
+            panic_halt("[KVA] FAIL: out of memory");
         }
         /* IMPORTANT: never pass VMM_FLAG_USER here. kva pages are mapped into
          * pd_hi which is shared with user PML4s (same physical pd_hi page).

@@ -9,6 +9,7 @@
 #include "ext2.h"
 #include "spinlock.h"
 #include "smp.h"
+#include "../drivers/fb.h"
 #include <stddef.h>
 
 /* Compile-time guard: ctx_switch.asm assumes sp is at offset 0 of TCB.
@@ -242,7 +243,7 @@ sched_exit(void)
             sched_yield_to_next();
         }
         /* unreachable — zombie never resumes */
-        for (;;) {}
+        panic_halt("[SCHED] FAIL: zombie task resumed after exit");
     }
 
     /* ── Kernel task (non-user) exit path ── */
@@ -447,7 +448,7 @@ sched_start(void)
     aegis_task_t *first = sched_current();
     if (!first) {
         printk("[SCHED] FAIL: sched_start called with no tasks\n");
-        for (;;) {}
+        panic_halt("[SCHED] FAIL: sched_start called with no tasks");
     }
 
     s_sched_ready = 1;  /* guard: sched_tick now safe to context-switch */
