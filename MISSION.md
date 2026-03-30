@@ -200,6 +200,13 @@ entire Aegis userspace unmodified, as long as the contract holds. The userspace
 doesn't know or care what's below the syscall boundary, just as the kernel
 doesn't know or care what's above it.
 
+The codebase is a monorepo today — kernel, userspace, and tools co-evolve in
+one tree. This is correct while interfaces are still stabilizing and
+cross-cutting changes (new syscall + kernel impl + userspace consumer) need to
+be atomic. But the endgame is separation: each component becomes its own
+project, its own repo, its own release cycle, its own contributors. Bound by
+the syscall ABI and the socket protocols, not by sharing a git tree.
+
 This is how a small project becomes a platform.
 
 ---
