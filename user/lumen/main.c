@@ -258,6 +258,10 @@ main(void)
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
 
+    /* Debug status bar — draws directly to FB, top-left */
+    int dbg_key_count = 0;
+    char dbg_line[80];
+
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
     char kbd_byte;
@@ -271,7 +275,25 @@ main(void)
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
         if (n == 1) {
-            comp_handle_key(&comp, kbd_byte);
+            dbg_key_count++;
+            int mfd = (comp.focused && comp.focused->tag > 0)
+                      ? comp.focused->tag : -1;
+            int wr = -99;
+            if (mfd >= 0)
+                wr = (int)write(mfd, &kbd_byte, 1);
+            snprintf(dbg_line, sizeof(dbg_line),
+                     "KEY 0x%02x '%c' #%d  focus=%s mfd=%d wr=%d   ",
+                     (unsigned char)kbd_byte,
+                     (kbd_byte >= 0x20 && kbd_byte < 0x7f) ? kbd_byte : '.',
+                     dbg_key_count,
+                     comp.focused ? "yes" : "no",
+                     mfd, wr);
+            /* Draw debug status directly to FB at top-left */
+            surface_t dbg_surf = { fb, fb_w, fb_h, pitch_px };
+            draw_fill_rect(&dbg_surf, 0, 0, fb_w, FONT_H + 2, 0x00200000);
+            draw_text(&dbg_surf, 4, 1, dbg_line, 0x0000FF00, 0x00200000);
+            /* Key already written to PTY above; skip comp_handle_key
+             * to avoid double-write.  TODO: remove debug overlay. */
             activity = 1;
         }
 
