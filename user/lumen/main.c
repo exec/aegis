@@ -288,10 +288,6 @@ main(void)
                      dbg_key_count,
                      comp.focused ? "yes" : "no",
                      mfd, wr);
-            /* Draw debug status directly to FB at top-left */
-            surface_t dbg_surf = { fb, fb_w, fb_h, pitch_px };
-            draw_fill_rect(&dbg_surf, 0, 0, fb_w, FONT_H + 2, 0x00200000);
-            draw_text(&dbg_surf, 4, 1, dbg_line, 0x0000FF00, 0x00200000);
             /* Key already written to PTY above; skip comp_handle_key
              * to avoid double-write.  TODO: remove debug overlay. */
             activity = 1;
@@ -351,6 +347,12 @@ main(void)
         if (activity) {
             cursor_hide();
             comp_composite(&comp);
+            /* Debug overlay — draw on FB AFTER composite so it persists */
+            {
+                surface_t dbg_surf = { fb, fb_w, fb_h, pitch_px };
+                draw_fill_rect(&dbg_surf, 0, 0, fb_w, FONT_H + 2, 0x00200000);
+                draw_text(&dbg_surf, 4, 1, dbg_line, 0x0000FF00, 0x00200000);
+            }
             cursor_show(comp.cursor_x, comp.cursor_y);
         }
 
