@@ -5,6 +5,8 @@
  */
 #include "draw.h"
 #include "terminus20.h"
+#include <stdlib.h>
+#include <string.h>
 
 void draw_px(surface_t *s, int x, int y, uint32_t c)
 {
@@ -276,4 +278,131 @@ void draw_text_center(surface_t *s, int x, int y, int w, const char *str,
     int offset = (w - text_w) / 2;
     if (offset < 0) offset = 0;
     draw_text(s, x + offset, y, str, fg, bg);
+}
+
+void draw_box_blur(surface_t *s, int x, int y, int w, int h, int radius)
+{
+    /* Clamp region to surface bounds */
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > s->w) w = s->w - x;
+    if (y + h > s->h) h = s->h - y;
+    if (w <= 0 || h <= 0 || radius <= 0)
+        return;
+
+    int span = 2 * radius + 1;
+
+    /* Scratch buffer for one channel row/column — max of w or h */
+    int scratch_len = w > h ? w : h;
+    uint16_t *tmp = (uint16_t *)malloc((size_t)scratch_len * sizeof(uint16_t));
+    if (!tmp)
+        return;
+
+    /* Horizontal pass — blur each row */
+    for (int row = y; row < y + h; row++) {
+        uint32_t *rowp = &s->buf[row * s->pitch];
+
+        /* Process R, G, B channels separately */
+        for (int ch = 0; ch < 3; ch++) {
+            int shift = ch * 8;
+
+            /* Extract channel into tmp */
+            for (int i = 0; i < w; i++)
+                tmp[i] = (uint16_t)((rowp[x + i] >> shift) & 0xFF);
+
+            /* Running sum with clamped edges */
+            int sum = 0;
+            for (int i = -radius; i <= radius; i++) {
+                int idx = i < 0 ? 0 : (i >= w ? w - 1 : i);
+                sum += tmp[idx];
+            }
+            uint16_t first_val = tmp[0];
+            uint16_t last_val = tmp[w - 1];
+
+            for (int i = 0; i < w; i++) {
+                uint8_t avg = (uint8_t)(sum / span);
+                /* Write averaged channel back */
+                rowp[x + i] = (rowp[x + i] & ~(0xFFu << shift)) |
+                               ((uint32_t)avg << shift);
+
+                /* Slide the window: remove left edge, add right edge */
+                int old_idx = i - radius;
+                int new_idx = i + radius + 1;
+                int old_val = old_idx < 0 ? first_val : tmp[old_idx];
+                int new_val = new_idx >= w ? last_val : tmp[new_idx];
+                sum += new_val - old_val;
+            }
+        }
+    }
+
+    /* Vertical pass — blur each column */
+    for (int col = x; col < x + w; col++) {
+        for (int ch = 0; ch < 3; ch++) {
+            int shift = ch * 8;
+
+            /* Extract channel into tmp */
+            for (int i = 0; i < h; i++)
+                tmp[i] = (uint16_t)((s->buf[(y + i) * s->pitch + col] >> shift) & 0xFF);
+
+            /* Running sum with clamped edges */
+            int sum = 0;
+            for (int i = -radius; i <= radius; i++) {
+                int idx = i < 0 ? 0 : (i >= h ? h - 1 : i);
+                sum += tmp[idx];
+            }
+            uint16_t first_val = tmp[0];
+            uint16_t last_val = tmp[h - 1];
+
+            for (int i = 0; i < h; i++) {
+                uint8_t avg = (uint8_t)(sum / span);
+                s->buf[(y + i) * s->pitch + col] =
+                    (s->buf[(y + i) * s->pitch + col] & ~(0xFFu << shift)) |
+                    ((uint32_t)avg << shift);
+
+                int old_idx = i - radius;
+                int new_idx = i + radius + 1;
+                int old_val = old_idx < 0 ? first_val : tmp[old_idx];
+                int new_val = new_idx >= h ? last_val : tmp[new_idx];
+                sum += new_val - old_val;
+            }
+        }
+    }
+
+    free(tmp);
+}
+
+void draw_blend_rect(surface_t *s, int x, int y, int w, int h,
+                     uint32_t color, int alpha)
+{
+    /* Clamp region to surface bounds */
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > s->w) w = s->w - x;
+    if (y + h > s->h) h = s->h - y;
+    if (w <= 0 || h <= 0)
+        return;
+
+    if (alpha < 0) alpha = 0;
+    if (alpha > 255) alpha = 255;
+    int inv_alpha = 255 - alpha;
+
+    uint32_t cr = (color >> 16) & 0xFF;
+    uint32_t cg = (color >> 8) & 0xFF;
+    uint32_t cb = color & 0xFF;
+
+    for (int j = y; j < y + h; j++) {
+        uint32_t *rowp = &s->buf[j * s->pitch];
+        for (int i = x; i < x + w; i++) {
+            uint32_t px = rowp[i];
+            uint32_t pr = (px >> 16) & 0xFF;
+            uint32_t pg = (px >> 8) & 0xFF;
+            uint32_t pb = px & 0xFF;
+
+            uint32_t or_ = (cr * (uint32_t)alpha + pr * (uint32_t)inv_alpha) / 255;
+            uint32_t og = (cg * (uint32_t)alpha + pg * (uint32_t)inv_alpha) / 255;
+            uint32_t ob = (cb * (uint32_t)alpha + pb * (uint32_t)inv_alpha) / 255;
+
+            rowp[i] = (or_ << 16) | (og << 8) | ob;
+        }
+    }
 }

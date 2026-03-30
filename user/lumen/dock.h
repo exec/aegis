@@ -13,7 +13,13 @@
 #define DOCK_BOTTOM_MARGIN 10
 
 #define DOCK_BG         0x002A2A3E
-#define DOCK_HOVER_BG   0x003A3A50
+#define DOCK_HOVER_BG   0x00FFFFFF
+#define DOCK_HOVER_ALPHA 40
+
+/* Frosted glass parameters */
+#define DOCK_BLUR_RADIUS   10
+#define DOCK_GLASS_TINT    0x001A1A2E
+#define DOCK_GLASS_ALPHA   160
 
 /* Dock item IDs */
 #define DOCK_ITEM_SETTINGS  0

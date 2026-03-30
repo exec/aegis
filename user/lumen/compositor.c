@@ -229,6 +229,10 @@ comp_composite(compositor_t *c)
             blit_window_to_back(&c->back, win);
         }
 
+        /* Overlay (frosted glass dock etc.) -- after windows, before flip */
+        if (c->on_draw_overlay)
+            c->on_draw_overlay(&c->back, c->back.w, c->back.h);
+
         /* Full flip */
         memcpy(c->fb.buf, c->back.buf,
                (size_t)c->fb.pitch * (size_t)c->fb.h * sizeof(uint32_t));
@@ -302,6 +306,10 @@ comp_composite(compositor_t *c)
         glyph_window_render(win);
         blit_window_to_back(&c->back, win);
     }
+
+    /* Overlay (frosted glass dock etc.) -- after windows, before flip */
+    if (c->on_draw_overlay)
+        c->on_draw_overlay(&c->back, c->back.w, c->back.h);
 
     /* Partial flip */
     partial_flip(&c->fb, &c->back, combined);

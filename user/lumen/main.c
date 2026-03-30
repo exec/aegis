@@ -214,14 +214,22 @@ spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
     term_win->tag = master_fd;
 }
 
-/* ---- Desktop draw callback (dock + top bar) ---- */
+/* ---- Desktop draw callback (top bar only) ---- */
 
 static char s_clock_str[8] = "00:00";
 
 static void
 desktop_draw_cb(surface_t *s, int w, int h)
 {
+    (void)h;
     topbar_draw(s, w, s_clock_str);
+}
+
+/* ---- Overlay callback (frosted glass dock -- drawn after windows) ---- */
+
+static void
+overlay_draw_cb(surface_t *s, int w, int h)
+{
     dock_draw(s, w, h);
 }
 
@@ -278,8 +286,9 @@ main(void)
     /* Init dock */
     dock_init(fb_w, fb_h);
 
-    /* Desktop draw callback draws top bar + dock */
+    /* Desktop draw callback draws top bar; overlay draws frosted glass dock */
     comp.on_draw_desktop = desktop_draw_cb;
+    comp.on_draw_overlay = overlay_draw_cb;
 
     /* Initial full composite — clean desktop, no windows */
     comp.full_redraw = 1;
