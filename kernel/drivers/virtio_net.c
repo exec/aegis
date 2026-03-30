@@ -455,10 +455,7 @@ static void
 virtio_net_poll(netdev_t *dev)
 {
     virtio_priv_t *p = (virtio_priv_t *)dev->priv;
-    if (p->rx_last_used != p->rx_used->idx) {
-        printk("[VNET] RX pkt: last=%u used=%u\n",
-               (uint32_t)p->rx_last_used, (uint32_t)p->rx_used->idx);
-    }
+    /* Debug: packet arrival (removed — too noisy for production) */
 
     while (p->rx_last_used != p->rx_used->idx) {
         __asm__ volatile("" ::: "memory");

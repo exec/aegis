@@ -6,8 +6,8 @@
  *           %x (hex uint32_t), %lx (hex uint64_t), %% (literal %). */
 void printk(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
-/* printk_set_quiet — suppress VGA+FB output, serial only.
- * Used with boot=quiet to hide kernel messages from the screen. */
+/* printk_set_quiet — suppress VGA+FB output in printk, serial only.
+ * Console device (user output) bypasses this via direct serial+fb writes. */
 void printk_set_quiet(int q);
 
 #endif /* AEGIS_PRINTK_H */

@@ -63,7 +63,8 @@ kernel_main(uint32_t mb_magic, void *mb_info)
             printk("[CMDLINE] OK: %s\n", cmdline);
         else
             printk("[CMDLINE] OK: (none)\n");
-        /* boot=quiet: suppress kernel messages on VGA/FB, serial only */
+        /* boot=quiet: suppress kernel printk on VGA/FB, serial only.
+         * Console device (user output) bypasses this. */
         {
             const char *q = cmdline;
             while (*q) {
@@ -135,11 +136,11 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     smp_start_aps();        /* wake APs via INIT-SIPI-SIPI — [SMP] OK       */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
-    fb_boot_splash_end();   /* clear splash, unlock FB for normal output     */
     proc_spawn_init();      /* spawn init user process in ring 3             */
     /* All TCBs and stacks are in kva range at this point —
      * safe to remove the identity map. */
     vmm_teardown_identity(); /* pml4[0] = 0, CR3 reload — [VMM] OK          */
+    fb_boot_splash_end();   /* clear splash, unlock FB — all kernel init done */
     /* LAPIC timer starts from task_idle (after sched_start ctx_switches).
      * Starting it here would fire vector 0x30 before the scheduler is ready. */
     sched_start();          /* prints [SCHED] OK, switches into first task   */

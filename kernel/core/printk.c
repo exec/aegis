@@ -20,7 +20,7 @@
  */
 
 static spinlock_t printk_lock = SPINLOCK_INIT;
-static int printk_quiet = 0;  /* 1 = suppress VGA+FB, serial only */
+static int printk_quiet = 0;  /* 1 = suppress VGA+FB in printk, serial only */
 
 void
 printk_set_quiet(int q)

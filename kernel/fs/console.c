@@ -1,34 +1,40 @@
 #include "console.h"
 #include "vfs.h"
 #include "uaccess.h"
-#include "printk.h"
+#include "arch.h"
+#include "../drivers/fb.h"
 #include <stdint.h>
 
 #define CONSOLE_BUF 256
 
+/*
+ * console_write_fn — write user output to serial + VGA + FB directly.
+ *
+ * Bypasses printk so that printk_quiet (boot=quiet) does not suppress
+ * user-visible output (login banners, shell prompts, command output).
+ * Kernel messages go through printk; user output goes through here.
+ */
 static int
 console_write_fn(void *priv, const void *buf, uint64_t len)
 {
     (void)priv;
     char kbuf[CONSOLE_BUF];
     uint64_t n = (len > CONSOLE_BUF) ? CONSOLE_BUF : len;
-    /* Cap n so the copy does not cross a page boundary into an unmapped page.
-     * buf is a user VA validated by sys_write; the page it occupies is mapped,
-     * but the next page (e.g. the guard page above the user stack) may not be.
-     * bytes_to_page_end = 0x1000 - (buf & 0xFFF); clamp n to that. */
     {
         uint64_t page_off = (uint64_t)(uintptr_t)buf & 0xFFFULL;
         uint64_t to_end   = 0x1000ULL - page_off;
         if (n > to_end)
             n = to_end;
     }
-    /* buf is a user-space pointer, validated by sys_write before dispatch.
-     * copy_from_user returns void — no error check possible here. */
     copy_from_user(kbuf, buf, n);
-    uint64_t i;
-    for (i = 0; i < n; i++)
-        printk("%c", kbuf[i]);
-    /* Return actual bytes written, not requested len. */
+    /* Null-terminate for string functions */
+    kbuf[n] = '\0';
+    /* Write directly to serial + VGA + FB, bypassing printk_quiet */
+    serial_write_string(kbuf);
+    if (vga_available)
+        vga_write_string(kbuf);
+    if (fb_available)
+        fb_write_string(kbuf);
     return (int)n;
 }
 
