@@ -27,6 +27,8 @@ typedef struct {
 #define CAP_KIND_PROC_READ  10u  /* may read /proc/[other-pid] */
 #define CAP_KIND_DISK_ADMIN 11u  /* may perform raw block device I/O */
 #define CAP_KIND_FB         12u  /* may map framebuffer into userspace */
+#define CAP_KIND_CAP_DELEGATE 13u  /* may restrict caps on spawn via cap_mask */
+#define CAP_KIND_CAP_QUERY    14u  /* may introspect any process's capability set */
 
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)

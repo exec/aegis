@@ -1839,3 +1839,48 @@ fail_early:
     kva_free_pages(abuf, EXECVE_ARGBUF_PAGES);
     return result;
 }
+
+/*
+ * sys_cap_query — syscall 362
+ * Returns the capability table of a process.
+ *   pid == 0: own caps (always allowed)
+ *   pid != 0: target's caps (requires CAP_KIND_CAP_QUERY)
+ * Copies cap_slot_t entries to user buffer.
+ * Returns number of slots copied, or negative errno.
+ */
+uint64_t
+sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen)
+{
+    aegis_process_t *caller = (aegis_process_t *)sched_current();
+    if (!sched_current()->is_user)
+        return (uint64_t)-(int64_t)1;  /* EPERM */
+
+    aegis_process_t *target;
+
+    if (pid_arg == 0) {
+        target = caller;
+    } else {
+        if (cap_check(caller->caps, CAP_TABLE_SIZE,
+                      CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ) != 0)
+            return (uint64_t)-(int64_t)ENOCAP;
+
+        target = proc_find_by_pid((uint32_t)pid_arg);
+        if (!target)
+            return (uint64_t)-(int64_t)3;  /* ESRCH */
+    }
+
+    uint64_t copy_bytes = CAP_TABLE_SIZE * sizeof(cap_slot_t);
+    if (buflen < copy_bytes)
+        copy_bytes = buflen;
+
+    uint64_t nslots = copy_bytes / sizeof(cap_slot_t);
+    if (nslots == 0)
+        return 0;
+
+    copy_bytes = nslots * sizeof(cap_slot_t);
+
+    if (copy_to_user((void *)buf_uptr, target->caps, copy_bytes) != 0)
+        return (uint64_t)-(int64_t)14;  /* EFAULT */
+
+    return nslots;
+}

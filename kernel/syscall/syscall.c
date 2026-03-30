@@ -190,6 +190,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 512: return sys_gpt_rescan(arg1);
     case 513: return sys_fb_map(arg1);
     case 514: return sys_spawn(arg1, arg2, arg3, arg4);
+    case 362: return sys_cap_query(arg1, arg2, arg3);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }
