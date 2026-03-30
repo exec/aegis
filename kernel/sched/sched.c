@@ -24,7 +24,7 @@ static uint32_t      s_next_tid = 0;
 static uint32_t      s_task_count = 0;
 static volatile int  s_sched_ready = 0;  /* set by sched_start; guards sched_tick */
 
-static spinlock_t sched_lock = SPINLOCK_INIT;
+spinlock_t sched_lock = SPINLOCK_INIT;
 
 void
 sched_init(void)
@@ -126,10 +126,9 @@ sched_add(aegis_task_t *task)
 
 /* Deferred cleanup: dying task's resources cannot be freed before ctx_switch
  * (ctx_switch writes dying->sp; the dying stack is live until the stack pointer switches).
- * Record them here and free at the entry of the next sched_exit call. */
-static void    *g_prev_dying_tcb         = NULL;
-static void    *g_prev_dying_stack       = NULL;
-static uint64_t g_prev_dying_stack_pages = 0;
+ * Recorded in percpu_t (prev_dying_tcb/stack/stack_pages) and freed at the
+ * entry of the next sched_exit call. Per-CPU storage prevents two CPUs
+ * exiting tasks simultaneously from overwriting each other's dying state. */
 
 void
 sched_exit(void)
@@ -137,13 +136,14 @@ sched_exit(void)
     irqflags_t fl = spin_lock_irqsave(&sched_lock);
 
     /* ── Deferred cleanup from the PREVIOUS exiting kernel/orphaned task ──
-     * Free TCB + kernel stack of the task that exited last time.
+     * Free TCB + kernel stack of the task that exited last time on this CPU.
      * Safe: ctx_switch has completed; that TCB and stack are no longer live
      * on any CPU. Must be at the TOP of sched_exit, before any new exit logic. */
-    if (g_prev_dying_tcb) {
-        kva_free_pages(g_prev_dying_stack, g_prev_dying_stack_pages);
-        kva_free_pages(g_prev_dying_tcb, 1);
-        g_prev_dying_tcb = NULL;
+    percpu_t *pc = percpu_self();
+    if (pc->prev_dying_tcb) {
+        kva_free_pages(pc->prev_dying_stack, pc->prev_dying_stack_pages);
+        kva_free_pages(pc->prev_dying_tcb, 1);
+        pc->prev_dying_tcb = NULL;
     }
 
     /* Switch to master PML4 so kernel structures are safely accessible.
@@ -274,10 +274,11 @@ sched_exit(void)
     /* Record dying kernel task for deferred cleanup at the next sched_exit entry.
      * Must be set AFTER all list manipulation and BEFORE ctx_switch:
      * ctx_switch writes dying_k->sp, so the TCB must remain valid until
-     * after the stack pointer switch completes. */
-    g_prev_dying_stack       = (void *)dying_k->stack_base;
-    g_prev_dying_stack_pages = dying_k->stack_pages;
-    g_prev_dying_tcb         = dying_k;
+     * after the stack pointer switch completes. Per-CPU storage is safe here
+     * because sched_lock is held and the dying task runs on this CPU only. */
+    pc->prev_dying_stack       = (void *)dying_k->stack_base;
+    pc->prev_dying_stack_pages = dying_k->stack_pages;
+    pc->prev_dying_tcb         = dying_k;
     spin_unlock_irqrestore(&sched_lock, fl);
     ctx_switch(dying_k, next_k);
     __builtin_unreachable();
@@ -350,8 +351,10 @@ sched_wake(aegis_task_t *task)
      * removes it).  Simply transition state back to TASK_RUNNING so the
      * scheduler's next pass will pick it up.  No list insertion needed.
      * No lock needed: single-word state write, and callers may already
-     * hold sched_lock (e.g. sched_exit → signal_send_pid → sched_wake). */
-    task->state = TASK_RUNNING;
+     * hold sched_lock (e.g. sched_exit → signal_send_pid → sched_wake).
+     * Use atomic store with release semantics so the state write is visible
+     * to other CPUs (sched_tick reads state without holding sched_lock). */
+    __atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE);
 }
 
 void
@@ -402,13 +405,16 @@ sched_resume(aegis_task_t *task)
     /* Mirrors sched_wake: flip state back to RUNNING.
      * Works for both TASK_STOPPED and TASK_BLOCKED (SIGCONT while blocked
      * on a read must also let the read return EINTR).
-     * No lock needed: single-word state write, callers may hold sched_lock. */
-    task->state = TASK_RUNNING;
+     * No lock needed: single-word state write, callers may hold sched_lock.
+     * Use atomic store with release semantics for SMP visibility. */
+    __atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE);
 }
 
 void
 sched_yield_to_next(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+
     aegis_task_t *old = sched_current();
     aegis_task_t *next = old;
     do {
@@ -421,6 +427,7 @@ sched_yield_to_next(void)
     if (next->is_user)
         arch_set_fs_base(next->fs_base);
 
+    spin_unlock_irqrestore(&sched_lock, fl);
     ctx_switch(old, next);
 
     /* Restore CR3 for the incoming user task after ctx_switch returns.

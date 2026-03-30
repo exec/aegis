@@ -237,13 +237,13 @@ sys_sendto(uint64_t fd, uint64_t buf, uint64_t len,
         /* TCP send */
         if (s->state != SOCK_CONNECTED) return (uint64_t)-(int64_t)107;  /* ENOTCONN */
         /* Copy from userspace to a kernel bounce buffer (max 1460 per call) */
-        static uint8_t s_sndbuf[1460];
+        uint8_t sndbuf[1460];
         uint64_t sent = 0;
         while (sent < len) {
             uint64_t chunk = len - sent;
             if (chunk > 1460) chunk = 1460;
-            copy_from_user(s_sndbuf, (const void *)(uintptr_t)(buf + sent), (uint32_t)chunk);
-            int n = tcp_conn_send(s->tcp_conn_id, s_sndbuf, (uint16_t)chunk);
+            copy_from_user(sndbuf, (const void *)(uintptr_t)(buf + sent), (uint32_t)chunk);
+            int n = tcp_conn_send(s->tcp_conn_id, sndbuf, (uint16_t)chunk);
             if (n <= 0) return sent > 0 ? (uint64_t)sent : (uint64_t)-(int64_t)32; /* EPIPE */
             sent += (uint64_t)n;
         }

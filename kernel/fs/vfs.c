@@ -103,7 +103,7 @@ ext2_vfs_write_fn(void *priv, const void *buf, uint64_t len)
      * ext2_write accesses it in kernel mode, which SMAP forbids.  Copy into
      * a kernel bounce buffer first.  Loop in EXT2_WRITE_CHUNK slices to keep
      * the stack frame bounded. */
-    static uint8_t s_kbuf[EXT2_WRITE_CHUNK];   /* kernel bounce buffer */
+    uint8_t s_kbuf[EXT2_WRITE_CHUNK];   /* kernel bounce buffer (stack-allocated) */
     uint64_t done = 0;
     while (done < len) {
         uint64_t chunk = len - done;
@@ -166,7 +166,7 @@ ext2_vfs_stat_fn(void *priv, k_stat_t *st)
     st->st_gid     = (uint32_t)inode.i_gid;
     st->st_size    = (int64_t)sz;
     st->st_blksize = 4096;
-    st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+    st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512);
     return 0;
 }
 
@@ -448,9 +448,11 @@ vfs_stat_path(const char *path, k_stat_t *out)
             out->st_ino     = (uint64_t)ino;
             out->st_nlink   = 1;
             out->st_mode    = mode;
+            out->st_uid     = (uint32_t)inode.i_uid;
+            out->st_gid     = (uint32_t)inode.i_gid;
             out->st_size    = (int64_t)sz;
             out->st_blksize = 4096;
-            out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+            out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512);
             return 0;
         }
     }
@@ -509,7 +511,7 @@ vfs_stat_path_ex(const char *path, k_stat_t *out, int follow)
             }
             out->st_size    = (int64_t)sz;
             out->st_blksize = 4096;
-            out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+            out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512);
             return 0;
         }
     }

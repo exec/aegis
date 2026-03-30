@@ -204,6 +204,7 @@ pmm_total_pages(void)
 uint64_t
 pmm_free_pages(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&pmm_lock);
     uint64_t free_count = 0;
     for (uint64_t i = 0; i < PMM_MAX_PAGES / 8; i++) {
         uint8_t inv = (uint8_t)~pmm_bitmap[i];
@@ -212,5 +213,6 @@ pmm_free_pages(void)
             inv &= (inv - 1);  /* clear lowest set bit */
         }
     }
+    spin_unlock_irqrestore(&pmm_lock, fl);
     return free_count;
 }

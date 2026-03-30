@@ -214,7 +214,10 @@ sys_close(uint64_t arg1)
     vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops)
         return (uint64_t)-9;   /* EBADF */
-    f->ops->close(f->priv);
-    f->ops = (const vfs_ops_t *)0;
+    const vfs_ops_t *ops = f->ops;
+    void *priv = f->priv;
+    f->ops  = (const vfs_ops_t *)0;
+    f->priv = (void *)0;
+    ops->close(priv);
     return 0;
 }

@@ -20,6 +20,9 @@
 static uint32_t s_next_pid = 1;
 static spinlock_t pid_lock = SPINLOCK_INIT;
 
+/* sched_lock protects the circular task list — defined in sched.c */
+extern spinlock_t sched_lock;
+
 uint32_t
 proc_alloc_pid(void)
 {
@@ -493,15 +496,21 @@ void arch_save_current_fs_base(uint64_t val) {
 aegis_process_t *
 proc_find_by_pid(uint32_t pid)
 {
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+
     aegis_task_t *cur = sched_current();
-    if (!cur)
+    if (!cur) {
+        spin_unlock_irqrestore(&sched_lock, fl);
         return (aegis_process_t *)0;
+    }
 
     /* Check current task first */
     if (cur->is_user) {
         aegis_process_t *p = (aegis_process_t *)cur;
-        if (p->pid == pid)
+        if (p->pid == pid) {
+            spin_unlock_irqrestore(&sched_lock, fl);
             return p;
+        }
     }
 
     /* Walk the circular list */
@@ -509,10 +518,13 @@ proc_find_by_pid(uint32_t pid)
     while (t != cur) {
         if (t->is_user) {
             aegis_process_t *p = (aegis_process_t *)t;
-            if (p->pid == pid)
+            if (p->pid == pid) {
+                spin_unlock_irqrestore(&sched_lock, fl);
                 return p;
+            }
         }
         t = t->next;
     }
+    spin_unlock_irqrestore(&sched_lock, fl);
     return (aegis_process_t *)0;
 }

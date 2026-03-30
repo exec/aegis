@@ -158,11 +158,14 @@ kbd_read(void)
      * lost-wakeup race.  cli restores the IF=0 invariant for the remainder
      * of the syscall.
      */
-    while (!kbd_poll(&c)) {
+    for (;;) {
         s_kbd_waiter = sched_current();
+        if (kbd_poll(&c)) {
+            s_kbd_waiter = 0;
+            return c;
+        }
         sched_block();
     }
-    return c;
 }
 
 int
@@ -244,14 +247,17 @@ kbd_read_interruptible(int *interrupted)
     char c = 0;
     *interrupted = 0;
     for (;;) {
-        if (kbd_poll(&c))
+        s_kbd_waiter = sched_current();
+        if (kbd_poll(&c)) {
+            s_kbd_waiter = 0;
             return c;
+        }
         if (signal_check_pending()) {
+            s_kbd_waiter = 0;
             *interrupted = 1;
             return '\0';
         }
         /* Block until kbd ISR pushes a character and wakes us */
-        s_kbd_waiter = sched_current();
         sched_block();
     }
 }

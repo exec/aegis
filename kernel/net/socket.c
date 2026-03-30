@@ -77,7 +77,7 @@ static int sock_vfs_write(void *priv, const void *buf, uint64_t len)
         if (s->state != SOCK_CONNECTED) return -107;  /* ENOTCONN */
         /* buf is a raw user-space pointer from sys_write.  Copy to kernel
          * staging before passing to tcp_conn_send to avoid SMAP fault. */
-        static uint8_t s_sndbuf[1460];
+        uint8_t s_sndbuf[1460];
         uint32_t sent = 0;
         while (sent < (uint32_t)len) {
             uint32_t chunk = (uint32_t)len - sent;

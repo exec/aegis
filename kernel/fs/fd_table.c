@@ -16,14 +16,14 @@ fd_table_alloc(void)
 void
 fd_table_ref(fd_table_t *t)
 {
-    if (t) t->refcount++;
+    if (t) __atomic_fetch_add(&t->refcount, 1, __ATOMIC_SEQ_CST);
 }
 
 void
 fd_table_unref(fd_table_t *t)
 {
     if (!t) return;
-    if (t->refcount > 1) { t->refcount--; return; }
+    if (__atomic_fetch_sub(&t->refcount, 1, __ATOMIC_SEQ_CST) > 1) return;
     uint32_t i;
     for (i = 0; i < PROC_MAX_FDS; i++) {
         if (t->fds[i].ops && t->fds[i].ops->close) {

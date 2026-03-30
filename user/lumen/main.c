@@ -264,9 +264,15 @@ main(void)
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
 
-    /* Debug status bar — draws directly to FB, top-left */
+    /* Debug status bar — toggled with F12 */
+    int dbg_visible = 0;
     int dbg_key_count = 0;
     char dbg_line[80];
+    dbg_line[0] = '\0';
+
+    /* Escape sequence accumulator for function keys */
+    char esc_buf[8];
+    int esc_len = 0;
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
@@ -282,32 +288,57 @@ main(void)
         n = read(0, &kbd_byte, 1);
         dbg_key_count++;
         if (n == 1) {
+            /* Accumulate escape sequences to detect F12 (\033[24~) */
+            if (kbd_byte == '\033') {
+                esc_buf[0] = '\033';
+                esc_len = 1;
+                activity = 1;
+                goto next_poll;
+            }
+            if (esc_len > 0) {
+                esc_buf[esc_len++] = kbd_byte;
+                /* F12 = \033[24~ (5 bytes) */
+                if (esc_len == 5 && esc_buf[1] == '[' && esc_buf[2] == '2'
+                    && esc_buf[3] == '4' && esc_buf[4] == '~') {
+                    dbg_visible = !dbg_visible;
+                    esc_len = 0;
+                    activity = 1;
+                    comp.full_redraw = 1; /* clear overlay on hide */
+                    goto next_poll;
+                }
+                /* Sequence complete or too long — flush to PTY */
+                if (esc_len >= 6 || (esc_len == 2 && kbd_byte != '[')
+                    || (esc_len >= 3 && kbd_byte == '~')) {
+                    int mfd = (comp.focused && comp.focused->tag > 0)
+                              ? comp.focused->tag : -1;
+                    if (mfd >= 0)
+                        write(mfd, esc_buf, (size_t)esc_len);
+                    esc_len = 0;
+                    activity = 1;
+                    goto next_poll;
+                }
+                /* Mid-sequence — keep accumulating */
+                activity = 1;
+                goto next_poll;
+            }
+
+            /* Normal key — forward to focused PTY */
             int mfd = (comp.focused && comp.focused->tag > 0)
                       ? comp.focused->tag : -1;
-            int wr = -99;
             if (mfd >= 0)
-                wr = (int)write(mfd, &kbd_byte, 1);
-            snprintf(dbg_line, sizeof(dbg_line),
-                     "KEY 0x%02x '%c'  focus=%s mfd=%d wr=%d   ",
-                     (unsigned char)kbd_byte,
-                     (kbd_byte >= 0x20 && kbd_byte < 0x7f) ? kbd_byte : '.',
-                     comp.focused ? "yes" : "no",
-                     mfd, wr);
-            /* Key already written to PTY above; skip comp_handle_key
-             * to avoid double-write.  TODO: remove debug overlay. */
-            activity = 1;
-        } else {
-            /* Show read result every ~60 frames to avoid flicker */
-            if ((dbg_key_count % 60) == 0) {
-                extern int errno;
+                write(mfd, &kbd_byte, 1);
+
+            if (dbg_visible) {
                 snprintf(dbg_line, sizeof(dbg_line),
-                         "read(0)=%d errno=%d  poll#%d  focus=%s nwin=%d   ",
-                         (int)n, errno, dbg_key_count,
+                         "KEY 0x%02x '%c'  focus=%s mfd=%d nwin=%d   ",
+                         (unsigned char)kbd_byte,
+                         (kbd_byte >= 0x20 && kbd_byte < 0x7f) ? kbd_byte : '.',
                          comp.focused ? "yes" : "no",
-                         comp.nwindows);
-                activity = 1;  /* force redraw to show debug */
+                         mfd, comp.nwindows);
             }
+            activity = 1;
         }
+next_poll:
 
         /* Poll mouse -- BATCH: drain all pending events */
         if (mouse_fd >= 0) {
@@ -363,8 +394,8 @@ main(void)
         if (activity) {
             cursor_hide();
             comp_composite(&comp);
-            /* Debug overlay — draw on FB AFTER composite so it persists */
-            {
+            /* Debug overlay (F12 toggle) */
+            if (dbg_visible && dbg_line[0]) {
                 surface_t dbg_surf = { fb, fb_w, fb_h, pitch_px };
                 draw_fill_rect(&dbg_surf, 0, 0, fb_w, FONT_H + 2, 0x00200000);
                 draw_text(&dbg_surf, 4, 1, dbg_line, 0x0000FF00, 0x00200000);

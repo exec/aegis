@@ -125,8 +125,10 @@ random_add_entropy(const void *data, size_t len)
 void
 random_add_interrupt_entropy(void)
 {
-    s_entropy_acc ^= mix64(arch_get_cycles());
-    s_entropy_count++;
+    /* Called from ISR context on multiple CPUs — use atomics to prevent
+     * lost updates when two CPUs XOR/increment simultaneously. */
+    __atomic_fetch_xor(&s_entropy_acc, mix64(arch_get_cycles()), __ATOMIC_RELAXED);
+    __atomic_fetch_add(&s_entropy_count, 1, __ATOMIC_RELAXED);
 }
 
 /* ── Re-key: fold accumulated entropy into ChaCha20 key ──────────────── */

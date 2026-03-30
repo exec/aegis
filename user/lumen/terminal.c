@@ -26,6 +26,10 @@ typedef struct {
     int cols, rows;
     int cx, cy;
     char *grid;
+    /* ANSI escape parser state */
+    int esc_state;      /* 0=normal, 1=got ESC, 2=got CSI (ESC[) */
+    int esc_params[4];
+    int esc_nparam;
 } term_priv_t;
 
 static void term_scroll(term_priv_t *tp)
@@ -89,6 +93,77 @@ static void term_grid_puts(term_priv_t *tp, const char *msg)
     }
 }
 
+/* Handle a completed CSI sequence: ESC [ params... final_char */
+static void term_csi(term_priv_t *tp, int final)
+{
+    int n = (tp->esc_nparam > 0) ? tp->esc_params[0] : 0;
+
+    switch (final) {
+    case 'A': /* CUU — cursor up */
+        if (n < 1) n = 1;
+        tp->cy -= n;
+        if (tp->cy < 0) tp->cy = 0;
+        break;
+    case 'B': /* CUD — cursor down */
+        if (n < 1) n = 1;
+        tp->cy += n;
+        if (tp->cy >= tp->rows) tp->cy = tp->rows - 1;
+        break;
+    case 'C': /* CUF — cursor forward */
+        if (n < 1) n = 1;
+        tp->cx += n;
+        if (tp->cx >= tp->cols) tp->cx = tp->cols - 1;
+        break;
+    case 'D': /* CUB — cursor back */
+        if (n < 1) n = 1;
+        tp->cx -= n;
+        if (tp->cx < 0) tp->cx = 0;
+        break;
+    case 'H': /* CUP — cursor position */
+    case 'f': {
+        int row = (tp->esc_nparam > 0) ? tp->esc_params[0] : 1;
+        int col = (tp->esc_nparam > 1) ? tp->esc_params[1] : 1;
+        if (row < 1) row = 1;
+        if (col < 1) col = 1;
+        tp->cy = row - 1;
+        tp->cx = col - 1;
+        if (tp->cy >= tp->rows) tp->cy = tp->rows - 1;
+        if (tp->cx >= tp->cols) tp->cx = tp->cols - 1;
+        break;
+    }
+    case 'J': /* ED — erase in display */
+        if (n == 2) {
+            /* Clear entire screen */
+            memset(tp->grid, ' ', (unsigned)(tp->cols * tp->rows));
+            tp->cx = 0;
+            tp->cy = 0;
+        } else if (n == 0) {
+            /* Clear from cursor to end */
+            int pos = tp->cy * tp->cols + tp->cx;
+            int total = tp->cols * tp->rows;
+            if (pos < total)
+                memset(tp->grid + pos, ' ', (unsigned)(total - pos));
+        }
+        break;
+    case 'K': /* EL — erase in line */
+        if (n == 0) {
+            /* Clear from cursor to end of line */
+            int pos = tp->cy * tp->cols + tp->cx;
+            int end = (tp->cy + 1) * tp->cols;
+            if (pos < end)
+                memset(tp->grid + pos, ' ', (unsigned)(end - pos));
+        } else if (n == 2) {
+            /* Clear entire line */
+            memset(tp->grid + tp->cy * tp->cols, ' ', (unsigned)tp->cols);
+        }
+        break;
+    case 'm': /* SGR — ignore (no color support yet) */
+        break;
+    default:
+        break;
+    }
+}
+
 void terminal_write(glyph_window_t *win, const char *data, int len)
 {
     term_priv_t *tp = win->priv;
@@ -96,7 +171,44 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
     for (int i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)data[i];
 
-        if (ch == '\n') {
+        /* ANSI escape sequence parser */
+        if (tp->esc_state == 1) {
+            /* Got ESC, expect '[' for CSI */
+            if (ch == '[') {
+                tp->esc_state = 2;
+                tp->esc_nparam = 0;
+                tp->esc_params[0] = 0;
+                tp->esc_params[1] = 0;
+            } else {
+                tp->esc_state = 0; /* unknown ESC seq, drop */
+            }
+            continue;
+        }
+        if (tp->esc_state == 2) {
+            /* Inside CSI — collect params and final byte */
+            if (ch >= '0' && ch <= '9') {
+                if (tp->esc_nparam == 0) tp->esc_nparam = 1;
+                tp->esc_params[tp->esc_nparam - 1] =
+                    tp->esc_params[tp->esc_nparam - 1] * 10 + (ch - '0');
+            } else if (ch == ';') {
+                if (tp->esc_nparam < 4) {
+                    tp->esc_params[tp->esc_nparam] = 0;
+                    tp->esc_nparam++;
+                }
+            } else if (ch >= 0x40 && ch <= 0x7E) {
+                /* Final byte — execute */
+                term_csi(tp, ch);
+                tp->esc_state = 0;
+            } else {
+                tp->esc_state = 0; /* unexpected byte, abort */
+            }
+            continue;
+        }
+
+        /* Normal character processing */
+        if (ch == 0x1B) {
+            tp->esc_state = 1;
+        } else if (ch == '\n') {
             tp->cy++;
             if (tp->cy >= tp->rows)
                 term_scroll(tp);
@@ -123,7 +235,6 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
                     term_scroll(tp);
             }
         }
-        /* other bytes (ANSI escapes, etc.) silently dropped */
     }
 
     glyph_window_mark_all_dirty(win);

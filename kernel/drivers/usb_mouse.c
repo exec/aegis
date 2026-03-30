@@ -84,8 +84,12 @@ void
 mouse_read_blocking(mouse_event_t *out)
 {
     arch_enable_irq();
-    while (!mouse_poll(out)) {
+    for (;;) {
         s_waiter = sched_current();
+        if (mouse_poll(out)) {
+            s_waiter = NULL;
+            break;
+        }
         sched_block();
         /* Resumes here after sched_wake() from buf_push() */
     }

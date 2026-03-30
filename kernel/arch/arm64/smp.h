@@ -32,6 +32,10 @@ typedef struct percpu {
     uint64_t               kernel_stack;      /* offset 24 */
     uint64_t               user_sp_scratch;   /* offset 32 */
     uint64_t               ticks;             /* offset 40 */
+    /* Deferred dying task cleanup — per-CPU to avoid SMP race on globals. */
+    void                  *prev_dying_tcb;    /* offset 48 */
+    void                  *prev_dying_stack;  /* offset 56 */
+    uint64_t               prev_dying_stack_pages; /* offset 64 */
 } percpu_t;
 
 /* Assembly-visible offset constants */
