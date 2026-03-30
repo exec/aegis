@@ -8,6 +8,7 @@
 
 #include "terminal.h"
 #include "compositor.h"
+#include "font.h"
 #include <glyph.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,7 @@ typedef struct {
     int cols, rows;
     int cx, cy;
     char *grid;
+    int cell_w, cell_h; /* character cell size (TTF or bitmap fallback) */
     /* ANSI escape parser state */
     int esc_state;      /* 0=normal, 1=got ESC, 2=got CSI (ESC[) */
     int esc_params[4];
@@ -47,21 +49,29 @@ static void term_render_content(glyph_window_t *win)
     surface_t *s = &win->surface;
     int ox = GLYPH_BORDER_WIDTH;
     int oy = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
+    int cw = tp->cell_w;
+    int ch = tp->cell_h;
 
     draw_fill_rect(s, ox, oy, win->client_w, win->client_h, C_TERM_BG);
 
     for (int r = 0; r < tp->rows; r++) {
         for (int c = 0; c < tp->cols; c++) {
-            char ch = tp->grid[r * tp->cols + c];
-            if (ch != ' ')
-                draw_char(s, ox + c * FONT_W, oy + r * FONT_H,
-                          ch, C_TERM_FG, C_TERM_BG);
+            char gc = tp->grid[r * tp->cols + c];
+            if (gc != ' ') {
+                if (g_font_mono)
+                    font_draw_char(s, g_font_mono, 16,
+                                   ox + c * cw, oy + r * ch,
+                                   gc, C_TERM_FG);
+                else
+                    draw_char(s, ox + c * cw, oy + r * ch,
+                              gc, C_TERM_FG, C_TERM_BG);
+            }
         }
     }
 
     if (tp->master_fd >= 0)
-        draw_fill_rect(s, ox + tp->cx * FONT_W, oy + tp->cy * FONT_H,
-                       FONT_W, FONT_H, C_TERM_FG);
+        draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
+                       cw, ch, C_TERM_FG);
 }
 
 static void term_on_key(glyph_window_t *self, char key)
@@ -288,20 +298,28 @@ dropdown_render_content(glyph_window_t *win)
     /* Terminal content starts at (4, 4) with small padding */
     int pad_x = 4;
     int pad_y = 4;
+    int cw = tp->cell_w;
+    int ch = tp->cell_h;
 
     for (int r = 0; r < tp->rows; r++) {
         for (int c = 0; c < tp->cols; c++) {
-            char ch = tp->grid[r * tp->cols + c];
-            if (ch != ' ')
-                draw_char(s, pad_x + c * FONT_W, pad_y + r * FONT_H,
-                          ch, C_TERM_FG, C_TERM_BG);
+            char gc = tp->grid[r * tp->cols + c];
+            if (gc != ' ') {
+                if (g_font_mono)
+                    font_draw_char(s, g_font_mono, 16,
+                                   pad_x + c * cw, pad_y + r * ch,
+                                   gc, C_TERM_FG);
+                else
+                    draw_char(s, pad_x + c * cw, pad_y + r * ch,
+                              gc, C_TERM_FG, C_TERM_BG);
+            }
         }
     }
 
     /* Cursor block */
     if (tp->master_fd >= 0)
-        draw_fill_rect(s, pad_x + tp->cx * FONT_W, pad_y + tp->cy * FONT_H,
-                       FONT_W, FONT_H, C_TERM_FG);
+        draw_fill_rect(s, pad_x + tp->cx * cw, pad_y + tp->cy * ch,
+                       cw, ch, C_TERM_FG);
 
     /* Round the bottom corners by painting the background color
      * over pixels that fall outside the corner arcs. */
@@ -409,8 +427,10 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
     /* Compute terminal grid size from pixel dimensions with padding */
     int pad_x = 4;
     int pad_y = 4;
-    int cols = (dd_w - 2 * pad_x) / FONT_W;
-    int rows = (dd_h - 2 * pad_y) / FONT_H;
+    int mono_w = g_font_mono ? font_text_width(g_font_mono, 16, "M") : FONT_W;
+    int mono_h = g_font_mono ? font_height(g_font_mono, 16) : FONT_H;
+    int cols = (dd_w - 2 * pad_x) / mono_w;
+    int rows = (dd_h - 2 * pad_y) / mono_h;
     if (cols < 10) cols = 10;
     if (rows < 4) rows = 4;
 
@@ -423,6 +443,8 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
     tp->master_fd = -1;
     tp->cols = cols;
     tp->rows = rows;
+    tp->cell_w = mono_w;
+    tp->cell_h = mono_h;
     tp->grid = calloc((unsigned)(cols * rows), 1);
     if (!tp->grid) {
         free(tp);
@@ -474,8 +496,10 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
 glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
 {
     /* Create glyph window */
-    int client_w = cols * FONT_W;
-    int client_h = rows * FONT_H;
+    int mono_w = g_font_mono ? font_text_width(g_font_mono, 16, "M") : FONT_W;
+    int mono_h = g_font_mono ? font_height(g_font_mono, 16) : FONT_H;
+    int client_w = cols * mono_w;
+    int client_h = rows * mono_h;
     glyph_window_t *win = glyph_window_create("Terminal", client_w, client_h);
     if (!win)
         return NULL;
@@ -492,6 +516,8 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     tp->master_fd = -1;
     tp->cols = cols;
     tp->rows = rows;
+    tp->cell_w = mono_w;
+    tp->cell_h = mono_h;
     tp->grid = calloc((unsigned)(cols * rows), 1);
     if (!tp->grid) {
         free(tp);

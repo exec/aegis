@@ -614,6 +614,16 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw
 	    printf 'mkdir /usr\nmkdir /usr/share\n' | /sbin/debugfs -w $(ROOTFS); \
 	    printf 'write $(BUILD)/wallpaper.raw /usr/share/wallpaper.raw\n' | /sbin/debugfs -w $(ROOTFS); \
 	fi
+	# TTF fonts for Lumen compositor (optional — UI falls back to bitmap font)
+	@if [ -f assets/Inter-Regular.ttf ] || [ -f assets/JetBrainsMono-Regular.ttf ]; then \
+	    printf 'mkdir /usr\nmkdir /usr/share\nmkdir /usr/share/fonts\n' | /sbin/debugfs -w $(ROOTFS); \
+	    if [ -f assets/Inter-Regular.ttf ]; then \
+	        printf 'write assets/Inter-Regular.ttf /usr/share/fonts/Inter-Regular.ttf\n' | /sbin/debugfs -w $(ROOTFS); \
+	    fi; \
+	    if [ -f assets/JetBrainsMono-Regular.ttf ]; then \
+	        printf 'write assets/JetBrainsMono-Regular.ttf /usr/share/fonts/JetBrainsMono-Regular.ttf\n' | /sbin/debugfs -w $(ROOTFS); \
+	    fi; \
+	fi
 	# Kernel binary for installed-system boot
 	printf 'mkdir /boot\nmkdir /boot/grub\n' \
 	    | /sbin/debugfs -w $(ROOTFS)

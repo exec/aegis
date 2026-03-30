@@ -1,5 +1,6 @@
 /* dock.c -- macOS-style dock with frosted glass effect for Lumen compositor */
 #include "dock.h"
+#include "font.h"
 #include <glyph.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,9 +112,16 @@ draw_icon_terminal(surface_t *fb, int ix, int iy)
 
     draw_rounded_rect(fb, tx, ty, tw, th, 6, 0x001A1A2E);
 
-    int text_x = tx + (tw - 3 * FONT_W) / 2;
-    int text_y = ty + (th - FONT_H) / 2;
-    draw_text(fb, text_x, text_y, ">_", C_TERM_FG, 0x001A1A2E);
+    if (g_font_ui) {
+        int tw2 = font_text_width(g_font_ui, 14, ">_");
+        int text_x = tx + (tw - tw2) / 2;
+        int text_y = ty + (th - font_height(g_font_ui, 14)) / 2;
+        font_draw_text(fb, g_font_ui, 14, text_x, text_y, ">_", C_TERM_FG);
+    } else {
+        int text_x = tx + (tw - 3 * FONT_W) / 2;
+        int text_y = ty + (th - FONT_H) / 2;
+        draw_text(fb, text_x, text_y, ">_", C_TERM_FG, 0x001A1A2E);
+    }
 }
 
 void

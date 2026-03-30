@@ -1,5 +1,6 @@
 /* window.c -- Glyph window: chrome rendering, dirty tracking, dispatch */
 #include "glyph.h"
+#include "font.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -123,7 +124,13 @@ render_chrome(glyph_window_t *win)
     draw_gradient_v(s, cx, BD_W, win->client_w, TB_H, t1, t2);
 
     /* Title text */
-    draw_text_t(s, cx + 50, BD_W + 5, win->title, C_CHROME_TITLE_T);
+    if (g_font_ui) {
+        int ty = BD_W + (TB_H - font_height(g_font_ui, 13)) / 2;
+        font_draw_text(s, g_font_ui, 13, cx + 50, ty, win->title,
+                       C_CHROME_TITLE_T);
+    } else {
+        draw_text_t(s, cx + 50, BD_W + 5, win->title, C_CHROME_TITLE_T);
+    }
 
     /* Traffic-light buttons */
     int btn_y = CLOSE_BTN_Y;

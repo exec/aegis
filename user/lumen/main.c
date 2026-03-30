@@ -11,6 +11,7 @@
 #include <signal.h>
 
 #include <glyph.h>
+#include "font.h"
 #include "cursor.h"
 #include "compositor.h"
 #include "dock.h"
@@ -100,8 +101,12 @@ menu_draw(surface_t *fb)
                 draw_fill_rect(fb, MENU_X + 4, y, MENU_W - 8, MENU_ITEM_H,
                                MENU_HOVER_BG);
 
-            draw_text(fb, MENU_X + 16, y + 4, menu_labels[i],
-                      MENU_TEXT, (i == menu_hover) ? MENU_HOVER_BG : MENU_BG);
+            if (g_font_ui)
+                font_draw_text(fb, g_font_ui, 14, MENU_X + 16, y + 6,
+                               menu_labels[i], MENU_TEXT);
+            else
+                draw_text(fb, MENU_X + 16, y + 4, menu_labels[i],
+                          MENU_TEXT, (i == menu_hover) ? MENU_HOVER_BG : MENU_BG);
             y += MENU_ITEM_H;
         }
     }
@@ -191,8 +196,10 @@ spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
 {
     int term_pw = fb_w * 3 / 5;
     int term_ph = fb_h * 3 / 5;
-    int term_cols = term_pw / FONT_W;
-    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
+    int char_w = g_font_mono ? font_text_width(g_font_mono, 16, "M") : FONT_W;
+    int char_h = g_font_mono ? font_height(g_font_mono, 16) : FONT_H;
+    int term_cols = term_pw / char_w;
+    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / char_h;
     int master_fd = -1;
 
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
@@ -253,6 +260,9 @@ main(void)
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
     if (!backbuf)
         return 1;
+
+    /* Initialize TTF font renderer (loads Inter + JetBrains Mono) */
+    font_init();
 
     /* Ignore job control signals -- compositor always reads keyboard */
     signal(SIGTTIN, SIG_IGN);

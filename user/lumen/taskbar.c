@@ -4,6 +4,7 @@
  * The "Aegis" text on the left side is clickable and opens a context menu.
  */
 #include "compositor.h"
+#include "font.h"
 #include <glyph.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,15 +29,34 @@ topbar_draw(surface_t *s, int screen_w, const char *clock_str)
     draw_circle_filled(s, 14, TOPBAR_HEIGHT / 2, 4, C_ACCENT);
 
     /* "Aegis" text — transparent background */
-    draw_text_t(s, 24, 4, "Aegis", 0x00FFFFFF);
+    if (g_font_ui) {
+        int ty = (TOPBAR_HEIGHT - font_height(g_font_ui, 14)) / 2;
+        font_draw_text(s, g_font_ui, 14, 24, ty, "Aegis", 0x00FFFFFF);
+    } else {
+        draw_text_t(s, 24, 4, "Aegis", 0x00FFFFFF);
+    }
 
     /* Clock text — transparent background */
     if (clock_str && clock_str[0]) {
-        int len = (int)strlen(clock_str);
-        int cx = screen_w - len * FONT_W - 12;
-        draw_text_t(s, cx, 4, clock_str, TOPBAR_TEXT);
+        if (g_font_ui) {
+            int cw = font_text_width(g_font_ui, 14, clock_str);
+            int cx = screen_w - cw - 12;
+            int ty = (TOPBAR_HEIGHT - font_height(g_font_ui, 14)) / 2;
+            font_draw_text(s, g_font_ui, 14, cx, ty, clock_str, TOPBAR_TEXT);
+        } else {
+            int len = (int)strlen(clock_str);
+            int cx = screen_w - len * FONT_W - 12;
+            draw_text_t(s, cx, 4, clock_str, TOPBAR_TEXT);
+        }
     } else {
-        draw_text_t(s, screen_w - 5 * FONT_W - 12, 4, "00:00", TOPBAR_TEXT);
+        if (g_font_ui) {
+            int cw = font_text_width(g_font_ui, 14, "00:00");
+            int cx = screen_w - cw - 12;
+            int ty = (TOPBAR_HEIGHT - font_height(g_font_ui, 14)) / 2;
+            font_draw_text(s, g_font_ui, 14, cx, ty, "00:00", TOPBAR_TEXT);
+        } else {
+            draw_text_t(s, screen_w - 5 * FONT_W - 12, 4, "00:00", TOPBAR_TEXT);
+        }
     }
 }
 
