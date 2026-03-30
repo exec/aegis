@@ -173,6 +173,30 @@ capd handles the common case correctly. You build whatever you want.
 
 ---
 
+## Defaults, Not Mandates
+
+Every userspace component in Aegis is a default implementation behind a stable
+interface. The kernel enforces the contracts — capability checks, socket
+protocols, syscall semantics. Everything above the kernel is replaceable.
+
+| Layer | Default | Interface | Replace by |
+|-------|---------|-----------|------------|
+| Init | Vigil | Supervises services, holds root capabilities | Any binary at `/init` |
+| Broker | capd | Socket protocol + `CAP_DELEGATE` | Path in `/etc/aegis/capd.conf` |
+| Shell | stsh | Receives caps from login, manages system | Shell field in `/etc/passwd` |
+| Auth | login | Authenticates, spawns session with caps | Vigil service config |
+| Compositor | Lumen | Owns framebuffer, composites windows | Vigil service config |
+| Toolkit | Glyph | Shared library, C API | Link against whatever you want |
+
+Someone builds a better broker. Someone else builds a better shell for that
+broker. Someone else builds a better compositor that integrates with both.
+The kernel doesn't change. The interfaces don't change. The ecosystem grows
+because every component is a default, not a dependency.
+
+This is how a small project becomes a platform.
+
+---
+
 ## What Exists Today
 
 Aegis is not a specification. It is running software.
