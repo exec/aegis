@@ -199,9 +199,18 @@ comp_composite(compositor_t *c)
     if (c->full_redraw) {
         /* Desktop background — wallpaper or solid fill */
         if (c->wallpaper.pixels) {
-            draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
-                             c->wallpaper.pixels,
-                             (int)c->wallpaper.w, (int)c->wallpaper.h);
+            if ((int)c->wallpaper.w == c->back.w &&
+                (int)c->wallpaper.h == c->back.h) {
+                /* Exact match — memcpy rows (pitch may differ from width) */
+                for (int y = 0; y < c->back.h; y++)
+                    memcpy(&c->back.buf[y * c->back.pitch],
+                           &c->wallpaper.pixels[y * c->back.w],
+                           (size_t)c->back.w * sizeof(uint32_t));
+            } else {
+                draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
+                                 c->wallpaper.pixels,
+                                 (int)c->wallpaper.w, (int)c->wallpaper.h);
+            }
         } else {
             draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
         }
@@ -241,10 +250,28 @@ comp_composite(compositor_t *c)
 
     /* Redraw background in dirty region */
     if (c->wallpaper.pixels) {
-        /* Re-blit wallpaper region (scaled) — expensive, but correct */
-        draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
-                         c->wallpaper.pixels,
-                         (int)c->wallpaper.w, (int)c->wallpaper.h);
+        if ((int)c->wallpaper.w == c->back.w &&
+            (int)c->wallpaper.h == c->back.h) {
+            /* Exact match — copy only the dirty region rows */
+            int dy0 = combined.y < 0 ? 0 : combined.y;
+            int dy1 = combined.y + combined.h;
+            if (dy1 > c->back.h) dy1 = c->back.h;
+            int x0 = combined.x < 0 ? 0 : combined.x;
+            int x1 = combined.x + combined.w;
+            if (x1 > c->back.w) x1 = c->back.w;
+            int count = x1 - x0;
+            if (count > 0) {
+                for (int y = dy0; y < dy1; y++)
+                    memcpy(&c->back.buf[y * c->back.pitch + x0],
+                           &c->wallpaper.pixels[y * c->back.w + x0],
+                           (unsigned)count * sizeof(uint32_t));
+            }
+        } else {
+            /* Scaled wallpaper — expensive, but correct */
+            draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
+                             c->wallpaper.pixels,
+                             (int)c->wallpaper.w, (int)c->wallpaper.h);
+        }
     } else {
         int dy0 = combined.y < 0 ? 0 : combined.y;
         int dy1 = combined.y + combined.h;

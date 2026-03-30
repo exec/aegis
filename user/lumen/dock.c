@@ -1,11 +1,18 @@
 /* dock.c -- macOS-style dock for Lumen compositor */
 #include "dock.h"
 #include <glyph.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int s_dock_x, s_dock_y, s_dock_w;
 static int s_screen_w, s_screen_h;
 static int s_hover_item = -1;
+
+/* Cached dock surface — avoids redrawing circles/rounded-rects every frame */
+static uint32_t *s_cache_buf;
+static int s_cache_w, s_cache_h;
+static int s_cache_valid;
+static int s_cache_hover = -2; /* impossible initial value */
 
 void
 dock_init(int screen_w, int screen_h)
@@ -93,24 +100,37 @@ draw_icon_terminal(surface_t *fb, int ix, int iy)
     draw_text(fb, text_x, text_y, ">_", C_TERM_FG, 0x001A1A2E);
 }
 
-void
-dock_draw(surface_t *fb, int screen_w, int screen_h)
+static void
+dock_render_to_cache(void)
 {
-    (void)screen_w;
-    (void)screen_h;
+    if (!s_cache_buf)
+        return;
 
-    /* Dock background with rounded corners */
-    draw_rounded_rect(fb, s_dock_x, s_dock_y, s_dock_w, DOCK_HEIGHT,
+    /* Clear cache to transparent (desktop bg will show through via blit) */
+    memset(s_cache_buf, 0, (size_t)s_cache_w * (size_t)s_cache_h * sizeof(uint32_t));
+
+    /* Build a temporary surface for the cache, positioned at (0,0) */
+    surface_t cs;
+    cs.buf = s_cache_buf;
+    cs.w = s_cache_w;
+    cs.h = s_cache_h;
+    cs.pitch = s_cache_w;
+
+    /* Dock background with rounded corners — at (0,0) in cache coords */
+    draw_rounded_rect(&cs, 0, 0, s_dock_w, DOCK_HEIGHT,
                       DOCK_CORNER_R, DOCK_BG);
 
-    /* Draw each dock item */
+    /* Draw each dock item (offset from s_dock_x to 0) */
     for (int i = 0; i < DOCK_ITEM_COUNT; i++) {
         int ix, iy;
         dock_item_rect(i, &ix, &iy);
+        /* Convert from screen coords to cache-local coords */
+        int lx = ix - s_dock_x;
+        int ly = iy - s_dock_y;
 
         /* Hover highlight */
         if (i == s_hover_item) {
-            draw_rounded_rect(fb, ix - 4, iy - 4,
+            draw_rounded_rect(&cs, lx - 4, ly - 4,
                               DOCK_ICON_SIZE + 8, DOCK_ICON_SIZE + 8,
                               8, DOCK_HOVER_BG);
         }
@@ -118,17 +138,43 @@ dock_draw(surface_t *fb, int screen_w, int screen_h)
         /* Draw the icon */
         switch (i) {
         case DOCK_ITEM_SETTINGS:
-            draw_icon_settings(fb, ix + DOCK_ICON_SIZE / 2,
-                               iy + DOCK_ICON_SIZE / 2);
+            draw_icon_settings(&cs, lx + DOCK_ICON_SIZE / 2,
+                               ly + DOCK_ICON_SIZE / 2);
             break;
         case DOCK_ITEM_FILES:
-            draw_icon_folder(fb, ix, iy);
+            draw_icon_folder(&cs, lx, ly);
             break;
         case DOCK_ITEM_TERMINAL:
-            draw_icon_terminal(fb, ix, iy);
+            draw_icon_terminal(&cs, lx, ly);
             break;
         }
     }
+
+    s_cache_valid = 1;
+    s_cache_hover = s_hover_item;
+}
+
+void
+dock_draw(surface_t *fb, int screen_w, int screen_h)
+{
+    (void)screen_w;
+    (void)screen_h;
+
+    /* Allocate cache on first call */
+    if (!s_cache_buf) {
+        s_cache_w = s_dock_w;
+        s_cache_h = DOCK_HEIGHT;
+        s_cache_buf = malloc((size_t)s_cache_w * (size_t)s_cache_h * sizeof(uint32_t));
+        s_cache_valid = 0;
+    }
+
+    /* Re-render cache if hover state changed or cache is invalid */
+    if (!s_cache_valid || s_cache_hover != s_hover_item)
+        dock_render_to_cache();
+
+    /* Blit cached dock to framebuffer */
+    if (s_cache_buf)
+        draw_blit(fb, s_dock_x, s_dock_y, s_cache_buf, s_cache_w, s_cache_h);
 }
 
 int

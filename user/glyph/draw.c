@@ -239,20 +239,29 @@ void draw_rounded_rect(surface_t *s, int x, int y, int w, int h,
 void draw_blit_scaled(surface_t *dst, int dx, int dy, int dw, int dh,
                       const uint32_t *src, int sw, int sh)
 {
-    int x, y;
+    int y;
     if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0)
         return;
-    for (y = 0; y < dh; y++) {
-        int dst_y = dy + y;
-        if (dst_y < 0 || dst_y >= dst->h)
-            continue;
+
+    /* Fixed-point 16.16 stepping — eliminates per-pixel division in inner loop */
+    int x_step = (sw << 16) / dw;
+
+    /* Clamp destination to surface bounds for row-level skip */
+    int y0 = 0, y1 = dh;
+    if (dy < 0) y0 = -dy;
+    if (dy + dh > dst->h) y1 = dst->h - dy;
+    int x0 = 0, x1 = dw;
+    if (dx < 0) x0 = -dx;
+    if (dx + dw > dst->w) x1 = dst->w - dx;
+
+    for (y = y0; y < y1; y++) {
         int src_y = y * sh / dh;
-        for (x = 0; x < dw; x++) {
-            int dst_x = dx + x;
-            if (dst_x < 0 || dst_x >= dst->w)
-                continue;
-            int src_x = x * sw / dw;
-            dst->buf[dst_y * dst->pitch + dst_x] = src[src_y * sw + src_x];
+        const uint32_t *src_row = src + src_y * sw;
+        uint32_t *dst_row = dst->buf + (dy + y) * dst->pitch + dx;
+        int x_acc = x0 * x_step;
+        for (int x = x0; x < x1; x++) {
+            dst_row[x] = src_row[x_acc >> 16];
+            x_acc += x_step;
         }
     }
 }

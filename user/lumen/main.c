@@ -322,6 +322,7 @@ main(void)
 
     for (;;) {
         int activity = 0;
+        int mouse_only = 0;  /* 1 = only mouse moved, no content change */
         ssize_t n;
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
@@ -493,6 +494,10 @@ next_poll:
                 }
 
                 comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
+                /* If no buttons pressed/released and no drag, this is
+                 * mouse-only movement — skip full composite */
+                if (!activity && !(final_buttons & 1) && !comp.dragging)
+                    mouse_only = 1;
                 activity = 1;
             }
         }
@@ -538,12 +543,22 @@ after_mouse:
 
         /* Composite and cursor update */
         if (activity) {
-            cursor_hide();
-            comp_composite(&comp);
-            /* Draw context menu overlay AFTER composite, on the framebuffer */
-            if (menu_open)
-                menu_draw(&comp.fb);
-            cursor_show(comp.cursor_x, comp.cursor_y);
+            if (mouse_only && !comp.full_redraw && !menu_open) {
+                /* Mouse moved but nothing else changed — just relocate cursor.
+                 * save-under handles erasing the old position on the FB.
+                 * Discard any cursor-movement dirty rects so the next frame
+                 * with real content changes doesn't carry stale rects. */
+                comp.ndirty = 0;
+                cursor_hide();
+                cursor_show(comp.cursor_x, comp.cursor_y);
+            } else {
+                cursor_hide();
+                comp_composite(&comp);
+                /* Draw context menu overlay AFTER composite, on the framebuffer */
+                if (menu_open)
+                    menu_draw(&comp.fb);
+                cursor_show(comp.cursor_x, comp.cursor_y);
+            }
         }
 
         /* Sleep if idle to avoid busy-looping */
