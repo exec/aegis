@@ -773,6 +773,64 @@ halt:
         __asm__ volatile("cli; hlt");
 }
 
+/* ── panic_halt — simple text BSOD for kernel assertion failures ──────── */
+
+void
+panic_halt(const char *msg)
+{
+    if (!fb_available || s_fb_va == (void *)0)
+        goto phalt;
+
+    s_fb_locked = 0;
+
+    /* Fill screen with blue */
+    {
+        uint32_t total = s_fb_height * s_pitch_px;
+        uint32_t i;
+        for (i = 0; i < total; i++)
+            s_fb_va[i] = PANIC_BG;
+    }
+
+    uint32_t margin_x = 60;
+    uint32_t y = 60;
+    uint32_t x;
+
+    /* Logo */
+    _blit_logo_rgba(logo_panic_data, LOGO_PANIC_W, LOGO_PANIC_H,
+                    margin_x, y, PANIC_BG);
+    y += LOGO_PANIC_H + PANIC_FONT_H;
+
+    /* Title */
+    x = margin_x;
+    _panic_draw_string(&x, y, "Aegis ran into a problem and needs to stop.", PANIC_TITLE);
+    y += PANIC_FONT_H * 2;
+
+    /* Message — split on newlines */
+    x = margin_x;
+    const char *p = msg;
+    while (*p) {
+        if (*p == '\n') {
+            y += PANIC_FONT_H + 4;
+            x = margin_x;
+            p++;
+            continue;
+        }
+        if (x + PANIC_FONT_W <= s_fb_width) {
+            _panic_draw_char(x, y, *p, PANIC_FG);
+            x += PANIC_FONT_W;
+        }
+        p++;
+    }
+
+    y += PANIC_FONT_H * 2;
+    x = margin_x;
+    _panic_draw_string(&x, y, "This information is also on the serial console.", PANIC_DIM);
+
+phalt:
+    for (;;)
+        __asm__ volatile("cli; hlt");
+}
+
 /* ── Boot Splash ───────────────────────────────────────────────────────── */
 
 #define SPLASH_BG 0x00111111u  /* dark charcoal */

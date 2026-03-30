@@ -52,6 +52,11 @@ void fb_boot_splash(void);
  * Called when boot is complete, right before starting user processes. */
 void fb_boot_splash_end(void);
 
+/* panic_halt — take over framebuffer, display a text message on blue screen,
+ * and halt. For kernel assertion failures (vmm, pmm, sched, etc.).
+ * Supports newlines in the message. Never returns. */
+void panic_halt(const char *msg);
+
 /* panic_bluescreen — take over the framebuffer and display a panic screen.
  * Draws a blue background with Terminus font showing exception details.
  * Halts the CPU with cli; hlt. Never returns.
