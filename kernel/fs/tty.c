@@ -97,14 +97,19 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
     if (len == 0)
         return 0;
 
-    /* SIGTTIN: background process trying to read */
+    /* SIGTTIN: background process trying to read.
+     * If the process ignores SIGTTIN (e.g. a compositor that always
+     * needs keyboard input), allow the read to proceed. */
     if (!tty_is_fg(tty)) {
         aegis_task_t *t = sched_current();
         if (t && t->is_user) {
             aegis_process_t *proc = (aegis_process_t *)t;
-            signal_send_pgrp(proc->pgid, SIGTTIN);
+            if (proc->sigactions[SIGTTIN].sa_handler != SIG_IGN) {
+                signal_send_pgrp(proc->pgid, SIGTTIN);
+                return -4; /* EINTR */
+            }
+            /* SIGTTIN ignored — allow background read */
         }
-        return -4; /* EINTR */
     }
 
     /* Snapshot termios flags under lock */
