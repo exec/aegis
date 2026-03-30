@@ -39,11 +39,13 @@ typedef struct {
     int      needs_net_admin;  /* 1 if caps file listed NET_ADMIN */
     int      needs_disk_admin; /* 1 if caps file listed DISK_ADMIN */
     int      needs_fb;         /* 1 if caps file listed FB */
+    int      needs_cap_grant;    /* 1 if caps file listed CAP_GRANT */
     int      needs_cap_delegate; /* 1 if caps file listed CAP_DELEGATE */
     int      needs_cap_query;    /* 1 if caps file listed CAP_QUERY */
 } service_t;
 
 #define SVC_CAP_FB          12u
+#define SVC_CAP_CAP_GRANT    5u
 #define SVC_CAP_CAP_DELEGATE 13u
 #define SVC_CAP_CAP_QUERY    14u
 
@@ -119,6 +121,7 @@ load_service(const char *name)
     s->needs_net_admin  = (strstr(caps_buf, "NET_ADMIN")  != NULL);
     s->needs_disk_admin = (strstr(caps_buf, "DISK_ADMIN") != NULL);
     s->needs_fb         = (strstr(caps_buf, "FB")         != NULL);
+    s->needs_cap_grant    = (strstr(caps_buf, "CAP_GRANT")    != NULL);
     s->needs_cap_delegate = (strstr(caps_buf, "CAP_DELEGATE") != NULL);
     s->needs_cap_query    = (strstr(caps_buf, "CAP_QUERY")    != NULL);
 
@@ -155,6 +158,8 @@ start_service(service_t *s)
                     (long)(SVC_CAP_RIGHTS_READ | SVC_CAP_RIGHTS_WRITE));
         if (s->needs_fb)
             syscall(361, (long)SVC_CAP_FB, (long)SVC_CAP_RIGHTS_READ);
+        if (s->needs_cap_grant)
+            syscall(361, (long)SVC_CAP_CAP_GRANT, (long)SVC_CAP_RIGHTS_READ);
         if (s->needs_cap_delegate)
             syscall(361, (long)SVC_CAP_CAP_DELEGATE, (long)SVC_CAP_RIGHTS_READ);
         if (s->needs_cap_query)

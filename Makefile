@@ -543,7 +543,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf '/bin/login\n' > /tmp/aegis-vigil-run
 	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-vigil-policy
-	printf 'VFS_OPEN VFS_READ VFS_WRITE AUTH CAP_DELEGATE CAP_QUERY\n' > /tmp/aegis-vigil-caps
+	printf 'VFS_OPEN VFS_READ VFS_WRITE AUTH CAP_GRANT CAP_DELEGATE CAP_QUERY\n' > /tmp/aegis-vigil-caps
 	printf 'root\n' > /tmp/aegis-vigil-user
 	printf 'text\n' > /tmp/aegis-vigil-mode
 	printf 'write /tmp/aegis-vigil-run /etc/vigil/services/getty/run\nwrite /tmp/aegis-vigil-policy /etc/vigil/services/getty/policy\nwrite /tmp/aegis-vigil-caps /etc/vigil/services/getty/caps\nwrite /tmp/aegis-vigil-user /etc/vigil/services/getty/user\nwrite /tmp/aegis-vigil-mode /etc/vigil/services/getty/mode\n' \

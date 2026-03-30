@@ -32,7 +32,7 @@ static const char s_hosts[] =
  * ensuring exec_caps (AUTH) are applied to login, not consumed by sh. */
 static const char s_vigil_run[]    = "/bin/login\n";
 static const char s_vigil_policy[] = "respawn\nmax_restarts=5\n";
-static const char s_vigil_caps[]   = "AUTH\nCAP_DELEGATE\nCAP_QUERY\n";
+static const char s_vigil_caps[]   = "AUTH\nCAP_GRANT\nCAP_DELEGATE\nCAP_QUERY\n";
 
 /* httpd vigil service config — binds :80, serves HTTP for socket API tests. */
 static const char s_httpd_run[]    = "/bin/httpd\n";
