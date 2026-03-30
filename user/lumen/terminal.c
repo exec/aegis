@@ -213,10 +213,10 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
 
     /* Spawn shell via sys_spawn — NO FORK, no page copy, instant. */
     {
-        char *argv[] = {"-oksh", NULL};  /* leading '-' = login shell */
-        char *envp[] = {NULL};
+        char *argv[] = {"-sh", NULL};  /* leading '-' = login shell */
+        char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=dumb", NULL};
 
-        long pid = syscall(SYS_SPAWN, "/bin/oksh", argv, envp, slave_fd);
+        long pid = syscall(SYS_SPAWN, "/bin/sh", argv, envp, slave_fd);
         if (pid < 0) {
             fail_reason = "sys_spawn failed";
             goto pty_failed;
