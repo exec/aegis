@@ -77,3 +77,9 @@ python3 tests/test_curl.py
 
 echo "--- test_installer ---"
 python3 tests/test_installer.py
+
+echo "--- test_stsh ---"
+python3 tests/test_stsh.py
+
+echo "--- test_symlink ---"
+python3 tests/test_symlink.py
