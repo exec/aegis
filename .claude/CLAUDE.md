@@ -297,6 +297,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Citadel + sys_spawn (Phase 40) | ✅ | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **ThinkPad Zen 2 bare-metal PASS** (gradual lag + freeze after ~60s — optimization needed) |
 | Bug fixes (Phase 40b) | ✅ | ARP deadlock from ISR (test_socket root cause since Phase 26); proc_spawn PT_INTERP (q35 RIP=0x0); socket lost-wakeup race; test_socket DHCP wait; **make test + test_socket PASS** |
 | Symlinks + chmod/chown (Phase 41) | ✅ | ext2 symlinks (fast+slow); ext2_open_ex path walk; chmod/chown/lchown; DAC enforcement; ln/chmod/chown/readlink tools; **boot oracle + test_symlink PASS** |
+| stsh — Styx shell (Phase 42) | 🔶 | CAP_DELEGATE(13)+CAP_QUERY(14); sys_cap_query(362); sys_spawn cap_mask(5th param); line editing; history(no-persist privileged); tab completion; caps/sandbox builtins; env vars; paste detection; login fallback. **Awaiting build box test.** |
 
 ### Known deviations
 
@@ -744,6 +745,32 @@ Phase 39 delivered Glyph widget toolkit, dirty-rect compositor, scheduler busy-w
 7. **umask not applied to ext2_create.** `ext2_create` is called with hardcoded 0644. The process umask should be consulted.
 
 8. **Boot-time file opens bypass DAC.** `vfs_open` checks `sched_current()->is_user` — kernel-context opens (during init, before user tasks run) skip permission checks. This is correct: kernel opens during boot are trusted.
+
+---
+
+## Phase 42 — Forward Constraints
+
+**Phase 42 status: 🔶 Code complete. Awaiting build box test.**
+
+1. **Grant builtin deferred to Phase 45 (capd).** stsh can query caps and restrict caps on spawn, but cannot grant capabilities to running processes. Requires capd (IPC-based capability broker).
+
+2. **No scripting.** No if/for/while/case/functions. stsh v1 is interactive only.
+
+3. **No command substitution.** `$(...)` and backticks not supported.
+
+4. **No glob expansion.** `*.c` passed literally to commands.
+
+5. **No job control.** No bg/fg/Ctrl-Z. Single foreground pipeline only.
+
+6. **Hostname hardcoded to "aegis".** No gethostname syscall.
+
+7. **Tab completion not capability-aware (v1).** Shows all entries regardless of permissions. Capability-aware filtering is v2.
+
+8. **sys_spawn has 5 parameters.** All existing callers updated to pass 0/NULL for cap_mask.
+
+9. **stsh is ext2-only.** Login falls back to /bin/sh if stsh not found (no NVMe on -machine pc).
+
+10. **Privileged history is in-memory only.** Sessions with CAP_DELEGATE never write ~/.stsh_history. Prevents attacker from mining operator commands from disk.
 
 ---
 
