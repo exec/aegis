@@ -118,6 +118,7 @@ struct glyph_window {
     int visible;
     int closeable;
     int focused_window; /* 1 if this is the compositor's focused window */
+    int frosted;        /* 1 = frosted glass compositing (blur+tint, keyed blit) */
 
     /* Callbacks for compositor integration */
     void (*on_key)(glyph_window_t *self, char key);

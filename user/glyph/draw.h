@@ -31,6 +31,8 @@ void draw_text_center(surface_t *s, int x, int y, int w, const char *str,
 void draw_box_blur(surface_t *s, int x, int y, int w, int h, int radius);
 void draw_blend_rect(surface_t *s, int x, int y, int w, int h,
                      uint32_t color, int alpha);
+void draw_blit_keyed(surface_t *dst, int dx, int dy,
+                     const uint32_t *src, int sw, int sh, uint32_t key_color);
 
 #define C_BG1       0x001B2838
 #define C_BG2       0x000D1B2A

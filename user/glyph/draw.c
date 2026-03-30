@@ -371,6 +371,22 @@ void draw_box_blur(surface_t *s, int x, int y, int w, int h, int radius)
     free(tmp);
 }
 
+void draw_blit_keyed(surface_t *dst, int dx, int dy,
+                     const uint32_t *src, int sw, int sh, uint32_t key_color)
+{
+    for (int y = 0; y < sh; y++) {
+        if (dy + y < 0 || dy + y >= dst->h)
+            continue;
+        for (int x = 0; x < sw; x++) {
+            if (dx + x < 0 || dx + x >= dst->w)
+                continue;
+            uint32_t px = src[y * sw + x];
+            if (px != key_color)
+                dst->buf[(dy + y) * dst->pitch + (dx + x)] = px;
+        }
+    }
+}
+
 void draw_blend_rect(surface_t *s, int x, int y, int w, int h,
                      uint32_t color, int alpha)
 {

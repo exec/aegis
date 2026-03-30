@@ -156,9 +156,20 @@ comp_add_dirty(compositor_t *c, glyph_rect_t r)
 static void
 blit_window_to_back(surface_t *back, glyph_window_t *win)
 {
-    /* Blit the window's surface to the backbuffer at (win->x, win->y) */
-    draw_blit(back, win->x, win->y, win->surface.buf,
-              win->surf_w, win->surf_h);
+    if (win->frosted) {
+        /* Frosted glass: blur background behind window, apply dark tint,
+         * then keyed-blit the window surface (C_TERM_BG pixels become
+         * transparent, letting the frosted background show through). */
+        draw_box_blur(back, win->x, win->y, win->surf_w, win->surf_h, 8);
+        draw_blend_rect(back, win->x, win->y, win->surf_w, win->surf_h,
+                        C_TERM_BG, 128);
+        draw_blit_keyed(back, win->x, win->y, win->surface.buf,
+                        win->surf_w, win->surf_h, C_TERM_BG);
+    } else {
+        /* Normal opaque blit */
+        draw_blit(back, win->x, win->y, win->surface.buf,
+                  win->surf_w, win->surf_h);
+    }
 }
 
 static void

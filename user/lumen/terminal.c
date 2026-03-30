@@ -446,6 +446,7 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
     win->on_render = dropdown_render_content;
     win->priv = tp;
     win->closeable = 0;
+    win->frosted = 1;
     win->visible = 0;  /* starts hidden */
 
     /* Position: centered horizontally at top of screen */
@@ -480,6 +481,7 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         return NULL;
     win->on_key = term_on_key;
     win->on_render = term_render_content;
+    win->frosted = 1;
 
     /* Allocate terminal private data */
     term_priv_t *tp = calloc(1, sizeof(*tp));
