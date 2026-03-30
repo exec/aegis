@@ -476,10 +476,9 @@ _fb_dispatch_csi(char cmd)
         /* Cursor position: \033[row;colH (1-indexed, defaults to 1). */
         uint32_t row = 0, col = 0;
         int i = 0;
-        /* Parse first number (row) */
         while (i < s_esc_len && s_esc_buf[i] >= '0' && s_esc_buf[i] <= '9')
             row = row * 10u + (uint32_t)(s_esc_buf[i++] - '0');
-        if (row > 0) row--;  /* convert 1-indexed to 0-indexed */
+        if (row > 0) row--;
         if (i < s_esc_len && s_esc_buf[i] == ';') {
             i++;
             while (i < s_esc_len && s_esc_buf[i] >= '0' && s_esc_buf[i] <= '9')
@@ -488,8 +487,35 @@ _fb_dispatch_csi(char cmd)
         }
         s_row = (row < s_rows) ? row : s_rows - 1u;
         s_col = (col < s_cols) ? col : s_cols - 1u;
+    } else if (cmd == 'K') {
+        /* Erase in line.  param=0 (default): clear from cursor to EOL. */
+        uint32_t c;
+        for (c = s_col; c < s_cols; c++)
+            _fb_draw_char(s_row, c, ' ');
+    } else if (cmd == 'C') {
+        /* Cursor forward: \033[nC (default n=1). */
+        uint32_t n = 1;
+        if (s_esc_len > 0) {
+            n = 0;
+            for (int i = 0; i < s_esc_len; i++)
+                n = n * 10u + (uint32_t)(s_esc_buf[i] - '0');
+            if (n == 0) n = 1;
+        }
+        s_col += n;
+        if (s_col >= s_cols) s_col = s_cols - 1u;
+    } else if (cmd == 'D') {
+        /* Cursor back: \033[nD (default n=1). */
+        uint32_t n = 1;
+        if (s_esc_len > 0) {
+            n = 0;
+            for (int i = 0; i < s_esc_len; i++)
+                n = n * 10u + (uint32_t)(s_esc_buf[i] - '0');
+            if (n == 0) n = 1;
+        }
+        if (n > s_col) s_col = 0;
+        else s_col -= n;
     }
-    /* All other sequences are silently ignored. */
+    /* Other sequences are silently ignored. */
 }
 
 void
