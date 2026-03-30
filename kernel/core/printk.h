@@ -9,5 +9,6 @@ void printk(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* printk_set_quiet — suppress VGA+FB output in printk, serial only.
  * Console device (user output) bypasses this via direct serial+fb writes. */
 void printk_set_quiet(int q);
+int  printk_get_quiet(void);
 
 #endif /* AEGIS_PRINTK_H */

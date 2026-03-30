@@ -28,6 +28,12 @@ printk_set_quiet(int q)
     printk_quiet = q;
 }
 
+int
+printk_get_quiet(void)
+{
+    return printk_quiet;
+}
+
 /* Emit a single character to all active output sinks. */
 static void
 emit_char(char c)

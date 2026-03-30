@@ -167,13 +167,10 @@ start_service(service_t *s)
         if (s->needs_cap_query)
             syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_READ);
 
-        /* In quiet mode, close stdout/stderr for non-getty services
-         * so daemon chatter doesn't pollute the login screen.
-         * (No /dev/null on Aegis — just close the fds.) */
-        if (s_quiet && !s->needs_auth) {
-            close(1);
-            close(2);
-        }
+        /* Services keep stdout/stderr open — console_write_fn respects
+         * printk_quiet in the kernel (serial always, VGA/FB only when not
+         * quiet).  Closing fds here would silence serial output that tests
+         * depend on (e.g. [DHCP] acquired). */
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed
