@@ -394,4 +394,22 @@ static inline void arch_wait_for_irq(void) {
     __asm__ volatile("sti; hlt; cli" ::: "memory");
 }
 
+/* arch_early_key_held — poll PS/2 keyboard for any held key during early boot.
+ * No initialization required — PS/2 controller is active from firmware.
+ * Returns non-zero if any key is being held, 0 otherwise.
+ * Used for debug boot mode: hold any key during POST to skip boot splash
+ * and show all kernel output on the framebuffer. */
+static inline int arch_early_key_held(void)
+{
+    uint8_t status;
+    __asm__ volatile("inb $0x64, %0" : "=a"(status));
+    if (status & 1) {
+        uint8_t scancode;
+        __asm__ volatile("inb $0x60, %0" : "=a"(scancode));
+        (void)scancode;
+        return 1;
+    }
+    return 0;
+}
+
 #endif
