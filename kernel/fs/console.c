@@ -12,7 +12,8 @@
  *
  * Bypasses printk so that printk_quiet (boot=quiet) does not suppress
  * user-visible output (login banners, shell prompts, command output).
- * Kernel messages go through printk; user output goes through here.
+ * Writes char-by-char to handle control characters (\b, \r, \n, etc.)
+ * correctly through each output sink's character handler.
  */
 static int
 console_write_fn(void *priv, const void *buf, uint64_t len)
@@ -27,14 +28,20 @@ console_write_fn(void *priv, const void *buf, uint64_t len)
             n = to_end;
     }
     copy_from_user(kbuf, buf, n);
-    /* Null-terminate for string functions */
-    kbuf[n] = '\0';
-    /* Write directly to serial + VGA + FB, bypassing printk_quiet */
-    serial_write_string(kbuf);
-    if (vga_available)
-        vga_write_string(kbuf);
-    if (fb_available)
-        fb_write_string(kbuf);
+    /* Write char-by-char to serial + VGA + FB, bypassing printk_quiet.
+     * Per-char writes ensure control characters (\b, \r, \n, ANSI escapes)
+     * are handled correctly by each sink's character processor. */
+    uint64_t i;
+    for (i = 0; i < n; i++) {
+        char tmp[2];
+        tmp[0] = kbuf[i];
+        tmp[1] = '\0';
+        serial_write_string(tmp);
+        if (vga_available)
+            vga_write_string(tmp);
+        if (fb_available)
+            fb_putchar(kbuf[i]);
+    }
     return (int)n;
 }
 
