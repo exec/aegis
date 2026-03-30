@@ -125,6 +125,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     smp_start_aps();        /* wake APs via INIT-SIPI-SIPI — [SMP] OK       */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
+    fb_boot_splash_end();   /* clear splash, unlock FB for normal output     */
     proc_spawn_init();      /* spawn init user process in ring 3             */
     /* All TCBs and stacks are in kva range at this point —
      * safe to remove the identity map. */

@@ -809,4 +809,26 @@ fb_boot_splash(void)
         uint32_t ty = ly + LOGO_BOOT_H + 30;
         _panic_draw_string(&tx, ty, tag, 0x00888888u);
     }
+
+    /* Suppress printk FB output so the splash stays visible through
+     * all [SUBSYSTEM] OK lines (they go to serial only).
+     * fb_boot_splash_end() unlocks when the kernel is ready. */
+    s_fb_locked = 1;
+}
+
+void
+fb_boot_splash_end(void)
+{
+    if (!fb_available) return;
+
+    /* Clear the splash and unlock for normal text output */
+    {
+        uint32_t total = s_fb_height * s_pitch_px;
+        uint32_t i;
+        for (i = 0; i < total; i++)
+            s_fb_va[i] = 0;
+    }
+    s_col = 0;
+    s_row = 0;
+    s_fb_locked = 0;
 }

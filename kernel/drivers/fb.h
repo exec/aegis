@@ -44,8 +44,13 @@ int fb_get_phys_info(uint64_t *phys_out, uint32_t *width_out,
 void fb_lock_compositor(void);
 
 /* fb_boot_splash — display the Aegis logo centered on a dark background.
- * Called once during early boot, after fb_init(). */
+ * Called once during early boot, after fb_init(). Locks FB output so
+ * printk goes to serial only while the splash is visible. */
 void fb_boot_splash(void);
+
+/* fb_boot_splash_end — clear the splash and unlock FB for normal output.
+ * Called when boot is complete, right before starting user processes. */
+void fb_boot_splash_end(void);
 
 /* panic_bluescreen — take over the framebuffer and display a panic screen.
  * Draws a blue background with Terminus font showing exception details.
