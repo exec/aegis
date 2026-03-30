@@ -8,7 +8,7 @@ static void
 build_prompt(char *prompt, int len)
 {
     const char *user = env_get("USER");
-    if (!user) user = "user";
+    if (!user) user = "aegis";
 
     char cwd[256];
     if (!getcwd(cwd, sizeof(cwd)))
