@@ -88,8 +88,28 @@ class SerialReader:
         return enc in self._buf[self._mark:]
 
     def wait_for_prompt(self, deadline):
-        """Wait for shell prompt '# ' after a command completes."""
-        return self.wait_for("# ", deadline)
+        """Wait for shell prompt '# ' on a fresh line (after \\n).
+        stsh uses raw mode and redraws the prompt after \\r for every
+        keystroke — those redraws contain '# ' but are not real prompts.
+        Only match '# ' preceded by \\n (the real post-command prompt)."""
+        while time.time() < deadline:
+            buf = self._buf[self._mark:]
+            # Find \n followed by anything then "# "
+            idx = buf.find(b"\n")
+            while idx >= 0:
+                rest = buf[idx + 1:]
+                if b"# " in rest:
+                    return True
+                idx = buf.find(b"\n", idx + 1)
+            self._drain()
+        # Final check
+        buf = self._buf[self._mark:]
+        idx = buf.find(b"\n")
+        while idx >= 0:
+            if b"# " in buf[idx + 1:]:
+                return True
+            idx = buf.find(b"\n", idx + 1)
+        return False
 
     def contains(self, needle):
         """Check if needle is in output after the mark (no waiting)."""
@@ -316,8 +336,10 @@ def run_tests():
                 time.sleep(0.5)
                 _type_string(mon, command + "\n")
 
-                # Wait for the command to produce output and the next prompt
-                if not serial.wait_for("# ", time.time() + CMD_TIMEOUT):
+                # Wait for the command to produce output and the next prompt.
+                # stsh redraws prompt+partial-input after \r for each keystroke
+                # (raw mode), so wait for \n then "# " to skip redraws.
+                if not serial.wait_for_prompt(time.time() + CMD_TIMEOUT):
                     # Timed out waiting for prompt -- still check the output
                     pass
 
