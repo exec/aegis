@@ -29,19 +29,18 @@ console_write_fn(void *priv, const void *buf, uint64_t len)
             n = to_end;
     }
     copy_from_user(kbuf, buf, n);
-    /* Write char-by-char to serial (always) + VGA/FB (unless quiet).
-     * Per-char writes ensure control characters (\b, \r, \n, ANSI escapes)
-     * are handled correctly by each sink's character processor. */
-    int quiet = printk_get_quiet();
+    /* Write char-by-char to serial + VGA + FB.  User process output
+     * (login, shell, commands) must always be visible on screen.
+     * Only kernel printk respects printk_quiet — not the console device. */
     uint64_t i;
     for (i = 0; i < n; i++) {
         char tmp[2];
         tmp[0] = kbuf[i];
         tmp[1] = '\0';
         serial_write_string(tmp);
-        if (!quiet && vga_available)
+        if (vga_available)
             vga_write_string(tmp);
-        if (!quiet && fb_available)
+        if (fb_available)
             fb_putchar(kbuf[i]);
     }
     return (int)n;
