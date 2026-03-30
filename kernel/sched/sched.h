@@ -21,6 +21,7 @@ typedef struct aegis_task_t {
     uint64_t             fs_base;          /* per-thread TLS base (IA32_FS_BASE / TPIDR_EL0) */
     uint64_t             clear_child_tid;  /* user VA: write 0 + futex_wake on exit */
     uint64_t             sleep_deadline;   /* PIT tick when nanosleep expires; 0 = not sleeping */
+    int                  read_nonblock;    /* 1 = current sys_read is O_NONBLOCK; per-task, not global */
     struct aegis_task_t *next;             /* circular linked list */
 } aegis_task_t;
 

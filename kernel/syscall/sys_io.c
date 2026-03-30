@@ -185,8 +185,11 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     uint64_t n = arg3;
     if (n > SYS_READ_BUF) n = SYS_READ_BUF;
     if (n > to_end)       n = to_end;
-    vfs_read_nonblock = (f->flags & VFS_O_NONBLOCK) ? 1 : 0;
+    /* Per-task nonblock flag — safe under preemption (unlike the global). */
+    sched_current()->read_nonblock = (f->flags & VFS_O_NONBLOCK) ? 1 : 0;
+    vfs_read_nonblock = sched_current()->read_nonblock;  /* compat: kept for non-PTY readers */
     int64_t got = (int64_t)f->ops->read(f->priv, kbuf, f->offset, n);
+    sched_current()->read_nonblock = 0;
     vfs_read_nonblock = 0;
     if (got < 0) return (uint64_t)got;   /* propagate -errno (e.g. -EPIPE) */
     if (got == 0) return 0;              /* clean EOF */

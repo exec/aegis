@@ -203,8 +203,10 @@ master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 		/* Slave closed and buffer empty -- EOF */
 		if (!pair->slave_open)
 			return 0;
-		/* O_NONBLOCK: return -EAGAIN instead of blocking */
-		if (vfs_read_nonblock)
+		/* O_NONBLOCK: return -EAGAIN instead of blocking.
+		 * Use per-task flag (safe under preemption) rather than
+		 * the global vfs_read_nonblock which can be clobbered. */
+		if (sched_current()->read_nonblock)
 			return -11; /* EAGAIN */
 		/* Check for pending signals */
 		if (signal_check_pending())
