@@ -34,6 +34,7 @@ _KEY_MAP = {
     '<':  'shift-comma',
     '>':  'shift-dot',
     '&':  'shift-7',
+    ';':  'semicolon',
 }
 for c in 'abcdefghijklmnopqrstuvwxyz':
     _KEY_MAP[c] = c
