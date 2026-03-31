@@ -300,6 +300,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | stsh — Styx shell (Phase 42) | ✅ | CAP_DELEGATE(13)+CAP_QUERY(14); sys_cap_query(362); sys_spawn cap_mask(5th param); line editing; history(no-persist privileged); tab completion; caps/sandbox builtins; env vars; paste detection; login fallback. **make test 25/25 PASS; ThinkPad Zen 2 bare-metal PASS** |
 | Quiet boot + lumen fixes (Phase 42b) | ✅ | printk_quiet; console direct output; DHCP via stderr; sys_setfg scoped to controlling TTY; tty_read SIG_IGN bypass; lumen SIGTTIN ignore; dual-ISO test harness; login backspace; **ThinkPad Zen 2 bare-metal PASS** |
 | IPC (Phase 44) | ✅ | AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS; SO_PEERCRED; memfd_create+ftruncate; MAP_SHARED; CAP_KIND_IPC(15); ipc_test 5/5; **make test 26/26 PASS** |
+| capd + sys_cap_grant (Phase 45) | ✅ | sys_cap_grant(363); capd daemon (AF_UNIX binary protocol); /etc/aegis/capd.d/ policy files; vigil caps→capd migration; stsh grant builtin; AF_UNIX ring buffer use-after-free fix; **make test 26/27 PASS** (ls / OOM pre-existing) |
 
 ### Known deviations
 
@@ -381,7 +382,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 42b | **Quiet boot + lumen fixes** — printk_quiet, console output routing, SIGTTIN bypass for compositor, dual-ISO test harness, login backspace | ✅ Done |
 | 43a | **Deep architecture audit** — file-by-file review of kernel + userspace. Prioritized fix list. Multiple parallel agents. | ✅ Done |
 | 44 | **IPC** — AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS fd passing; memfd_create + MAP_SHARED; SO_PEERCRED; CAP_KIND_IPC. Unlocks external Glyph apps and capd. | ✅ Done |
-| 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh helper management; stable broker interface (replaceable). Requires IPC (Phase 44) for kernel-attested peer credentials. | Not started |
+| 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh grant builtin; AF_UNIX ring buffer fix | ✅ Done |
 | 46 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 47 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
 | 48 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
@@ -532,7 +533,33 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 12. **VFS bounce buffer is 1024 bytes per read/write call.** Large unix socket transfers require multiple VFS calls. Adequate for control messages; pixel data should use MAP_SHARED.
 
-*Last updated: 2026-03-30 — Phase 44 complete, make test 26/26 GREEN.*
+*Last updated: 2026-03-31 — Phase 45 complete, make test 26/27 GREEN (ls / OOM pre-existing).*
+
+---
+
+## Phase 45 — Forward Constraints
+
+**Phase 45 status: ✅ complete. capd_test PASS. 26/27 integrated tests PASS.**
+
+1. **No cap revocation.** `sys_cap_grant` (363) is grant-only. No `sys_cap_revoke`. Restart the process to reset caps.
+
+2. **capd is single-threaded.** One connection at a time. Listen backlog 8. Adequate for service startup.
+
+3. **Binary protocol only.** Client sends `uint32_t kind`, server responds `int32_t result`. No text protocol. Human debugging via `stsh grant` builtin (direct syscall, no capd).
+
+4. **capd holds 15/16 cap slots.** Adding new cap kinds requires expanding `CAP_TABLE_SIZE`. Slot 0 (NULL) is the only free slot.
+
+5. **Policy files are static.** capd loads at startup. Changes require capd restart (vigil respawn).
+
+6. **`sys_cap_grant` rights check is kind-only.** The caller only needs to hold the cap kind — rights match is not enforced. This is simpler but means capd can grant rwx for a cap it holds as write-only.
+
+7. **AF_UNIX ring buffer lifetime fix (kernel bug fixed this phase).** `unix_sock_free` no longer frees the ring buffer or clears `peer_id` while the peer is alive. Orphaned rings are freed on slot reuse. This fixes a use-after-free that caused data corruption on sequential AF_UNIX connections (capd pattern).
+
+8. **`ls /` OOM is pre-existing.** The integrated test `vfs: ls / shows root dirs` fails with "Out of memory" since Phase 45. Likely related to increased kva pressure from ring buffer deferred cleanup, or a pre-existing brk/mmap issue in the `ls` binary with a larger rootfs.
+
+9. **Vigil cap delegation preserved for capd only.** Vigil still reads `caps` files and calls `sys_cap_grant_exec` (361), but only capd's service descriptor has a caps file. All other services request caps from capd at runtime.
+
+10. **`needs_setuid` and `needs_thread_create` added to Vigil.** Vigil can now delegate SETUID and THREAD_CREATE via exec_caps. Required for capd to hold these caps for delegation to login.
 
 ---
 

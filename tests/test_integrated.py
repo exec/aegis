@@ -223,6 +223,10 @@ TESTS = [
      "/bin/ipc_test",
      lambda s: s.contains("IPC TESTS PASSED")),
 
+    ("capd: /bin/capd_test",
+     "/bin/capd_test",
+     lambda s: s.contains("CAPD TESTS PASSED")),
+
     # --- Network (boot output) ---
     ("net: DHCP acquired",
      None,

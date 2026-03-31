@@ -22,6 +22,8 @@ typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 #define SVC_CAP_NET_SOCKET  7u
 #define SVC_CAP_NET_ADMIN   8u
 #define SVC_CAP_DISK_ADMIN 11u
+#define SVC_CAP_SETUID      6u
+#define SVC_CAP_THREAD_CREATE 9u
 #define SVC_CAP_RIGHTS_READ  1u
 #define SVC_CAP_RIGHTS_WRITE 2u
 
@@ -42,6 +44,8 @@ typedef struct {
     int      needs_cap_grant;    /* 1 if caps file listed CAP_GRANT */
     int      needs_cap_delegate; /* 1 if caps file listed CAP_DELEGATE */
     int      needs_cap_query;    /* 1 if caps file listed CAP_QUERY */
+    int      needs_setuid;       /* 1 if caps file listed SETUID */
+    int      needs_thread_create; /* 1 if caps file listed THREAD_CREATE */
 } service_t;
 
 #define SVC_CAP_FB          12u
@@ -126,6 +130,8 @@ load_service(const char *name)
     s->needs_cap_grant    = (strstr(caps_buf, "CAP_GRANT")    != NULL);
     s->needs_cap_delegate = (strstr(caps_buf, "CAP_DELEGATE") != NULL);
     s->needs_cap_query    = (strstr(caps_buf, "CAP_QUERY")    != NULL);
+    s->needs_setuid        = (strstr(caps_buf, "SETUID")        != NULL);
+    s->needs_thread_create = (strstr(caps_buf, "THREAD_CREATE") != NULL);
 
     /* Read optional boot mode filter */
     s->mode[0] = '\0';
@@ -166,6 +172,10 @@ start_service(service_t *s)
             syscall(361, (long)SVC_CAP_CAP_DELEGATE, (long)SVC_CAP_RIGHTS_READ);
         if (s->needs_cap_query)
             syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_READ);
+        if (s->needs_setuid)
+            syscall(361, (long)SVC_CAP_SETUID, (long)SVC_CAP_RIGHTS_WRITE);
+        if (s->needs_thread_create)
+            syscall(361, (long)SVC_CAP_THREAD_CREATE, (long)SVC_CAP_RIGHTS_READ);
 
         /* In quiet mode, close stdout for non-getty services so daemon
          * chatter doesn't pollute the serial stream (breaks test pattern

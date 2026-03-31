@@ -442,6 +442,41 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         panic_halt("[CAP] FAIL: cap_grant IPC returned -ENOCAP");
     }
 
+    /* Grant disk admin capability — capd delegates to installer. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_DISK_ADMIN, CAP_RIGHTS_READ | CAP_RIGHTS_WRITE) < 0) {
+        printk("[CAP] FAIL: cap_grant DISK_ADMIN returned -ENOCAP\n");
+        panic_halt("[CAP] FAIL: cap_grant DISK_ADMIN returned -ENOCAP");
+    }
+
+    /* Grant framebuffer capability — capd delegates to lumen. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_FB, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant FB returned -ENOCAP\n");
+        panic_halt("[CAP] FAIL: cap_grant FB returned -ENOCAP");
+    }
+
+    /* Grant thread creation capability — capd delegates as needed. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant THREAD_CREATE returned -ENOCAP\n");
+        panic_halt("[CAP] FAIL: cap_grant THREAD_CREATE returned -ENOCAP");
+    }
+
+    /* Grant cap delegate capability — capd needs this to call sys_cap_grant. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant CAP_DELEGATE returned -ENOCAP\n");
+        panic_halt("[CAP] FAIL: cap_grant CAP_DELEGATE returned -ENOCAP");
+    }
+
+    /* Grant cap query capability — capd delegates to login->stsh chain. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant CAP_QUERY returned -ENOCAP\n");
+        panic_halt("[CAP] FAIL: cap_grant CAP_QUERY returned -ENOCAP");
+    }
+
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
     proc->fd_table->fds[1] = *console_open();
@@ -467,7 +502,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * pgid and sends itself SIGTTIN repeatedly. */
     kbd_set_tty_pgrp(proc->pgid);
 
-    printk("[CAP] OK: 10 capabilities granted to init\n");
+    printk("[CAP] OK: 15 capabilities granted to init\n");
 
     sched_add(&proc->task);
 }

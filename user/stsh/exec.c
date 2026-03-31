@@ -239,5 +239,12 @@ try_builtin(cmd_t *cmds, int n, int *last_exit)
         return 1;
     }
 
+    if (strcmp(argv[0], "grant") == 0) {
+        int argc = 0;
+        while (argv[argc]) argc++;
+        *last_exit = grant_builtin(argc, argv);
+        return 1;
+    }
+
     return 0;
 }

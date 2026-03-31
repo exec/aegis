@@ -9,6 +9,8 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include <glyph.h>
 #include "font.h"
@@ -256,9 +258,38 @@ overlay_draw_cb(surface_t *s, int w, int h)
     dock_draw(s, w, h);
 }
 
+/* Request a capability from capd (binary protocol).
+ * Sends uint32_t kind, reads int32_t result (0=OK). */
+static int
+capd_request(unsigned int kind)
+{
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, "/run/capd.sock", sizeof(addr.sun_path) - 1);
+    for (int retry = 0; retry < 3; retry++) {
+        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
+            goto connected;
+        usleep(100000);
+    }
+    close(sock);
+    return -1;
+connected:;
+    write(sock, &kind, sizeof(kind));
+    int result = -1;
+    read(sock, &result, sizeof(result));
+    close(sock);
+    return result >= 0 ? 0 : -1;
+}
+
 int
 main(void)
 {
+    /* Request CAP_GRANT from capd (kind=5, needed for spawning terminals) */
+    capd_request(5);
+
     fb_info_t fb_info;
     memset(&fb_info, 0, sizeof(fb_info));
 

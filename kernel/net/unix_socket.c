@@ -161,6 +161,11 @@ int unix_sock_alloc(void)
     irqflags_t fl = spin_lock_irqsave(&unix_lock);
     for (int i = 0; i < UNIX_SOCK_MAX; i++) {
         if (!s_unix[i].in_use) {
+            /* Free orphaned ring from previous connection */
+            if (s_unix[i].ring) {
+                kva_free_pages(s_unix[i].ring, 1);
+                s_unix[i].ring = (void *)0;
+            }
             _memset(&s_unix[i], 0, sizeof(unix_sock_t));
             s_unix[i].in_use   = 1;
             s_unix[i].state    = UNIX_CREATED;
@@ -194,10 +199,12 @@ void unix_sock_free(uint32_t id)
         return;
     }
 
-    /* Wake peer with error */
+    /* Wake peer — but do NOT clear peer's peer_id.  The peer needs
+     * peer_id to locate our ring buffer for draining remaining data.
+     * The peer detects closure via !s_unix[peer_id].in_use and returns
+     * EOF after all buffered data has been read. */
     uint32_t peer = us->peer_id;
     if (peer != UNIX_NONE && peer < UNIX_SOCK_MAX && s_unix[peer].in_use) {
-        s_unix[peer].peer_id = UNIX_NONE;
         if (s_unix[peer].waiter_task) {
             sched_wake(s_unix[peer].waiter_task);
             s_unix[peer].waiter_task = (void *)0;
@@ -210,11 +217,28 @@ void unix_sock_free(uint32_t id)
             us->passed_fds[i].ops->close(us->passed_fds[i].priv);
     }
 
-    /* Free ring buffer */
-    if (us->ring) {
-        kva_free_pages(us->ring, 1);
-        us->ring = (void *)0;
+    /* Free ring buffer.  The peer reads from OUR ring, so we can only
+     * free it when the peer is also gone.  If the peer is still alive,
+     * leave our ring in place — the ring pointer stays valid even after
+     * in_use=0 because the slot is not zeroed until reuse.  The peer
+     * will free our ring when it closes (see below).
+     *
+     * If the peer is already gone, free both our ring AND the peer's
+     * orphaned ring (the peer left its ring for us to read). */
+    int peer_alive = (peer != UNIX_NONE && peer < UNIX_SOCK_MAX &&
+                      s_unix[peer].in_use);
+    if (!peer_alive) {
+        /* Both sides closed — free both rings */
+        if (us->ring) {
+            kva_free_pages(us->ring, 1);
+            us->ring = (void *)0;
+        }
+        if (peer != UNIX_NONE && peer < UNIX_SOCK_MAX && s_unix[peer].ring) {
+            kva_free_pages(s_unix[peer].ring, 1);
+            s_unix[peer].ring = (void *)0;
+        }
     }
+    /* else: peer alive — DON'T free our ring, peer still reads from it */
 
     /* Unregister name if bound */
     if (us->path[0])
@@ -306,6 +330,11 @@ int unix_sock_connect(uint32_t id, const char *path)
     int server_id = -1;
     for (int i = 0; i < UNIX_SOCK_MAX; i++) {
         if (!s_unix[i].in_use) {
+            /* Free orphaned ring from previous connection if present */
+            if (s_unix[i].ring) {
+                kva_free_pages(s_unix[i].ring, 1);
+                s_unix[i].ring = (void *)0;
+            }
             _memset(&s_unix[i], 0, sizeof(unix_sock_t));
             s_unix[i].in_use   = 1;
             s_unix[i].state    = UNIX_CONNECTED;
@@ -430,10 +459,13 @@ int unix_sock_read(uint32_t id, void *buf, uint32_t len)
     uint32_t peer = us->peer_id;
 
     for (;;) {
-        /* Read from PEER's tx_ring */
-        unix_sock_t *p = (peer != UNIX_NONE) ? unix_sock_get(peer) : (void *)0;
+        /* Read from PEER's tx_ring.  Access the slot directly instead of
+         * via unix_sock_get() — the peer may have closed (in_use=0) but
+         * its ring buffer is kept alive until we close too. */
+        unix_sock_t *p = (peer != UNIX_NONE && peer < UNIX_SOCK_MAX)
+                         ? &s_unix[peer] : (void *)0;
         if (!p || !p->ring) {
-            /* Peer gone — EOF */
+            /* Peer gone AND ring freed — EOF */
             spin_unlock_irqrestore(&unix_lock, fl);
             return 0;
         }
@@ -455,6 +487,11 @@ int unix_sock_read(uint32_t id, void *buf, uint32_t len)
             return (int)len;
         }
 
+        /* Empty — if peer closed, that's EOF (no more data coming) */
+        if (!p->in_use) {
+            spin_unlock_irqrestore(&unix_lock, fl);
+            return 0;  /* EOF */
+        }
         /* Empty — block */
         if (us->nonblocking) {
             spin_unlock_irqrestore(&unix_lock, fl);

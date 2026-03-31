@@ -6,8 +6,9 @@
 #include <sys/wait.h>
 #include <sys/syscall.h>
 
-#define SYS_CAP_QUERY 362
-#define SYS_SPAWN     514
+#define SYS_CAP_QUERY  362
+#define SYS_CAP_GRANT  363
+#define SYS_SPAWN      514
 
 static int s_has_delegate = 0;
 static int s_has_query    = 0;
@@ -29,8 +30,9 @@ static const char *cap_names[] = {
     "FB",              /* 12 */
     "CAP_DELEGATE",    /* 13 */
     "CAP_QUERY",       /* 14 */
+    "IPC",             /* 15 */
 };
-#define NUM_CAP_NAMES 15
+#define NUM_CAP_NAMES 16
 
 static const char *
 rights_str(unsigned int rights)
@@ -214,4 +216,51 @@ sandbox_builtin(int argc, char **argv, char **envp)
     if ((status & 0x7f) == 0)
         return (status >> 8) & 0xff;
     return 128 + (status & 0x7f);
+}
+
+/*
+ * grant_builtin — grant a capability to a running process.
+ * Usage: grant <CAP_NAME> <PID>
+ * Requires CAP_DELEGATE. Uses sys_cap_grant (syscall 363) directly.
+ */
+int
+grant_builtin(int argc, char **argv)
+{
+    if (!s_has_delegate) {
+        fprintf(stderr, "grant: requires CAP_DELEGATE\n");
+        return 1;
+    }
+
+    if (argc != 3) {
+        fprintf(stderr, "usage: grant <CAP_NAME> <PID>\n");
+        return 1;
+    }
+
+    int kind = cap_name_to_kind(argv[1]);
+    if (kind < 0) {
+        fprintf(stderr, "grant: unknown capability '%s'\n", argv[1]);
+        return 1;
+    }
+
+    long pid = atol(argv[2]);
+    if (pid <= 0) {
+        fprintf(stderr, "grant: invalid PID '%s'\n", argv[2]);
+        return 1;
+    }
+
+    long ret = syscall(SYS_CAP_GRANT, pid, (long)kind, 7L);
+    if (ret < 0) {
+        if (ret == -130)
+            fprintf(stderr, "grant: permission denied (missing CAP_DELEGATE or %s)\n", argv[1]);
+        else if (ret == -3)
+            fprintf(stderr, "grant: no such process (pid %ld)\n", pid);
+        else if (ret == -28)
+            fprintf(stderr, "grant: target cap table full\n");
+        else
+            fprintf(stderr, "grant: error %ld\n", ret);
+        return 1;
+    }
+
+    printf("granted %s to pid %ld\n", argv[1], pid);
+    return 0;
 }

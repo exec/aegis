@@ -1,8 +1,7 @@
 /* login — capability-delegating login binary for Aegis.
  *
- * Capabilities held at start (granted by vigil via exec_caps):
- *   CAP_KIND_VFS_OPEN, VFS_READ, VFS_WRITE, AUTH, CAP_GRANT, SETUID,
- *   CAP_DELEGATE, CAP_QUERY
+ * Capabilities acquired at startup via capd:
+ *   AUTH, CAP_GRANT, CAP_DELEGATE, CAP_QUERY, SETUID
  *
  * After execve(shell):
  *   shell holds baseline caps + CAP_DELEGATE + CAP_QUERY (via exec_caps).
@@ -17,11 +16,39 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 extern char **environ;
 
 #define MAX_ATTEMPTS 3
 #define FAIL_DELAY   3
+
+/* Request a capability from capd (binary protocol).
+ * Sends uint32_t kind, reads int32_t result (0=OK). */
+static int
+capd_request(unsigned int kind)
+{
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, "/run/capd.sock", sizeof(addr.sun_path) - 1);
+    for (int retry = 0; retry < 3; retry++) {
+        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
+            goto connected;
+        usleep(100000);
+    }
+    close(sock);
+    return -1;
+connected:;
+    write(sock, &kind, sizeof(kind));
+    int result = -1;
+    read(sock, &result, sizeof(result));
+    close(sock);
+    return result >= 0 ? 0 : -1;
+}
 
 /* Read a line from fd into buf (max len-1 bytes), stripping trailing \n.
  * Returns number of bytes read, or -1 on EOF/error. */
@@ -128,6 +155,13 @@ main(void)
     char home[256];
     char shell[256];
     int  uid = 0, gid = 0;
+
+    /* Request capabilities from capd (kind values from cap.h) */
+    capd_request(4);   /* CAP_KIND_AUTH */
+    capd_request(5);   /* CAP_KIND_CAP_GRANT */
+    capd_request(13);  /* CAP_KIND_CAP_DELEGATE */
+    capd_request(14);  /* CAP_KIND_CAP_QUERY */
+    capd_request(6);   /* CAP_KIND_SETUID */
 
     /* Display pre-auth banner */
     {

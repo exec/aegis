@@ -78,6 +78,7 @@ void complete(char *buf, int *pos, int *len, const char *prompt);
 void caps_init(void);
 int  has_cap_delegate(void);
 int  caps_builtin(int argc, char **argv);
+int  grant_builtin(int argc, char **argv);
 int  sandbox_builtin(int argc, char **argv, char **envp);
 
 /* ── exec.c ── */

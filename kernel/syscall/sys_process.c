@@ -1420,6 +1420,47 @@ sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
 }
 
 /*
+ * sys_cap_grant — syscall 363
+ *
+ * Grant a capability to a running process by PID.  The caller must hold
+ * CAP_KIND_CAP_DELEGATE and the specific capability being granted.
+ */
+uint64_t
+sys_cap_grant_runtime(uint64_t target_pid, uint64_t kind_arg, uint64_t rights_arg)
+{
+    aegis_process_t *caller = (aegis_process_t *)sched_current();
+
+    /* Caller must hold CAP_DELEGATE */
+    if (cap_check(caller->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    uint32_t kind   = (uint32_t)kind_arg;
+    uint32_t rights = (uint32_t)rights_arg;
+
+    if (kind == CAP_KIND_NULL || kind >= CAP_TABLE_SIZE)
+        return (uint64_t)-(int64_t)22; /* EINVAL */
+
+    /* Caller must hold the cap kind being granted (any rights suffice —
+     * the caller's authority to delegate derives from CAP_DELEGATE, not
+     * from matching the target's rights exactly). */
+    if (cap_check(caller->caps, CAP_TABLE_SIZE, kind, 0) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    /* Look up target process */
+    aegis_process_t *target = proc_find_by_pid((uint32_t)target_pid);
+    if (!target)
+        return (uint64_t)-(int64_t)3; /* ESRCH */
+
+    /* Grant the cap into target's table */
+    int r = cap_grant(target->caps, CAP_TABLE_SIZE, kind, rights);
+    if (r < 0)
+        return (uint64_t)-(int64_t)28; /* ENOSPC — cap table full */
+
+    return (uint64_t)r; /* slot index */
+}
+
+/*
  * sys_spawn — syscall 514
  *
  * Create a new process from an ELF binary WITHOUT fork.
