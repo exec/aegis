@@ -123,6 +123,9 @@ kbd_handler(void)
         char c = s_shift ? s_sc_upper[sc] : s_sc_lower[sc];
         if (c) {
             if (s_ctrl) c &= 0x1F;  /* General Ctrl: mask to control char */
+            /* Ctrl+Shift: ESC prefix so compositor can distinguish from plain Ctrl.
+             * e.g., Ctrl+Shift+C = ESC + 0x03, plain Ctrl+C = 0x03 */
+            if (s_ctrl && s_shift) buf_push(0x1B);
             if (s_alt) buf_push(0x1B);  /* Alt: ESC prefix */
             buf_push(c);
         }

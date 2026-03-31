@@ -252,6 +252,17 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
         break;
 
     case TCP_SYN_SENT:
+        if (flags & TCP_RST) {
+            /* Connection refused — close and wake connect() caller */
+            conn->state = TCP_CLOSED;
+            conn->retransmit_at = 0;
+            if (conn->sock_id != SOCK_NONE && wake_count < TCP_RX_WAKE_MAX) {
+                wake_ids[wake_count] = conn->sock_id;
+                wake_epoll_events[wake_count] = EPOLLERR;
+                wake_count++;
+            }
+            break;
+        }
         if ((flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK)) {
             if (ack == conn->snd_nxt) {
                 conn->snd_una  = ack;
@@ -426,9 +437,16 @@ void tcp_tick(void)
         if ((int32_t)(now - c->retransmit_at) < 0) continue;
 
         if (c->retransmit_count >= TCP_RETRANSMIT_MAX) {
-            /* Maximum retransmits — RST best-effort and close. */
+            /* Maximum retransmits — RST best-effort and close.
+             * Wake any blocked connect/send caller so it gets an error. */
             tcp_send_segment(c->dev, c, TCP_RST, NULL, 0);
+            uint32_t timeout_sid = c->sock_id;
             c->state = TCP_CLOSED;
+            if (timeout_sid != (uint32_t)-1) {
+                spin_unlock_irqrestore(&tcp_lock, fl);
+                sock_wake(timeout_sid);
+                return;  /* bail — we released the lock */
+            }
             continue;
         }
 
@@ -492,11 +510,15 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
             /* Set retransmit far enough in the future that tcp_tick won't
              * fire before we send the SYN.  We must release tcp_lock before
              * tcp_send_segment because ip_send → arp_resolve may block. */
-            s_tcp[i].snd_nxt++;
             s_tcp[i].retransmit_at = (uint32_t)arch_get_ticks() + TCP_RTO_INITIAL + 200;
             spin_unlock_irqrestore(&tcp_lock, fl);
             tcp_send_segment(dev, &s_tcp[i], TCP_SYN, (void *)0, 0);
-            /* Now set the real retransmit deadline */
+            /* Increment snd_nxt AFTER sending the SYN — the SYN must go out
+             * with seq=ISN (our initial snd_nxt), and snd_nxt then advances to
+             * ISN+1 so the SYN_SENT handler matches ack=ISN+1 from the remote.
+             * Bug: this was before tcp_send_segment, causing SYN seq=ISN+1 and
+             * the remote's ack=ISN+2 to never match snd_nxt=ISN+1. */
+            s_tcp[i].snd_nxt++;
             s_tcp[i].retransmit_at = (uint32_t)arch_get_ticks() + TCP_RTO_INITIAL;
             return 0;
         }

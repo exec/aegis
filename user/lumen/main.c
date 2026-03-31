@@ -363,36 +363,13 @@ main(void)
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
         if (n == 1) {
-            /* Ctrl+C (0x03): copy selection if present, else forward to PTY */
-            if (kbd_byte == 0x03) {
-                if (comp.focused && comp.focused->tag > 0 &&
-                    terminal_has_selection(comp.focused)) {
-                    char sel_buf[CLIPBOARD_MAX];
-                    int sel_len = terminal_copy_selection(comp.focused,
-                                                          sel_buf, CLIPBOARD_MAX);
-                    if (sel_len > 0)
-                        clipboard_set(sel_buf, sel_len);
-                    terminal_clear_selection(comp.focused);
-                    activity = 1;
-                    goto next_poll;
-                }
-                /* No selection — forward Ctrl+C to PTY (SIGINT via line disc) */
-            }
-
-            /* Ctrl+V (0x16): paste clipboard into focused terminal's PTY */
-            if (kbd_byte == 0x16) {
-                if (comp.focused && comp.focused->tag > 0 && s_clipboard_len > 0) {
-                    write(comp.focused->tag, s_clipboard,
-                          (unsigned)s_clipboard_len);
-                    activity = 1;
-                    goto next_poll;
-                }
-                /* No clipboard or no focused terminal — forward raw char */
-            }
-
-            /* Ctrl+Alt+T detection: kbd driver sends ESC (0x1B) as Alt
-             * prefix, Ctrl masks char to 0x1F & c. Ctrl+T = 0x14.
-             * So Ctrl+Alt+T = ESC then 0x14. */
+            /* ESC prefix detection: kbd driver sends ESC for Alt, Ctrl+Shift,
+             * and Ctrl+Alt combos. After ESC, the next byte identifies the combo:
+             * 0x14 = Ctrl+Alt+T (dropdown toggle)
+             * 0x03 = Ctrl+Shift+C (copy)
+             * 0x16 = Ctrl+Shift+V (paste)
+             * 'c'  = Alt+C (copy alias)
+             * 'v'  = Alt+V (paste alias) */
             if (kbd_byte == '\033') {
                 esc_pending = 1;
                 activity = 1;
@@ -445,8 +422,8 @@ main(void)
                     goto next_poll;
                 }
 
-                /* Alt+C -- copy selection from focused terminal */
-                if (kbd_byte == 'c' && comp.focused &&
+                /* Ctrl+Shift+C (0x03) or Alt+C ('c') — copy selection */
+                if ((kbd_byte == 0x03 || kbd_byte == 'c') && comp.focused &&
                     terminal_has_selection(comp.focused)) {
                     char sel_buf[CLIPBOARD_MAX];
                     int sel_len = terminal_copy_selection(comp.focused,
@@ -459,8 +436,8 @@ main(void)
                     goto next_poll;
                 }
 
-                /* Alt+V -- paste clipboard into focused terminal's PTY */
-                if (kbd_byte == 'v' && comp.focused &&
+                /* Ctrl+Shift+V (0x16) or Alt+V ('v') — paste clipboard */
+                if ((kbd_byte == 0x16 || kbd_byte == 'v') && comp.focused &&
                     comp.focused->tag > 0 && s_clipboard_len > 0) {
                     write(comp.focused->tag, s_clipboard,
                           (unsigned)s_clipboard_len);
