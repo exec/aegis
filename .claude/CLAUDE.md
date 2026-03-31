@@ -378,14 +378,14 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 41 | **Symlinks + chmod/chown** — ext2 symlinks; POSIX DAC permission enforcement; chmod/chown/lchown syscalls | ✅ Done |
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. `caps`/`sandbox` builtins; `CAP_KIND_CAP_DELEGATE` + `CAP_KIND_CAP_QUERY` syscalls; line editing; history; tab completion; paste detection. Login chain grants delegate/query caps; exec baseline does not. | ✅ Done |
 | 42b | **Quiet boot + lumen fixes** — printk_quiet, console output routing, SIGTTIN bypass for compositor, dual-ISO test harness, login backspace | ✅ Done |
-| 43a | **Deep architecture audit** — file-by-file review of entire kernel + userspace. Every file examined for: dead code, redundant logic, missing error paths, lock ordering violations, resource leaks, race conditions, scalability bottlenecks. Cross-file analysis: interface consistency, dependency cycles, abstraction violations. Output: prioritized fix list + optimization roadmap. Multiple parallel agents, each owns a subsystem. NOT a quick scan — read every line. | Not started |
-| 43b | **Deep security audit** — adversarial review of every attack surface. Syscall input validation (fuzzer-style boundary analysis), capability bypass paths, TOCTOU races, integer overflows in size calculations, use-after-free in task/fd/pipe lifecycle, signal delivery reentrancy, PTY/socket data path injection, ext2 on-disk corruption resilience, VFS path traversal, kernel info leaks to userspace, SMP atomicity gaps. Each finding classified: CVE-grade / hardening / defense-in-depth. Zero tolerance for unresolved CVE-grade issues before release. | Not started |
+| 43a | **Deep architecture audit** — file-by-file review of kernel + userspace. Prioritized fix list. Multiple parallel agents. | ✅ Done |
 | 44 | **IPC** — Unix domain sockets (SO_PEERCRED); POSIX shared memory (MAP_SHARED); fd passing; all capability-gated. **Required for**: Glyph external apps (pixel buffers), capability helper daemons (authenticated grant channel). Until Phase 44, all GUI apps are compiled into Lumen. | Not started |
 | 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh helper management; stable broker interface (replaceable). Requires IPC (Phase 44) for kernel-attested peer credentials. | Not started |
 | 46 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 47 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
 | 48 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
-| 49 | Release | Not started |
+| 49 | **Deep security audit** — adversarial review of every attack surface. Syscall fuzzing, capability bypass, TOCTOU races, integer overflows, use-after-free, signal reentrancy, ext2 corruption resilience, VFS traversal, kernel info leaks, SMP atomicity. CVE-grade findings block release. pwn binary expanded. | Not started |
+| 50 | **Release** | Not started |
 | — | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 ---
