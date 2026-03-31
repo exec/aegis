@@ -482,6 +482,7 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf $(GRUB_CFG) $(ROOTFS) $(ESP_IMG)
 	@mkdir -p $(ISO_DIR)/boot/grub
 	cp $(BUILD)/aegis.elf $(ISO_DIR)/boot/aegis.elf
 	cp $(GRUB_CFG) $(ISO_DIR)/boot/grub/grub.cfg
+	@if [ -f assets/wallpaper.png ]; then cp assets/wallpaper.png $(ISO_DIR)/boot/grub/wallpaper.png; fi
 	cp $(ROOTFS) $(ISO_DIR)/boot/rootfs.img
 	cp $(ESP_IMG) $(ISO_DIR)/boot/esp.img
 	grub-mkrescue -o $@ $(ISO_DIR)

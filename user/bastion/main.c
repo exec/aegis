@@ -421,6 +421,13 @@ greeter:
     }
 
 session:
+    /* Release input resources so Lumen has exclusive access to
+     * keyboard, mouse, and the console TTY. Bastion is blocked in
+     * waitpid and doesn't need them until the lock screen. */
+    tcsetattr(0, TCSANOW, &t_orig);  /* restore terminal to cooked mode */
+    if (mouse_fd >= 0) { close(mouse_fd); mouse_fd = -1; }
+    close(0);  /* release kbd so Lumen gets it exclusively */
+
     /* Wait for Lumen to exit */
     {
         int status;
@@ -468,6 +475,14 @@ session:
         }
     }
 
-    /* Lumen exited — show greeter again */
+    /* Lumen exited — reopen input devices and show greeter again */
+    open("/dev/kbd", O_RDONLY);  /* fd 0 — stdin/keyboard */
+    mouse_fd = open("/dev/mouse", O_RDONLY);
+    tcgetattr(0, &t_orig);
+    t_raw = t_orig;
+    t_raw.c_lflag &= ~(unsigned)(ECHO | ICANON | ISIG);
+    t_raw.c_cc[VMIN] = 0;
+    t_raw.c_cc[VTIME] = 0;
+    tcsetattr(0, TCSANOW, &t_raw);
     goto greeter;
 }
