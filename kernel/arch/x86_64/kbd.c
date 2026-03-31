@@ -113,28 +113,6 @@ kbd_handler(void)
     /* Alt key: left Alt = 0x38 make, 0xB8 break */
     if (sc == 0x38) { s_alt = 1; return; }
 
-    /* Ctrl-C = Ctrl held + scancode 0x2E ('c') — send SIGINT to fg pgrp */
-    if (s_ctrl && sc == 0x2E) {
-        tty_t *con = tty_console();
-        uint32_t fg = con ? con->fg_pgrp : 0;
-        if (fg != 0)
-            signal_send_pgrp(fg, SIGINT);
-        return;
-    }
-    if (s_ctrl && sc == 0x2C) {
-        tty_t *con = tty_console();
-        uint32_t fg = con ? con->fg_pgrp : 0;
-        if (fg != 0)
-            signal_send_pgrp(fg, SIGTSTP);
-        return;
-    }
-    if (s_ctrl && sc == 0x2B) {
-        tty_t *con = tty_console();
-        uint32_t fg = con ? con->fg_pgrp : 0;
-        if (fg != 0)
-            signal_send_pgrp(fg, SIGQUIT);
-        return;
-    }
     /* Ctrl-D = EOF: push 0x04 (EOT) into ring buffer for line discipline */
     if (s_ctrl && sc == 0x20) {
         buf_push(0x04);
@@ -205,28 +183,6 @@ kbd_usb_inject(uint8_t ascii)
 {
     if (ascii == 0)
         return;
-    /* Intercept Ctrl-C (ETX=0x03), Ctrl-Z (SUB=0x1A), Ctrl-\ (FS=0x1C) */
-    if (ascii == 0x03) {
-        tty_t *con = tty_console();
-        uint32_t fg = con ? con->fg_pgrp : 0;
-        if (fg != 0)
-            signal_send_pgrp(fg, SIGINT);
-        return;
-    }
-    if (ascii == 0x1A) {
-        tty_t *con = tty_console();
-        uint32_t fg = con ? con->fg_pgrp : 0;
-        if (fg != 0)
-            signal_send_pgrp(fg, SIGTSTP);
-        return;
-    }
-    if (ascii == 0x1C) {
-        tty_t *con = tty_console();
-        uint32_t fg = con ? con->fg_pgrp : 0;
-        if (fg != 0)
-            signal_send_pgrp(fg, SIGQUIT);
-        return;
-    }
     buf_push((char)ascii);
 }
 

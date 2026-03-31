@@ -125,23 +125,46 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
 
     /* RAW mode: return one byte at a time */
     if (!(lflag & K_ICANON)) {
-        uint8_t vmin = tty->termios.c_cc[K_VMIN];
+        for (;;) {
+            uint8_t vmin = tty->termios.c_cc[K_VMIN];
 
-        /* VMIN=0: non-blocking — poll for available data, return 0 if none */
-        if (vmin == 0 && tty->poll_raw) {
-            if (!tty->poll_raw(tty, &ch))
-                return 0;   /* no data — POSIX: return 0 for VMIN=0 */
-        } else {
-            interrupted = 0;
-            int rc = tty->read_raw(tty, &ch, &interrupted);
-            if (rc <= 0)
-                return interrupted ? -4 : rc;
+            /* VMIN=0: non-blocking — poll for available data, return 0 if none */
+            if (vmin == 0 && tty->poll_raw) {
+                if (!tty->poll_raw(tty, &ch))
+                    return 0;   /* no data — POSIX: return 0 for VMIN=0 */
+            } else {
+                interrupted = 0;
+                int rc = tty->read_raw(tty, &ch, &interrupted);
+                if (rc <= 0)
+                    return interrupted ? -4 : rc;
+            }
+            /* CR→NL if ICRNL */
+            if ((iflag & K_ICRNL) && ch == '\r')
+                ch = '\n';
+
+            /* Signal generation in raw mode (ISIG without ICANON).
+             * Consume the character and deliver the signal. */
+            if (lflag & K_ISIG) {
+                if (ch == cc_vintr) {
+                    if (tty->fg_pgrp)
+                        signal_send_pgrp(tty->fg_pgrp, SIGINT);
+                    continue;
+                }
+                if (ch == cc_vsusp) {
+                    if (tty->fg_pgrp)
+                        signal_send_pgrp(tty->fg_pgrp, SIGTSTP);
+                    continue;
+                }
+                if (ch == cc_vquit) {
+                    if (tty->fg_pgrp)
+                        signal_send_pgrp(tty->fg_pgrp, SIGQUIT);
+                    continue;
+                }
+            }
+
+            buf[0] = ch;
+            return 1;
         }
-        /* CR→NL if ICRNL */
-        if ((iflag & K_ICRNL) && ch == '\r')
-            ch = '\n';
-        buf[0] = ch;
-        return 1;
     }
 
     /* COOKED mode: return from line buffer if data available */
