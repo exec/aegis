@@ -29,6 +29,7 @@ typedef struct {
 #define CAP_KIND_FB         12u  /* may map framebuffer into userspace */
 #define CAP_KIND_CAP_DELEGATE 13u  /* may restrict caps on spawn via cap_mask */
 #define CAP_KIND_CAP_QUERY    14u  /* may introspect any process's capability set */
+#define CAP_KIND_IPC          15u  /* may create AF_UNIX sockets and memfd objects */
 
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)

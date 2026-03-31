@@ -13,6 +13,7 @@
 #define VMA_MMAP         5   /* anonymous mmap */
 #define VMA_THREAD_STACK 6   /* thread stack via pthread_create */
 #define VMA_GUARD        7   /* guard page (PROT_NONE) */
+#define VMA_SHARED       8   /* MAP_SHARED mapping — phys pages owned by memfd */
 
 typedef struct {
     uint64_t base;

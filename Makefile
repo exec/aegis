@@ -133,6 +133,7 @@ NET_SRCS = \
     kernel/net/udp.c \
     kernel/net/tcp.c \
     kernel/net/socket.c \
+    kernel/net/unix_socket.c \
     kernel/net/epoll.c
 
 FS_SRCS = \
@@ -150,7 +151,8 @@ FS_SRCS = \
     kernel/fs/ramfs.c \
     kernel/fs/procfs.c \
     kernel/fs/tty.c \
-    kernel/fs/pty.c
+    kernel/fs/pty.c \
+    kernel/fs/memfd.c
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
@@ -334,6 +336,9 @@ user/proc_test/proc_test.elf: user/proc_test/main.c $(MUSL_BUILT)
 user/pty_test/pty_test.elf: user/pty_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/pty_test
 
+user/ipc_test/ipc_test.elf: user/ipc_test/main.c $(MUSL_BUILT)
+	$(MAKE) -C user/ipc_test
+
 # ── Binary blob embedding (objcopy) ──────────────────────────────────────────
 # Each user ELF → linkable .o with _binary_<name>_bin_start/end symbols.
 # Copy to build/blobs/<name>.bin, cd there, objcopy — so symbol names are clean.
@@ -495,6 +500,7 @@ DISK_USER_BINS = \
 	user/mmap_test/mmap_test.elf \
 	user/proc_test/proc_test.elf \
 	user/pty_test/pty_test.elf \
+	user/ipc_test/ipc_test.elf \
 	user/dynlink_test/dynlink_test.elf \
 	user/dhcp/dhcp \
 	user/installer/installer.elf \
@@ -536,10 +542,10 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw
 	printf 'write build/musl-dynamic/usr/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/usr/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# User binaries (dynamically linked, loaded from ext2 at runtime)
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite user/installer/installer.elf /bin/installer\nwrite user/fb_test/fb_test.elf /bin/fb_test\nwrite user/mouse_test/mouse_test.elf /bin/mouse_test\nwrite user/lumen/lumen.elf /bin/lumen\nwrite user/chronos/chronos /bin/chronos\nwrite user/ln/ln.elf /bin/ln\nwrite user/chmod/chmod.elf /bin/chmod\nwrite user/chown/chown.elf /bin/chown\nwrite user/readlink/readlink.elf /bin/readlink\nwrite user/stsh/stsh.elf /bin/stsh\nwrite user/pwn/pwn.elf /bin/pwn\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite user/installer/installer.elf /bin/installer\nwrite user/fb_test/fb_test.elf /bin/fb_test\nwrite user/mouse_test/mouse_test.elf /bin/mouse_test\nwrite user/lumen/lumen.elf /bin/lumen\nwrite user/chronos/chronos /bin/chronos\nwrite user/ln/ln.elf /bin/ln\nwrite user/chmod/chmod.elf /bin/chmod\nwrite user/chown/chown.elf /bin/chown\nwrite user/readlink/readlink.elf /bin/readlink\nwrite user/stsh/stsh.elf /bin/stsh\nwrite user/pwn/pwn.elf /bin/pwn\nwrite user/ipc_test/ipc_test.elf /bin/ipc_test\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# Set execute permission on all binaries (debugfs writes mode 0644 by default)
-	printf 'set_inode_field /bin/sh mode 0100755\nset_inode_field /bin/ls mode 0100755\nset_inode_field /bin/cat mode 0100755\nset_inode_field /bin/echo mode 0100755\nset_inode_field /bin/pwd mode 0100755\nset_inode_field /bin/uname mode 0100755\nset_inode_field /bin/clear mode 0100755\nset_inode_field /bin/true mode 0100755\nset_inode_field /bin/false mode 0100755\nset_inode_field /bin/wc mode 0100755\nset_inode_field /bin/grep mode 0100755\nset_inode_field /bin/sort mode 0100755\nset_inode_field /bin/mv mode 0100755\nset_inode_field /bin/cp mode 0100755\nset_inode_field /bin/rm mode 0100755\nset_inode_field /bin/mkdir mode 0100755\nset_inode_field /bin/touch mode 0100755\nset_inode_field /bin/whoami mode 0100755\nset_inode_field /bin/oksh mode 0100755\nset_inode_field /bin/httpd mode 0100755\nset_inode_field /bin/vigictl mode 0100755\nset_inode_field /bin/thread_test mode 0100755\nset_inode_field /bin/mmap_test mode 0100755\nset_inode_field /bin/proc_test mode 0100755\nset_inode_field /bin/pty_test mode 0100755\nset_inode_field /bin/dhcp mode 0100755\nset_inode_field /bin/dynlink_test mode 0100755\nset_inode_field /bin/vigil mode 0100755\nset_inode_field /bin/login mode 0100755\nset_inode_field /bin/installer mode 0100755\nset_inode_field /bin/fb_test mode 0100755\nset_inode_field /bin/mouse_test mode 0100755\nset_inode_field /bin/lumen mode 0100755\nset_inode_field /bin/chronos mode 0100755\nset_inode_field /bin/ln mode 0100755\nset_inode_field /bin/chmod mode 0100755\nset_inode_field /bin/chown mode 0100755\nset_inode_field /bin/readlink mode 0100755\nset_inode_field /bin/stsh mode 0100755\nset_inode_field /bin/pwn mode 0100755\n' \
+	printf 'set_inode_field /bin/sh mode 0100755\nset_inode_field /bin/ls mode 0100755\nset_inode_field /bin/cat mode 0100755\nset_inode_field /bin/echo mode 0100755\nset_inode_field /bin/pwd mode 0100755\nset_inode_field /bin/uname mode 0100755\nset_inode_field /bin/clear mode 0100755\nset_inode_field /bin/true mode 0100755\nset_inode_field /bin/false mode 0100755\nset_inode_field /bin/wc mode 0100755\nset_inode_field /bin/grep mode 0100755\nset_inode_field /bin/sort mode 0100755\nset_inode_field /bin/mv mode 0100755\nset_inode_field /bin/cp mode 0100755\nset_inode_field /bin/rm mode 0100755\nset_inode_field /bin/mkdir mode 0100755\nset_inode_field /bin/touch mode 0100755\nset_inode_field /bin/whoami mode 0100755\nset_inode_field /bin/oksh mode 0100755\nset_inode_field /bin/httpd mode 0100755\nset_inode_field /bin/vigictl mode 0100755\nset_inode_field /bin/thread_test mode 0100755\nset_inode_field /bin/mmap_test mode 0100755\nset_inode_field /bin/proc_test mode 0100755\nset_inode_field /bin/pty_test mode 0100755\nset_inode_field /bin/dhcp mode 0100755\nset_inode_field /bin/dynlink_test mode 0100755\nset_inode_field /bin/vigil mode 0100755\nset_inode_field /bin/login mode 0100755\nset_inode_field /bin/installer mode 0100755\nset_inode_field /bin/fb_test mode 0100755\nset_inode_field /bin/mouse_test mode 0100755\nset_inode_field /bin/lumen mode 0100755\nset_inode_field /bin/chronos mode 0100755\nset_inode_field /bin/ln mode 0100755\nset_inode_field /bin/chmod mode 0100755\nset_inode_field /bin/chown mode 0100755\nset_inode_field /bin/readlink mode 0100755\nset_inode_field /bin/stsh mode 0100755\nset_inode_field /bin/pwn mode 0100755\nset_inode_field /bin/ipc_test mode 0100755\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/stsh\n' > /tmp/aegis-passwd

@@ -219,6 +219,10 @@ TESTS = [
      "/bin/pty_test",
      lambda s: s.contains("PTY OK")),
 
+    ("ipc: /bin/ipc_test",
+     "/bin/ipc_test",
+     lambda s: s.contains("IPC TESTS PASSED")),
+
     # --- Network (boot output) ---
     ("net: DHCP acquired",
      None,

@@ -5,6 +5,8 @@
 #include "udp.h"
 #include "tcp.h"
 #include "ip.h"
+#include "unix_socket.h"
+#include "memfd.h"
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -14,11 +16,24 @@
 #define SOL_SOCKET     1
 #define SO_REUSEADDR   2
 #define SO_BROADCAST   6
+#define SO_PEERCRED    17
 #define SO_RCVTIMEO    20
 #define SO_SNDTIMEO    21
 
 #define IPPROTO_TCP    6
 #define TCP_NODELAY    1
+
+/* sockaddr_un layout */
+typedef struct {
+    uint16_t sun_family;
+    char     sun_path[UNIX_PATH_MAX];
+} k_sockaddr_un_t;
+
+/* Helper: check if fd is a unix socket */
+static int is_unix_fd(int fd, aegis_process_t *proc)
+{
+    return unix_sock_id_from_fd(fd, proc) != UNIX_NONE;
+}
 
 /* net_get_config / net_set_config declared in ip.h (already included) */
 
@@ -43,6 +58,21 @@ uint64_t
 sys_socket(uint64_t domain, uint64_t type, uint64_t proto)
 {
     (void)proto;
+
+    /* AF_UNIX path */
+    if (domain == AF_UNIX) {
+        if (type != SOCK_STREAM) return (uint64_t)-(int64_t)93;
+        aegis_process_t *proc = (aegis_process_t *)sched_current();
+        if (cap_check(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC, CAP_RIGHTS_READ) != 0)
+            return (uint64_t)-(int64_t)130;  /* ENOCAP */
+        int uid = unix_sock_alloc();
+        if (uid < 0) return (uint64_t)-(int64_t)24;
+        int fd = unix_sock_open_fd((uint32_t)uid, proc);
+        if (fd < 0) { unix_sock_free((uint32_t)uid); return (uint64_t)-(int64_t)24; }
+        return (uint64_t)fd;
+    }
+
+    /* AF_INET path */
     if (domain != AF_INET) return (uint64_t)-(int64_t)97;  /* EAFNOSUPPORT */
     if (type != SOCK_STREAM && type != SOCK_DGRAM)
         return (uint64_t)-(int64_t)93;  /* EPROTONOSUPPORT */
@@ -65,6 +95,24 @@ sys_socket(uint64_t domain, uint64_t type, uint64_t proto)
 uint64_t
 sys_bind(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+
+    /* AF_UNIX bind */
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc);
+    if (uid != UNIX_NONE) {
+        if (addrlen < 4 || !user_ptr_valid(addr, addrlen))
+            return (uint64_t)-(int64_t)14;
+        k_sockaddr_un_t sun;
+        __builtin_memset(&sun, 0, sizeof(sun));
+        uint32_t copy_len = addrlen < sizeof(sun) ? (uint32_t)addrlen : (uint32_t)sizeof(sun);
+        copy_from_user(&sun, (const void *)(uintptr_t)addr, copy_len);
+        if (sun.sun_family != AF_UNIX) return (uint64_t)-(int64_t)22;
+        sun.sun_path[UNIX_PATH_MAX - 1] = '\0';
+        int rc = unix_sock_bind(uid, sun.sun_path);
+        return rc < 0 ? (uint64_t)(int64_t)rc : 0;
+    }
+
+    /* AF_INET bind */
     if (addrlen < sizeof(k_sockaddr_in_t)) return (uint64_t)-(int64_t)22;
     if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;
 
@@ -97,6 +145,13 @@ uint64_t
 sys_listen(uint64_t fd, uint64_t backlog)
 {
     (void)backlog;
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc);
+    if (uid != UNIX_NONE) {
+        int rc = unix_sock_listen(uid);
+        return rc < 0 ? (uint64_t)(int64_t)rc : 0;
+    }
+
     sock_t *s; uint32_t sid;
     uint64_t err = get_proc_sock(fd, &s, &sid);
     if (err) return err;
@@ -113,6 +168,16 @@ sys_listen(uint64_t fd, uint64_t backlog)
 uint64_t
 sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
+    aegis_process_t *proc_a = (aegis_process_t *)sched_current();
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc_a);
+    if (uid != UNIX_NONE) {
+        int server_id = unix_sock_accept(uid);
+        if (server_id < 0) return (uint64_t)(int64_t)server_id;
+        int new_fd = unix_sock_open_fd((uint32_t)server_id, proc_a);
+        if (new_fd < 0) { unix_sock_free((uint32_t)server_id); return (uint64_t)-(int64_t)24; }
+        return (uint64_t)new_fd;
+    }
+
     sock_t *ls; uint32_t lsid;
     uint64_t err = get_proc_sock(fd, &ls, &lsid);
     if (err) return err;
@@ -181,6 +246,20 @@ sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen)
 uint64_t
 sys_connect(uint64_t fd, uint64_t addr, uint64_t addrlen)
 {
+    aegis_process_t *proc_c = (aegis_process_t *)sched_current();
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc_c);
+    if (uid != UNIX_NONE) {
+        if (addrlen < 4 || !user_ptr_valid(addr, addrlen))
+            return (uint64_t)-(int64_t)14;
+        k_sockaddr_un_t sun;
+        __builtin_memset(&sun, 0, sizeof(sun));
+        uint32_t copy_len = addrlen < sizeof(sun) ? (uint32_t)addrlen : (uint32_t)sizeof(sun);
+        copy_from_user(&sun, (const void *)(uintptr_t)addr, copy_len);
+        sun.sun_path[UNIX_PATH_MAX - 1] = '\0';
+        int rc = unix_sock_connect(uid, sun.sun_path);
+        return rc < 0 ? (uint64_t)(int64_t)rc : 0;
+    }
+
     if (addrlen < sizeof(k_sockaddr_in_t)) return (uint64_t)-(int64_t)22;
     if (!user_ptr_valid(addr, sizeof(k_sockaddr_in_t))) return (uint64_t)-(int64_t)14;
 
@@ -357,18 +436,176 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
     }
 }
 
-/* ── sys_sendmsg / sys_recvmsg — minimal stubs ─────────────────────────── */
+/* ── sys_sendmsg / sys_recvmsg — AF_UNIX with SCM_RIGHTS ──────────────── */
 
-uint64_t sys_sendmsg(uint64_t fd, uint64_t msg, uint64_t flags)
+/* Linux ABI structs for sendmsg/recvmsg */
+typedef struct { void *iov_base; uint64_t iov_len; } k_iovec_t;
+typedef struct {
+    void      *msg_name;
+    uint32_t   msg_namelen;
+    uint32_t   _pad0;
+    k_iovec_t *msg_iov;
+    uint64_t   msg_iovlen;
+    void      *msg_control;
+    uint64_t   msg_controllen;
+    int        msg_flags;
+} k_msghdr_t;
+typedef struct {
+    uint64_t cmsg_len;
+    int      cmsg_level;
+    int      cmsg_type;
+    /* payload follows */
+} k_cmsghdr_t;
+
+#define SCM_RIGHTS 1
+
+uint64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
 {
-    (void)fd; (void)msg; (void)flags;
-    return (uint64_t)-(int64_t)38;
+    (void)flags;
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc);
+    if (uid == UNIX_NONE) return (uint64_t)-(int64_t)38;  /* ENOSYS for non-unix */
+
+    if (!user_ptr_valid(msg_ptr, sizeof(k_msghdr_t))) return (uint64_t)-(int64_t)14;
+    k_msghdr_t mh;
+    copy_from_user(&mh, (const void *)(uintptr_t)msg_ptr, sizeof(mh));
+
+    /* Send iov data */
+    int64_t total_sent = 0;
+    for (uint64_t i = 0; i < mh.msg_iovlen && i < 8; i++) {
+        k_iovec_t iov;
+        if (!user_ptr_valid((uint64_t)(uintptr_t)mh.msg_iov + i * sizeof(k_iovec_t), sizeof(k_iovec_t)))
+            return (uint64_t)-(int64_t)14;
+        copy_from_user(&iov, (const void *)((uintptr_t)mh.msg_iov + i * sizeof(k_iovec_t)), sizeof(iov));
+        if (iov.iov_len == 0) continue;
+        if (!user_ptr_valid((uint64_t)(uintptr_t)iov.iov_base, iov.iov_len))
+            return (uint64_t)-(int64_t)14;
+        /* Copy iov data to kernel buffer, then write to socket */
+        uint8_t kbuf[1024];
+        uint64_t remain = iov.iov_len;
+        uint64_t off = 0;
+        while (remain > 0) {
+            uint32_t chunk = remain > 1024 ? 1024 : (uint32_t)remain;
+            copy_from_user(kbuf, (const void *)((uintptr_t)iov.iov_base + off), chunk);
+            int n = unix_sock_write(uid, kbuf, chunk);
+            if (n < 0) return total_sent > 0 ? (uint64_t)total_sent : (uint64_t)(int64_t)n;
+            total_sent += n;
+            off += (uint64_t)n;
+            remain -= (uint64_t)n;
+        }
+    }
+
+    /* Process ancillary data (SCM_RIGHTS) */
+    if (mh.msg_control && mh.msg_controllen >= sizeof(k_cmsghdr_t)) {
+        if (!user_ptr_valid((uint64_t)(uintptr_t)mh.msg_control, mh.msg_controllen))
+            return (uint64_t)-(int64_t)14;
+        k_cmsghdr_t cm;
+        copy_from_user(&cm, (const void *)(uintptr_t)mh.msg_control, sizeof(cm));
+
+        if (cm.cmsg_level == SOL_SOCKET && cm.cmsg_type == SCM_RIGHTS) {
+            uint64_t payload_len = cm.cmsg_len - sizeof(k_cmsghdr_t);
+            int nfds = (int)(payload_len / sizeof(int));
+            if (nfds > UNIX_PASSED_FD_MAX) nfds = UNIX_PASSED_FD_MAX;
+
+            int sender_fds[UNIX_PASSED_FD_MAX];
+            copy_from_user(sender_fds,
+                (const void *)((uintptr_t)mh.msg_control + sizeof(k_cmsghdr_t)),
+                (uint32_t)(nfds * sizeof(int)));
+
+            /* Dup each fd and stage for peer */
+            unix_sock_t *us = unix_sock_get(uid);
+            if (us && us->peer_id != UNIX_NONE) {
+                unix_passed_fd_t staged[UNIX_PASSED_FD_MAX];
+                uint8_t count = 0;
+                for (int i = 0; i < nfds; i++) {
+                    int sfd = sender_fds[i];
+                    if (sfd < 0 || sfd >= PROC_MAX_FDS) continue;
+                    vfs_file_t *f = &proc->fd_table->fds[sfd];
+                    if (!f->ops) continue;
+                    if (f->ops->dup) f->ops->dup(f->priv);
+                    staged[count].ops   = f->ops;
+                    staged[count].priv  = f->priv;
+                    staged[count].flags = f->flags;
+                    count++;
+                }
+                if (count > 0)
+                    unix_sock_stage_fds(us->peer_id, staged, count);
+            }
+        }
+    }
+
+    return (uint64_t)total_sent;
 }
 
-uint64_t sys_recvmsg(uint64_t fd, uint64_t msg, uint64_t flags)
+uint64_t sys_recvmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
 {
-    (void)fd; (void)msg; (void)flags;
-    return (uint64_t)-(int64_t)38;
+    (void)flags;
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc);
+    if (uid == UNIX_NONE) return (uint64_t)-(int64_t)38;  /* ENOSYS for non-unix */
+
+    if (!user_ptr_valid(msg_ptr, sizeof(k_msghdr_t))) return (uint64_t)-(int64_t)14;
+    k_msghdr_t mh;
+    copy_from_user(&mh, (const void *)(uintptr_t)msg_ptr, sizeof(mh));
+
+    /* Recv iov data */
+    int64_t total_recv = 0;
+    for (uint64_t i = 0; i < mh.msg_iovlen && i < 8; i++) {
+        k_iovec_t iov;
+        if (!user_ptr_valid((uint64_t)(uintptr_t)mh.msg_iov + i * sizeof(k_iovec_t), sizeof(k_iovec_t)))
+            return (uint64_t)-(int64_t)14;
+        copy_from_user(&iov, (const void *)((uintptr_t)mh.msg_iov + i * sizeof(k_iovec_t)), sizeof(iov));
+        if (iov.iov_len == 0) continue;
+        if (!user_ptr_valid((uint64_t)(uintptr_t)iov.iov_base, iov.iov_len))
+            return (uint64_t)-(int64_t)14;
+        uint8_t kbuf[1024];
+        uint64_t remain = iov.iov_len;
+        uint64_t off = 0;
+        while (remain > 0) {
+            uint32_t chunk = remain > 1024 ? 1024 : (uint32_t)remain;
+            int n = unix_sock_read(uid, kbuf, chunk);
+            if (n <= 0) {
+                if (total_recv > 0) goto done;
+                return n == 0 ? 0 : (uint64_t)(int64_t)n;
+            }
+            copy_to_user((void *)((uintptr_t)iov.iov_base + off), kbuf, (uint32_t)n);
+            total_recv += n;
+            off += (uint64_t)n;
+            remain -= (uint64_t)n;
+            if ((uint32_t)n < chunk) goto done;  /* partial read: don't block for more */
+        }
+    }
+done:
+
+    /* Receive staged fds if msg_control provided */
+    if (mh.msg_control && mh.msg_controllen >= sizeof(k_cmsghdr_t) + sizeof(int)) {
+        int received_fds[UNIX_PASSED_FD_MAX];
+        int nfds = unix_sock_recv_fds(uid, received_fds, UNIX_PASSED_FD_MAX);
+        if (nfds > 0) {
+            /* Build cmsghdr + fd array */
+            k_cmsghdr_t cm;
+            cm.cmsg_len   = sizeof(k_cmsghdr_t) + (uint64_t)(nfds * sizeof(int));
+            cm.cmsg_level = SOL_SOCKET;
+            cm.cmsg_type  = SCM_RIGHTS;
+
+            uint64_t total_cm = sizeof(k_cmsghdr_t) + (uint64_t)(nfds * sizeof(int));
+            if (total_cm <= mh.msg_controllen) {
+                copy_to_user((void *)(uintptr_t)mh.msg_control, &cm, sizeof(cm));
+                copy_to_user((void *)((uintptr_t)mh.msg_control + sizeof(k_cmsghdr_t)),
+                    received_fds, (uint32_t)(nfds * sizeof(int)));
+                /* Update msg_controllen in user struct */
+                copy_to_user((void *)((uintptr_t)msg_ptr + __builtin_offsetof(k_msghdr_t, msg_controllen)),
+                    &total_cm, sizeof(uint64_t));
+            }
+        } else {
+            /* No fds — zero out controllen */
+            uint64_t zero = 0;
+            copy_to_user((void *)((uintptr_t)msg_ptr + __builtin_offsetof(k_msghdr_t, msg_controllen)),
+                &zero, sizeof(uint64_t));
+        }
+    }
+
+    return (uint64_t)total_recv;
 }
 
 /* ── sys_shutdown ──────────────────────────────────────────────────────── */
@@ -526,11 +763,30 @@ sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
 
 /* ── sys_getsockopt ────────────────────────────────────────────────────── */
 
+/* struct ucred for SO_PEERCRED */
+typedef struct { int pid; int uid; int gid; } k_ucred_t;
+
 uint64_t
 sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
                uint64_t optval, uint64_t optlen)
 {
     if (!user_ptr_valid(optval, sizeof(int))) return (uint64_t)-(int64_t)14;
+
+    /* AF_UNIX: SO_PEERCRED */
+    aegis_process_t *proc_g = (aegis_process_t *)sched_current();
+    uint32_t uid = unix_sock_id_from_fd((int)fd, proc_g);
+    if (uid != UNIX_NONE && level == SOL_SOCKET && optname == SO_PEERCRED) {
+        if (!user_ptr_valid(optval, sizeof(k_ucred_t))) return (uint64_t)-(int64_t)14;
+        uint32_t p_pid, p_uid, p_gid;
+        int rc = unix_sock_peercred(uid, &p_pid, &p_uid, &p_gid);
+        if (rc < 0) return (uint64_t)(int64_t)rc;
+        k_ucred_t uc = { .pid = (int)p_pid, .uid = (int)p_uid, .gid = (int)p_gid };
+        copy_to_user((void *)(uintptr_t)optval, &uc, sizeof(uc));
+        uint32_t outlen = sizeof(uc);
+        if (optlen) copy_to_user((void *)(uintptr_t)optlen, &outlen, sizeof(uint32_t));
+        return 0;
+    }
+
     sock_t *s; uint32_t sid;
     uint64_t err = get_proc_sock(fd, &s, &sid);
     if (err) return err;
@@ -750,4 +1006,51 @@ sys_netcfg(uint64_t op, uint64_t arg1, uint64_t arg2, uint64_t arg3)
         return 0;
     }
     return (uint64_t)-(int64_t)22;  /* EINVAL */
+}
+
+/* ── sys_memfd_create ─────────────────────────────────────────────────── */
+
+uint64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags)
+{
+    (void)flags;
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)130;  /* ENOCAP */
+
+    char name[32] = {0};
+    if (name_ptr && user_ptr_valid(name_ptr, 1)) {
+        /* Copy up to 31 chars */
+        for (int i = 0; i < 31; i++) {
+            uint8_t c;
+            copy_from_user(&c, (const void *)(uintptr_t)(name_ptr + (uint64_t)i), 1);
+            if (!c) break;
+            name[i] = (char)c;
+        }
+    }
+
+    int mid = memfd_alloc(name);
+    if (mid < 0) return (uint64_t)-(int64_t)24;  /* EMFILE */
+
+    int fd = memfd_open_fd((uint32_t)mid, proc);
+    if (fd < 0) {
+        /* close frees the memfd on refcount=0 */
+        memfd_t *mf = memfd_get((uint32_t)mid);
+        if (mf) { mf->refcount = 0; mf->in_use = 0; }
+        return (uint64_t)-(int64_t)24;
+    }
+    return (uint64_t)fd;
+}
+
+/* ── sys_ftruncate ────────────────────────────────────────────────────── */
+
+uint64_t sys_ftruncate(uint64_t fd_arg, uint64_t length)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    memfd_t *mf = memfd_from_fd((int)fd_arg, proc);
+    if (!mf) return (uint64_t)-(int64_t)22;  /* EINVAL: not a memfd */
+
+    /* Get the memfd id from the fd */
+    uint32_t mid = (uint32_t)(uintptr_t)proc->fd_table->fds[(int)fd_arg].priv;
+    int rc = memfd_truncate(mid, length);
+    return rc < 0 ? (uint64_t)(int64_t)rc : 0;
 }

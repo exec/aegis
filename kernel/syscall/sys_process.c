@@ -952,6 +952,7 @@ sys_execve(syscall_frame_t *frame,
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ, CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_FB,        CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,       CAP_RIGHTS_READ);
         /* DISK_ADMIN and AUTH are NOT in the baseline — they propagate only
          * via vigil exec_caps for specific binaries (installer, login). */
 
@@ -1826,6 +1827,7 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
             cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
             cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,  CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
             cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_FB,         CAP_RIGHTS_READ);
+            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,        CAP_RIGHTS_READ);
 
             for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
                 if (parent->exec_caps[ci].kind != CAP_KIND_NULL) {

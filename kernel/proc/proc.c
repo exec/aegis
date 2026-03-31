@@ -435,6 +435,13 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         panic_halt("[CAP] FAIL: cap_grant PROC_READ returned -ENOCAP");
     }
 
+    /* Grant IPC capability — AF_UNIX sockets and memfd. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_IPC, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant IPC returned -ENOCAP\n");
+        panic_halt("[CAP] FAIL: cap_grant IPC returned -ENOCAP");
+    }
+
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
     proc->fd_table->fds[1] = *console_open();
@@ -460,7 +467,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * pgid and sends itself SIGTTIN repeatedly. */
     kbd_set_tty_pgrp(proc->pgid);
 
-    printk("[CAP] OK: 9 capabilities granted to init\n");
+    printk("[CAP] OK: 10 capabilities granted to init\n");
 
     sched_add(&proc->task);
 }

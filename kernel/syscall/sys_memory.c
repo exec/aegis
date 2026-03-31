@@ -1,6 +1,7 @@
 /* sys_memory.c — Memory management syscalls: brk, mmap, munmap, mprotect */
 #include "sys_impl.h"
 #include "vma.h"
+#include "memfd.h"
 
 /*
  * sys_brk — syscall 12
@@ -199,8 +200,7 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
         return (uint64_t)-(int64_t)22;   /* EINVAL */
     if (prot & ~(uint64_t)(PROT_READ | PROT_WRITE | PROT_EXEC))
         return (uint64_t)-(int64_t)22;   /* EINVAL */
-    if (flags & MAP_SHARED)
-        return (uint64_t)-(int64_t)22;   /* EINVAL */
+    int is_shared = (flags & MAP_SHARED) != 0;
 
     int file_backed = !(flags & MAP_ANONYMOUS) && fd != -1;
     if (!file_backed && !(flags & MAP_ANONYMOUS))
@@ -247,7 +247,39 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     if (prot & PROT_EXEC)
         map_flags &= ~VMM_FLAG_NX;
 
-    /* Allocate and map pages */
+    /* MAP_SHARED path: map memfd's physical pages directly */
+    if (is_shared && file_backed) {
+        extern const vfs_ops_t g_memfd_ops;
+        if ((uint32_t)fd >= PROC_MAX_FDS ||
+            !proc->fd_table->fds[(uint32_t)fd].ops ||
+            proc->fd_table->fds[(uint32_t)fd].ops != &g_memfd_ops)
+            return (uint64_t)-(int64_t)22;  /* EINVAL: MAP_SHARED only for memfd */
+
+        uint32_t mid = (uint32_t)(uintptr_t)proc->fd_table->fds[(uint32_t)fd].priv;
+        extern memfd_t *memfd_get(uint32_t id);
+        memfd_t *mf = memfd_get(mid);
+        if (!mf) return (uint64_t)-(int64_t)22;
+        if (len > mf->size)
+            return (uint64_t)-(int64_t)22;  /* mapping larger than memfd */
+
+        uint32_t num_pages = (uint32_t)(len / 4096);
+        uint64_t va;
+        for (va = base; va < base + len; va += 4096UL) {
+            uint32_t pi = (uint32_t)((va - base) / 4096);
+            if (pi >= mf->page_count || !mf->phys_pages[pi])
+                return (uint64_t)-(int64_t)22;
+            vmm_map_user_page(proc->pml4_phys, va, mf->phys_pages[pi], map_flags);
+        }
+        (void)num_pages;
+
+        if (!is_fixed && base >= proc->mmap_base)
+            proc->mmap_base = base + len;
+
+        vma_insert(proc, base, len, (uint32_t)(prot & 0x07), VMA_SHARED);
+        return base;
+    }
+
+    /* Allocate and map pages (private anonymous or private file-backed) */
     uint64_t va;
     for (va = base; va < base + len; va += 4096UL) {
         uint64_t phys = pmm_alloc_page();
@@ -326,12 +358,27 @@ sys_munmap(uint64_t arg1, uint64_t arg2)
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     uint64_t len = (arg2 + 4095UL) & ~4095UL;
+
+    /* Check if this is a shared mapping — don't free physical pages
+     * (they belong to the memfd, not this process). */
+    int is_shared_vma = 0;
+    if (proc->vma_table) {
+        for (uint32_t i = 0; i < proc->vma_count; i++) {
+            vma_entry_t *v = &proc->vma_table[i];
+            if (v->base == arg1 && v->type == VMA_SHARED) {
+                is_shared_vma = 1;
+                break;
+            }
+        }
+    }
+
     uint64_t va;
     for (va = arg1; va < arg1 + len; va += 4096UL) {
         uint64_t phys = vmm_phys_of_user(proc->pml4_phys, va);
         if (phys) {
             vmm_unmap_user_page(proc->pml4_phys, va);
-            pmm_free_page(phys);
+            if (!is_shared_vma)
+                pmm_free_page(phys);
         }
     }
 
