@@ -314,9 +314,11 @@ do_auth(void)
 int
 main(void)
 {
-    /* Exit immediately if booted in text mode — Bastion is graphical only.
-     * This is a safety check in case Vigil's mode filter doesn't catch it. */
+    /* Exit immediately unless booted in graphical mode.
+     * Bastion is graphical only — if /proc/cmdline doesn't contain
+     * "boot=graphical", exit immediately. */
     {
+        int graphical = 0;
         int cfd = open("/proc/cmdline", O_RDONLY);
         if (cfd >= 0) {
             char cmd[128];
@@ -324,10 +326,12 @@ main(void)
             close(cfd);
             if (cn > 0) {
                 cmd[cn] = '\0';
-                if (strstr(cmd, "boot=text"))
-                    return 0;
+                if (strstr(cmd, "boot=graphical"))
+                    graphical = 1;
             }
         }
+        if (!graphical)
+            return 0;
     }
 
     /* Request capabilities from capd */
