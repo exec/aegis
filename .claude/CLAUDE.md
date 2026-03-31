@@ -300,7 +300,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | stsh — Styx shell (Phase 42) | ✅ | CAP_DELEGATE(13)+CAP_QUERY(14); sys_cap_query(362); sys_spawn cap_mask(5th param); line editing; history(no-persist privileged); tab completion; caps/sandbox builtins; env vars; paste detection; login fallback. **make test 25/25 PASS; ThinkPad Zen 2 bare-metal PASS** |
 | Quiet boot + lumen fixes (Phase 42b) | ✅ | printk_quiet; console direct output; DHCP via stderr; sys_setfg scoped to controlling TTY; tty_read SIG_IGN bypass; lumen SIGTTIN ignore; dual-ISO test harness; login backspace; **ThinkPad Zen 2 bare-metal PASS** |
 | IPC (Phase 44) | ✅ | AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS; SO_PEERCRED; memfd_create+ftruncate; MAP_SHARED; CAP_KIND_IPC(15); ipc_test 5/5; **make test 26/26 PASS** |
-| capd + sys_cap_grant (Phase 45) | ✅ | sys_cap_grant(363); capd daemon (AF_UNIX binary protocol); /etc/aegis/capd.d/ policy files; vigil caps→capd migration; stsh grant builtin; AF_UNIX ring buffer use-after-free fix; **make test 26/27 PASS** (ls / OOM pre-existing) |
+| capd + sys_cap_grant (Phase 45) | 🔶 | sys_cap_grant(363); capd daemon (AF_UNIX binary protocol); /etc/aegis/capd.d/ policy files; vigil caps→capd migration; stsh grant builtin; AF_UNIX ring buffer use-after-free fix; **make test 26/27 PASS** — `ls /` OOM from kva VA exhaustion (deferred, not Phase 45 regression) |
 
 ### Known deviations
 
