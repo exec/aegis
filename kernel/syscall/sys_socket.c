@@ -29,11 +29,6 @@ typedef struct {
     char     sun_path[UNIX_PATH_MAX];
 } k_sockaddr_un_t;
 
-/* Helper: check if fd is a unix socket */
-static int is_unix_fd(int fd, aegis_process_t *proc)
-{
-    return unix_sock_id_from_fd(fd, proc) != UNIX_NONE;
-}
 
 /* net_get_config / net_set_config declared in ip.h (already included) */
 
