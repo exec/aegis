@@ -29,13 +29,6 @@ static void _memset(void *dst, int val, uint32_t n)
     while (n--) *p++ = (uint8_t)val;
 }
 
-static void _memcpy(void *dst, const void *src, uint32_t n)
-{
-    const uint8_t *s = (const uint8_t *)src;
-    uint8_t       *d = (uint8_t *)dst;
-    while (n--) *d++ = *s++;
-}
-
 static int _streq(const char *a, const char *b)
 {
     while (*a && *a == *b) { a++; b++; }
