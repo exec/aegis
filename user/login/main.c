@@ -1,12 +1,8 @@
-/* login — capability-delegating login binary for Aegis.
+/* login — text-mode login binary for Aegis.
  *
- * Capabilities acquired at startup via capd:
- *   AUTH, CAP_GRANT, CAP_DELEGATE, CAP_QUERY, SETUID
- *
- * After execve(shell):
- *   shell holds baseline caps + CAP_DELEGATE + CAP_QUERY (via exec_caps).
- *   CAP_KIND_AUTH and CAP_KIND_SETUID do not survive exec.
- *   CAP_DELEGATE + CAP_QUERY allow stsh to manage capabilities.
+ * Authenticates via libauth.a, then execve's the user's shell.
+ * Capabilities acquired from capd: AUTH, CAP_GRANT, CAP_DELEGATE,
+ * CAP_QUERY, SETUID.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,42 +12,15 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
-#include <sys/socket.h>
-#include <sys/un.h>
+
+#include "auth.h"
 
 extern char **environ;
 
 #define MAX_ATTEMPTS 3
 #define FAIL_DELAY   3
 
-/* Request a capability from capd (binary protocol).
- * Sends uint32_t kind, reads int32_t result (0=OK). */
-static int
-capd_request(unsigned int kind)
-{
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) return -1;
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, "/run/capd.sock", sizeof(addr.sun_path) - 1);
-    for (int retry = 0; retry < 3; retry++) {
-        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
-            goto connected;
-        usleep(100000);
-    }
-    close(sock);
-    return -1;
-connected:;
-    write(sock, &kind, sizeof(kind));
-    int result = -1;
-    read(sock, &result, sizeof(result));
-    close(sock);
-    return result >= 0 ? 0 : -1;
-}
-
-/* Read a line from fd into buf (max len-1 bytes), stripping trailing \n.
- * Returns number of bytes read, or -1 on EOF/error. */
+/* Read a line from fd, stripping trailing newline. */
 static int
 readline(int fd, char *buf, int len)
 {
@@ -67,101 +36,17 @@ readline(int fd, char *buf, int len)
     return i;
 }
 
-/* Look up username in /etc/passwd. Returns 0 on success, -1 on failure.
- * Fills uid, gid, home, shell from the matching line. */
-static int
-lookup_passwd(const char *username, int *uid, int *gid,
-              char *home, int homelen, char *shell, int shelllen)
-{
-    FILE *fp = fopen("/etc/passwd", "r");
-    if (!fp) return -1;
-    char line[256];
-    while (fgets(line, sizeof(line), fp)) {
-        /* Format: name:x:uid:gid:gecos:home:shell */
-        char *fields[7];
-        char *p = line, *q;
-        int f = 0;
-        while (f < 7 && (q = strchr(p, ':'))) {
-            *q = '\0';
-            fields[f++] = p;
-            p = q + 1;
-        }
-        /* last field (shell) ends with \n */
-        if (f == 6) {
-            q = strchr(p, '\n');
-            if (q) *q = '\0';
-            fields[f++] = p;
-        }
-        if (f < 7) continue;
-        if (strcmp(fields[0], username) != 0) continue;
-        *uid = atoi(fields[2]);
-        *gid = atoi(fields[3]);
-        strncpy(home,  fields[5], (size_t)homelen  - 1); home[homelen-1]  = '\0';
-        strncpy(shell, fields[6], (size_t)shelllen - 1); shell[shelllen-1] = '\0';
-        fclose(fp);
-        return 0;
-    }
-    fclose(fp);
-    return -1;
-}
-
-/* Look up shadow hash for username. Returns 0 on success, -1 on failure.
- * Fills hash buffer. Requires CAP_KIND_AUTH to open /etc/shadow. */
-static int
-lookup_shadow(const char *username, char *hash, int hashlen)
-{
-    int fd = open("/etc/shadow", O_RDONLY);
-    if (fd < 0) {
-        write(2, "login: cannot open /etc/shadow\n", 31);
-        return -1;
-    }
-    char filebuf[2048];
-    int  total = 0, n;
-    while ((n = (int)read(fd, filebuf + total,
-                          (size_t)((int)sizeof(filebuf) - total - 1))) > 0)
-        total += n;
-    close(fd);
-    filebuf[total] = '\0';
-
-    char *line = filebuf;
-    while (line && *line) {
-        char *end = strchr(line, '\n');
-        if (end) *end = '\0';
-        char *colon = strchr(line, ':');
-        if (colon) {
-            *colon = '\0';
-            if (strcmp(line, username) == 0) {
-                char *h = colon + 1;
-                char *hend = strchr(h, ':');
-                if (hend) *hend = '\0';
-                strncpy(hash, h, (size_t)hashlen - 1);
-                hash[hashlen-1] = '\0';
-                return 0;
-            }
-            *colon = ':'; /* restore for next iteration */
-        }
-        if (!end) break;
-        line = end + 1;
-    }
-    return -1;
-}
-
 int
 main(void)
 {
     char username[64];
     char password[128];
-    char hash[256];
     char home[256];
     char shell[256];
     int  uid = 0, gid = 0;
 
-    /* Request capabilities from capd (kind values from cap.h) */
-    capd_request(4);   /* CAP_KIND_AUTH */
-    capd_request(5);   /* CAP_KIND_CAP_GRANT */
-    capd_request(13);  /* CAP_KIND_CAP_DELEGATE */
-    capd_request(14);  /* CAP_KIND_CAP_QUERY */
-    capd_request(6);   /* CAP_KIND_SETUID */
+    /* Request capabilities from capd */
+    auth_request_caps();
 
     /* Display pre-auth banner */
     {
@@ -176,27 +61,11 @@ main(void)
     }
 
     for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        /* Prompt username */
         write(1, "\nlogin: ", 8);
         if (readline(0, username, (int)sizeof(username)) < 0) continue;
         if (username[0] == '\0') { attempt--; continue; }
 
-        /* Look up passwd */
-        if (lookup_passwd(username, &uid, &gid, home, (int)sizeof(home),
-                          shell, (int)sizeof(shell)) != 0) {
-            sleep(FAIL_DELAY);
-            write(1, "Login incorrect\n", 16);
-            continue;
-        }
-
-        /* Look up shadow hash */
-        if (lookup_shadow(username, hash, (int)sizeof(hash)) != 0) {
-            sleep(FAIL_DELAY);
-            write(1, "Login incorrect\n", 16);
-            continue;
-        }
-
-        /* Disable echo and canonical mode for password — read char by char */
+        /* Disable echo for password input */
         struct termios t;
         tcgetattr(0, &t);
         struct termios t_raw = t;
@@ -212,10 +81,7 @@ main(void)
                 if (n <= 0) break;
                 if (c == '\n' || c == '\r') break;
                 if (c == '\x7f' || c == '\b') {
-                    if (pi > 0) {
-                        pi--;
-                        write(1, "\b \b", 3);
-                    }
+                    if (pi > 0) { pi--; write(1, "\b \b", 3); }
                     continue;
                 }
                 password[pi++] = c;
@@ -224,27 +90,19 @@ main(void)
             password[pi] = '\0';
         }
         write(1, "\n", 1);
-        int plen = (int)strlen(password);
-
-        /* Restore terminal */
         tcsetattr(0, TCSANOW, &t);
 
-        if (plen < 0) continue;
-
-        /* Verify password */
-        char *computed = crypt(password, hash);
-        if (!computed || strcmp(computed, hash) != 0) {
+        /* Authenticate */
+        if (auth_check(username, password, &uid, &gid,
+                       home, (int)sizeof(home), shell, (int)sizeof(shell)) != 0) {
             sleep(FAIL_DELAY);
             write(1, "Login incorrect\n", 16);
             continue;
         }
 
-        /* Authentication succeeded — clear screen for clean motd display */
+        /* Success — set identity and launch shell */
         write(1, "\033[2J\033[H", 7);
-
-        syscall(105, (long)uid);  /* sys_setuid */
-        syscall(106, (long)gid);  /* sys_setgid */
-
+        auth_set_identity(uid, gid);
         chdir(home);
 
         setenv("HOME",    home,     1);
@@ -253,34 +111,23 @@ main(void)
         setenv("SHELL",   shell,    1);
         setenv("PATH",    "/bin",   1);
 
-        /* Build login shell name: "-oksh" → login shell sources /etc/profile.
-         * Truncation to 62 chars is intentional — no real shell basename
-         * exceeds that length. */
+        /* Build login shell name with leading '-' */
         char login_shell[64];
         const char *base = strrchr(shell, '/');
         const char *name = base ? base + 1 : shell;
         login_shell[0] = '-';
-        /* Intentional truncation: shell basenames are always short. */
         int nlen = (int)strlen(name);
         if (nlen > 62) nlen = 62;
         memcpy(login_shell + 1, name, (size_t)nlen);
         login_shell[1 + nlen] = '\0';
 
-        /* Pre-register CAP_DELEGATE + CAP_QUERY for the shell.
-         * These are granted to login by vigil's getty service config.
-         * They survive execve via exec_caps and give stsh its management
-         * capabilities. For /bin/sh, they are harmless (unused). */
-        syscall(361, 13L, 1L);  /* CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ */
-        syscall(361, 14L, 1L);  /* CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ */
+        auth_grant_shell_caps();
 
         char *argv[] = { login_shell, NULL };
         execve(shell, argv, environ);
-        /* Fallback: if configured shell not found, try /bin/sh */
-        {
-            char *fallback_argv[] = { "-sh", NULL };
-            execve("/bin/sh", fallback_argv, NULL);
-        }
-        /* execve failed */
+        /* Fallback */
+        char *fb_argv[] = { "-sh", NULL };
+        execve("/bin/sh", fb_argv, NULL);
         write(2, "login: execve failed\n", 21);
         return 1;
     }

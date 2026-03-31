@@ -13,10 +13,12 @@
 #include <sys/un.h>
 
 #include <glyph.h>
-#include "font.h"
+#include <font.h>
 #include "cursor.h"
 #include "compositor.h"
-#include "dock.h"
+#include <dock.h>
+#include <taskbar.h>
+#include <theme.h>
 #include "terminal.h"
 
 typedef struct {
@@ -32,6 +34,9 @@ typedef struct __attribute__((packed)) {
 } mouse_event_t;
 
 static struct termios s_orig_termios;
+static volatile sig_atomic_t s_input_frozen;
+
+static void sigusr2_handler(int sig) { (void)sig; s_input_frozen = 0; }
 
 static void
 restore_terminal(void)
@@ -314,6 +319,7 @@ main(void)
     /* Ignore job control signals -- compositor always reads keyboard */
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
+    signal(SIGUSR2, sigusr2_handler);
 
     /* Set stdin to raw mode */
     tcgetattr(0, &s_orig_termios);
@@ -393,6 +399,10 @@ main(void)
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
+        if (n == 1 && s_input_frozen) {
+            /* Screen locked — discard all input */
+            goto next_poll;
+        }
         if (n == 1) {
             /* ESC prefix detection: kbd driver sends ESC for Alt, Ctrl+Shift,
              * and Ctrl+Alt combos. After ESC, the next byte identifies the combo:
@@ -449,6 +459,15 @@ main(void)
                         glyph_window_mark_all_dirty(dropdown_win);
                     }
                     comp.full_redraw = 1;
+                    activity = 1;
+                    goto next_poll;
+                }
+
+                /* Ctrl+Alt+L (0x0C) — lock screen.
+                 * Freeze input, signal Bastion (parent) to show lock form. */
+                if (kbd_byte == 0x0C) {
+                    s_input_frozen = 1;
+                    kill(getppid(), SIGUSR1);
                     activity = 1;
                     goto next_poll;
                 }
