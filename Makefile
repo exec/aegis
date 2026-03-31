@@ -316,6 +316,9 @@ user/httpd/httpd.elf: $(MUSL_BUILT)
 user/dhcp/dhcp: user/dhcp/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/dhcp
 
+user/pwn/pwn.elf: user/pwn/pwn.c $(MUSL_BUILT)
+	$(MAKE) -C user/pwn
+
 user/chronos/chronos: user/chronos/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/chronos
 
