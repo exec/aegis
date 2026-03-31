@@ -299,6 +299,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Symlinks + chmod/chown (Phase 41) | ✅ | ext2 symlinks (fast+slow); ext2_open_ex path walk; chmod/chown/lchown; DAC enforcement; ln/chmod/chown/readlink tools; **boot oracle + test_symlink PASS** |
 | stsh — Styx shell (Phase 42) | ✅ | CAP_DELEGATE(13)+CAP_QUERY(14); sys_cap_query(362); sys_spawn cap_mask(5th param); line editing; history(no-persist privileged); tab completion; caps/sandbox builtins; env vars; paste detection; login fallback. **make test 25/25 PASS; ThinkPad Zen 2 bare-metal PASS** |
 | Quiet boot + lumen fixes (Phase 42b) | ✅ | printk_quiet; console direct output; DHCP via stderr; sys_setfg scoped to controlling TTY; tty_read SIG_IGN bypass; lumen SIGTTIN ignore; dual-ISO test harness; login backspace; **ThinkPad Zen 2 bare-metal PASS** |
+| IPC (Phase 44) | ✅ | AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS; SO_PEERCRED; memfd_create+ftruncate; MAP_SHARED; CAP_KIND_IPC(15); ipc_test 5/5; **make test 26/26 PASS** |
 
 ### Known deviations
 
@@ -379,7 +380,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. `caps`/`sandbox` builtins; `CAP_KIND_CAP_DELEGATE` + `CAP_KIND_CAP_QUERY` syscalls; line editing; history; tab completion; paste detection. Login chain grants delegate/query caps; exec baseline does not. | ✅ Done |
 | 42b | **Quiet boot + lumen fixes** — printk_quiet, console output routing, SIGTTIN bypass for compositor, dual-ISO test harness, login backspace | ✅ Done |
 | 43a | **Deep architecture audit** — file-by-file review of kernel + userspace. Prioritized fix list. Multiple parallel agents. | ✅ Done |
-| 44 | **IPC** — Unix domain sockets (SO_PEERCRED); POSIX shared memory (MAP_SHARED); fd passing; all capability-gated. **Required for**: Glyph external apps (pixel buffers), capability helper daemons (authenticated grant channel). Until Phase 44, all GUI apps are compiled into Lumen. | Not started |
+| 44 | **IPC** — AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS fd passing; memfd_create + MAP_SHARED; SO_PEERCRED; CAP_KIND_IPC. Unlocks external Glyph apps and capd. | ✅ Done |
 | 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh helper management; stable broker interface (replaceable). Requires IPC (Phase 44) for kernel-attested peer credentials. | Not started |
 | 46 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 47 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
@@ -500,6 +501,38 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 3. **Dynamically linked.** `libglyph.so` is a shared library. Apps link against it at build time and load it at runtime via the dynamic linker.
 4. **Developer-friendly.** `#include <glyph.h>`, link with `-lglyph`, get windows and widgets. Simple C API.
 5. **Capability-gated.** Framebuffer access requires appropriate capabilities. Random processes cannot draw to the screen.
+
+---
+
+## Phase 44 — Forward Constraints
+
+**Phase 44 status: ✅ complete. make test 26/26 PASS.**
+
+1. **UNIX_SOCK_MAX = 32.** Each connected pair uses 2 slots + 2 kva pages. 16 concurrent connections max. Expand if needed.
+
+2. **MEMFD_PAGES_MAX = 2048 (8MB).** One 1080p BGRA framebuffer fits. 4K resolution needs ~32MB (8192 pages) — expand later.
+
+3. **memfd_t BSS: ~256KB.** 16 slots x 16KB each (dominated by phys_pages array).
+
+4. **No SOCK_DGRAM AF_UNIX.** Only SOCK_STREAM. Add if a consumer appears.
+
+5. **No abstract namespace.** Paths must start with `/`.
+
+6. **ftruncate only for memfd.** ext2 ftruncate deferred.
+
+7. **SO_PEERCRED is standard ucred (pid/uid/gid).** Phase 45 may extend with capability bitmap.
+
+8. **No MSG_PEEK, MSG_DONTWAIT, MSG_WAITALL.** Basic sendmsg/recvmsg only.
+
+9. **Passed fds silently dropped if receiver provides no msg_control.** Matches Linux behavior.
+
+10. **MAP_SHARED only for memfd fds.** Not for ext2 or pipes. File-backed shared mapping requires a page cache.
+
+11. **CAP_KIND_IPC = 15 is the last cap slot.** CAP_TABLE_SIZE = 16. Adding more cap kinds requires expanding the table.
+
+12. **VFS bounce buffer is 1024 bytes per read/write call.** Large unix socket transfers require multiple VFS calls. Adequate for control messages; pixel data should use MAP_SHARED.
+
+*Last updated: 2026-03-30 — Phase 44 complete, make test 26/26 GREEN.*
 
 ---
 
