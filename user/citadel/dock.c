@@ -124,6 +124,22 @@ draw_icon_terminal(surface_t *fb, int ix, int iy)
     }
 }
 
+/* Draw widget/grid icon for Test Widgets */
+static void
+draw_icon_widgets(surface_t *fb, int ix, int iy)
+{
+    int bw = 38, bh = 30;
+    int bx = ix + (DOCK_ICON_SIZE - bw) / 2;
+    int by = iy + (DOCK_ICON_SIZE - bh) / 2;
+
+    /* 2x2 grid of colored squares */
+    int cell = 14, gap = 4;
+    draw_rounded_rect(fb, bx, by, cell, cell, 3, 0x004488CC);              /* top-left: blue */
+    draw_rounded_rect(fb, bx + cell + gap, by, cell, cell, 3, 0x0050FA7B); /* top-right: green */
+    draw_rounded_rect(fb, bx, by + cell + gap, cell, cell, 3, 0x00FF7744); /* bot-left: orange */
+    draw_rounded_rect(fb, bx + cell + gap, by + cell + gap, cell, cell, 3, 0x00CC66FF); /* bot-right: purple */
+}
+
 void
 dock_draw(surface_t *fb, int screen_w, int screen_h)
 {
@@ -209,6 +225,9 @@ dock_draw(surface_t *fb, int screen_w, int screen_h)
             break;
         case DOCK_ITEM_TERMINAL:
             draw_icon_terminal(fb, ix, iy);
+            break;
+        case DOCK_ITEM_WIDGETS:
+            draw_icon_widgets(fb, ix, iy);
             break;
         }
     }

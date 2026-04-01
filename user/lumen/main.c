@@ -17,6 +17,7 @@
 #include <taskbar.h>
 #include <theme.h>
 #include "terminal.h"
+#include "widget_test.h"
 
 typedef struct {
     uint64_t addr;
@@ -570,6 +571,18 @@ next_poll:
                     if (dock_item >= 0) {
                         if (dock_item == DOCK_ITEM_TERMINAL)
                             spawn_terminal(&comp, fb_w, fb_h);
+                        else if (dock_item == DOCK_ITEM_WIDGETS) {
+                            glyph_window_t *wt = widget_test_create();
+                            if (wt) {
+                                wt->x = (fb_w - wt->surf_w) / 2;
+                                wt->y = (fb_h - wt->surf_h) / 2;
+                                comp_add_window(&comp, wt);
+                                comp_raise_window(&comp, wt);
+                                comp.focused = wt;
+                                wt->focused_window = 1;
+                                glyph_window_mark_all_dirty(wt);
+                            }
+                        }
                         /* Settings and Files are stubs */
                         comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                         activity = 1;

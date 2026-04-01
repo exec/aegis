@@ -25,7 +25,8 @@
 #define DOCK_ITEM_SETTINGS  0
 #define DOCK_ITEM_FILES     1
 #define DOCK_ITEM_TERMINAL  2
-#define DOCK_ITEM_COUNT     3
+#define DOCK_ITEM_WIDGETS   3
+#define DOCK_ITEM_COUNT     4
 
 void dock_init(int screen_w, int screen_h);
 void dock_draw(surface_t *fb, int screen_w, int screen_h);
