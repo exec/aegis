@@ -23,6 +23,15 @@ uint32_t s_num_groups;
 ext2_bgd_t s_bgd[32];   /* support up to 32 block groups */
 int s_mounted = 0;
 
+/* Inode of /etc/shadow on the mounted ext2 volume.  Populated at mount
+ * time and used by vfs_open to enforce CAP_KIND_AUTH after symlink
+ * resolution — the pre-resolution string check in sys_open is
+ * insufficient because symlinks and ".." can alias the path.
+ * 0 = not found (live boot without ext2 shadow). */
+static uint32_t s_shadow_ino = 0;
+
+uint32_t ext2_get_shadow_ino(void) { return s_shadow_ino; }
+
 /* ------------------------------------------------------------------ */
 /* ext2_mount                                                          */
 /* ------------------------------------------------------------------ */
@@ -90,6 +99,16 @@ int ext2_mount(const char *devname)
         dst[i] = src[i];
 
     s_mounted = 1;
+
+    /* Record the inode of /etc/shadow for post-resolution capability
+     * enforcement in vfs_open.  Must happen after s_mounted=1 so
+     * ext2_open_ex can walk the directory tree. */
+    {
+        uint32_t shadow_ino = 0;
+        if (ext2_open_ex("/etc/shadow", &shadow_ino, 1) == 0)
+            s_shadow_ino = shadow_ino;
+    }
+
     printk("[EXT2] OK: mounted %s, %u blocks, %u inodes\n",
            devname, s_sb.s_blocks_count, s_sb.s_inodes_count);
     ret = 0;

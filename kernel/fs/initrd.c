@@ -206,7 +206,15 @@ initrd_stat_fn(void *priv, k_stat_t *st)
     st->st_dev     = 1;
     st->st_ino     = ino;
     st->st_nlink   = 1;
-    st->st_mode    = S_IFREG | 0555;
+    /* /etc/shadow must be 0640 root:root — not world-readable.
+     * All other initrd files are executables or config (0555). */
+    if (e->name[0]=='/' && e->name[1]=='e' && e->name[2]=='t' &&
+        e->name[3]=='c' && e->name[4]=='/' && e->name[5]=='s' &&
+        e->name[6]=='h' && e->name[7]=='a' && e->name[8]=='d' &&
+        e->name[9]=='o' && e->name[10]=='w' && e->name[11]=='\0')
+        st->st_mode = S_IFREG | 0640;
+    else
+        st->st_mode = S_IFREG | 0555;
     st->st_size    = (int64_t)sz;
     st->st_blksize = 512;
     st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);

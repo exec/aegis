@@ -6,6 +6,7 @@
 #include "pty.h"
 #include "printk.h"
 #include "uaccess.h"
+#include "cap.h"
 #include "../sched/sched.h"
 #include "../proc/proc.h"
 #include <stdint.h>
@@ -259,6 +260,21 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
                 if (perm != 0)
                     return -13;  /* EACCES */
             }
+            /* Post-resolution capability gate: /etc/shadow requires
+             * CAP_KIND_AUTH even for uid=0.  This check runs AFTER ext2_open
+             * resolves symlinks, so "ln -s /etc/shadow /tmp/x" + open("/tmp/x")
+             * cannot bypass it.  The resolved inode is compared against the
+             * shadow inode recorded at mount time. */
+            {
+                uint32_t shadow_ino = ext2_get_shadow_ino();
+                if (shadow_ino != 0 && ino == shadow_ino &&
+                    sched_current()->is_user) {
+                    aegis_process_t *pr = (aegis_process_t *)sched_current();
+                    if (cap_check(pr->caps, CAP_TABLE_SIZE,
+                                  CAP_KIND_AUTH, CAP_RIGHTS_READ) != 0)
+                        return -13;  /* EACCES */
+                }
+            }
             ext2_fd_priv_t *p = ext2_pool_alloc(ino);
             if (!p) return -12;
             int sz = ext2_file_size(ino);
@@ -300,8 +316,26 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
     }
 
     /* initrd fallback — read-only boot files */
-    if (initrd_open(path, out) == 0)
+    if (initrd_open(path, out) == 0) {
+        /* Capability gate on initrd /etc/shadow — same as ext2 path.
+         * initrd has no symlinks, so the path string is already canonical. */
+        if (path[0]=='/' && path[1]=='e' && path[2]=='t' && path[3]=='c' &&
+            path[4]=='/' && path[5]=='s' && path[6]=='h' && path[7]=='a' &&
+            path[8]=='d' && path[9]=='o' && path[10]=='w' && path[11]=='\0') {
+            if (sched_current()->is_user) {
+                aegis_process_t *pr = (aegis_process_t *)sched_current();
+                if (cap_check(pr->caps, CAP_TABLE_SIZE,
+                              CAP_KIND_AUTH, CAP_RIGHTS_READ) != 0) {
+                    /* Close the fd that initrd_open just populated */
+                    if (out->ops && out->ops->close)
+                        out->ops->close(out->priv);
+                    out->ops = (void *)0;
+                    return -13;  /* EACCES */
+                }
+            }
+        }
         return 0;
+    }
 
     return -2;
 }

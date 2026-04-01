@@ -65,6 +65,44 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         }
         __builtin_memcpy(kpath, resolved, sizeof(kpath));
     }
+    /* Normalize absolute path: collapse "//", ".", ".." so that path
+     * traversal (e.g. "/etc/../etc/shadow") cannot bypass the shadow
+     * capability gate below.  Defense-in-depth — the primary check is
+     * inode-based in vfs_open (catches symlinks too). */
+    {
+        char norm[256];
+        uint64_t ni = 0;
+        const char *p = kpath;
+        if (*p == '/') {
+            norm[ni++] = '/';
+            p++;
+        }
+        while (*p) {
+            while (*p == '/') p++;   /* collapse multiple slashes */
+            if (*p == '\0') break;
+            const char *seg = p;
+            uint64_t slen = 0;
+            while (*p && *p != '/') { p++; slen++; }
+            if (slen == 1 && seg[0] == '.') {
+                continue;  /* "." — skip */
+            }
+            if (slen == 2 && seg[0] == '.' && seg[1] == '.') {
+                /* ".." — pop last component */
+                if (ni > 1) {
+                    ni--;  /* remove trailing char */
+                    while (ni > 0 && norm[ni - 1] != '/') ni--;
+                }
+                continue;
+            }
+            if (ni > 1) norm[ni++] = '/';
+            for (uint64_t k = 0; k < slen && ni < 254; k++)
+                norm[ni++] = seg[k];
+        }
+        if (ni == 0) norm[ni++] = '/';
+        norm[ni] = '\0';
+        for (uint64_t k = 0; k <= ni; k++) kpath[k] = norm[k];
+    }
+
     uint64_t fd;
     for (fd = 0; fd < PROC_MAX_FDS; fd++)
         if (!proc->fd_table->fds[fd].ops) break;
@@ -73,7 +111,9 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 
     /* /etc/shadow gate: requires CAP_KIND_AUTH regardless of uid.
      * There is no ambient root authority on Aegis — uid=0 is cosmetic.
-     * Use memcmp against the known path — no libc strcmp available. */
+     * This pre-resolution check catches direct path access and normalized
+     * traversals (../etc/shadow).  Symlink bypasses are caught by the
+     * post-resolution inode check in vfs_open. */
     {
         static const char shadow_path[] = "/etc/shadow";
         int shadow_match = 1;

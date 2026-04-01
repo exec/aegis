@@ -158,4 +158,8 @@ int ext2_lookup_parent(const char *path, uint32_t *parent_ino_out,
 /* Flush all dirty cache slots to disk */
 void ext2_sync(void);
 
+/* Returns the inode of /etc/shadow on the mounted ext2 volume (0 if absent).
+ * Used by vfs_open for post-symlink-resolution CAP_KIND_AUTH enforcement. */
+uint32_t ext2_get_shadow_ino(void);
+
 #endif /* EXT2_H */
