@@ -22,6 +22,8 @@
 [VFS] OK: initialized
 [INITRD] OK: 23 files registered
 [ACPI] OK: MADT parsed, 1 CPUs, no MCFG (legacy machine)
+[ACPI] transitioning to ACPI mode (SMI_CMD=0xb2, val=0xf1)
+[ACPI] ACPI mode enabled (SCI_EN set)
 [ACPI] OK: power button enabled (SCI IRQ 9, PM1a=0x600)
 [LAPIC] OK: id=0 base=0xfee00000
 [IOAPIC] OK: 24 pins, PIC disabled
