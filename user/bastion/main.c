@@ -187,7 +187,7 @@ static int  s_is_lock; /* 1 = lock screen mode */
 static void
 draw_form(void)
 {
-    /* Charcoal background — matches GRUB splash feel */
+    /* Charcoal background + own logo rendering */
     for (int y = 0; y < s_fb_h; y++)
         for (int x = 0; x < s_fb_w; x++)
             s_backbuf[y * s_pitch_px + x] = 0x00202030;
@@ -409,15 +409,12 @@ main(void)
     /* Load logo */
     load_logo();
 
-    /* Paint FB charcoal immediately to hide kernel log flash */
+    /* Paint FB charcoal immediately to hide any kernel log remnants */
     {
         size_t npx = (size_t)s_pitch_px * s_fb_h;
         for (size_t i = 0; i < npx; i++)
             s_fb[i] = 0x00202030;
     }
-    /* No crossfade on first boot — just draw directly. The charcoal FB
-     * matches the login background so it looks seamless.
-     * s_saved_frame is only used for lock→greeter transitions. */
 
     /* Raw keyboard mode */
     struct termios t_orig;

@@ -875,7 +875,7 @@ phalt:
 
 /* ── Boot Splash ───────────────────────────────────────────────────────── */
 
-#define SPLASH_BG 0x00111111u  /* dark charcoal */
+#define SPLASH_BG 0x00202030u  /* match Bastion's charcoal */
 
 void
 fb_boot_splash(void)
@@ -893,7 +893,7 @@ fb_boot_splash(void)
 
     /* Center the logo */
     uint32_t lx = (s_fb_width  > LOGO_BOOT_W) ? (s_fb_width  - LOGO_BOOT_W) / 2 : 0;
-    uint32_t ly = (s_fb_height > LOGO_BOOT_H) ? (s_fb_height - LOGO_BOOT_H) / 2 - 40 : 0;
+    uint32_t ly = (s_fb_height > LOGO_BOOT_H) ? (s_fb_height - LOGO_BOOT_H) / 2 - 5 : 0;
 
     _blit_logo_rgba(logo_boot_data, LOGO_BOOT_W, LOGO_BOOT_H,
                     lx, ly, SPLASH_BG);
