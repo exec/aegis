@@ -437,12 +437,9 @@ greeter:
     }
 
 session:
-    /* Release input resources so Lumen has exclusive access to
-     * keyboard, mouse, and the console TTY. Bastion is blocked in
-     * waitpid and doesn't need them until the lock screen. */
-    tcsetattr(0, TCSANOW, &t_orig);  /* restore terminal to cooked mode */
-    if (mouse_fd >= 0) { close(mouse_fd); mouse_fd = -1; }
-    close(0);  /* release kbd so Lumen gets it exclusively */
+    /* Keep stdin + mouse open — needed for lock screen.
+     * Lumen reads from PTY master fds, not stdin, so there's no
+     * contention. Put terminal back to raw mode for lock screen input. */
 
     /* Wait for Lumen to exit */
     {
@@ -450,7 +447,11 @@ session:
         while (waitpid(s_lumen_pid, &status, 0) < 0) {
             if (errno != EINTR) break;
             if (s_locked) {
-                /* Lock screen requested */
+                /* Lock screen requested — re-enter raw mode for input */
+                tcsetattr(0, TCSANOW, &t_raw);
+                if (mouse_fd < 0)
+                    mouse_fd = open("/dev/mouse", O_RDONLY);
+
                 s_is_lock = 1;
                 s_pass_buf[0] = '\0'; s_pass_len = 0;
                 s_error[0] = '\0';
