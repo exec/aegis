@@ -195,19 +195,19 @@ draw_form(void)
     int cx = s_fb_w / 2;
     surface_t surf = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
 
-    /* Centered logo — vertically at ~40% of screen */
+    /* Centered logo — match GRUB splash position (dead center vertically) */
     int logo_dh = s_logo_h > 0 ? s_logo_h / 4 : 20;
-    int logo_y = s_fb_h * 2 / 5 - logo_dh / 2;
+    int logo_y = s_fb_h / 2 - logo_dh / 2;
     if (s_logo_pixels) {
         draw_logo(cx, logo_y);
     } else {
         draw_text_simple(cx - 5 * 8 / 2, logo_y, "AEGIS", 0x00FFFFFF);
     }
 
-    /* Fields below logo — horizontal layout: [username] [password] [button] */
+    /* Fields well below logo — horizontal layout: [username] [password] [button] */
     int total_w = FIELD_W + FIELD_GAP + FIELD_W + FIELD_GAP + 100;
     int fx = cx - total_w / 2;
-    int fy = logo_y + logo_dh + 40;
+    int fy = s_fb_h * 3 / 4;  /* 75% down the screen */
 
     /* Lock mode indicator */
     if (s_is_lock) {
@@ -409,13 +409,30 @@ main(void)
     /* Load logo */
     load_logo();
 
-    /* Snapshot current FB (GRUB splash or Bastion's previous frame)
-     * for crossfade into the login form. */
+    /* Snapshot current FB for crossfade into the login form.
+     * On first boot, kernel logs may have flashed on screen — fill with
+     * charcoal so the fade starts from a clean background.
+     * On lock→greeter return, FB has Lumen's last frame (good to fade from). */
     {
         size_t fb_bytes = (size_t)s_pitch_px * s_fb_h * 4;
+        size_t npx = (size_t)s_pitch_px * s_fb_h;
         s_saved_frame = malloc(fb_bytes);
-        if (s_saved_frame)
-            memcpy(s_saved_frame, s_fb, fb_bytes);
+        if (s_saved_frame) {
+            /* Check if FB looks like kernel text mode (mostly black) */
+            int dark_count = 0;
+            for (int i = 0; i < 100 && i < (int)npx; i++)
+                if ((s_fb[i] & 0x00F0F0F0) == 0) dark_count++;
+            if (dark_count > 80) {
+                /* FB is mostly black (kernel logs) — use solid charcoal */
+                for (size_t i = 0; i < npx; i++)
+                    s_saved_frame[i] = 0x00202030;
+            } else {
+                memcpy(s_saved_frame, s_fb, fb_bytes);
+            }
+            /* Also paint the FB charcoal immediately to hide any flash */
+            for (size_t i = 0; i < npx; i++)
+                s_fb[i] = 0x00202030;
+        }
     }
 
     /* Raw keyboard mode */
