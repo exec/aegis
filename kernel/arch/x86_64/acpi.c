@@ -41,6 +41,8 @@ static uint8_t  s_pm1_evt_len = 0;     /* PM1 Event Block length (usually 4) */
 static uint16_t s_slp_typa    = 0;     /* SLP_TYPa value for S5 (from DSDT) */
 static uint16_t s_slp_typb    = 0;     /* SLP_TYPb value for S5 */
 static int      s_acpi_pm_ok  = 0;     /* 1 if power management is ready */
+static uint32_t s_smi_cmd     = 0;     /* SMI Command port (FADT offset 48) */
+static uint8_t  s_acpi_enable = 0;     /* ACPI Enable value (FADT offset 52) */
 
 /* Forward declarations for port I/O (defined below with power button code) */
 static inline void     outw_port(uint16_t port, uint16_t val);
@@ -192,29 +194,14 @@ parse_fadt(uint64_t hdr_phys)
 
     /* FADT fields (32-bit I/O port addresses) */
     s_sci_int     = (uint16_t)phys_read32(hdr_phys + 46);
-    uint32_t smi_cmd      = phys_read32(hdr_phys + 48);
-    uint8_t  acpi_enable  = phys_read8(hdr_phys + 52);
+    s_smi_cmd     = phys_read32(hdr_phys + 48);
+    s_acpi_enable = phys_read8(hdr_phys + 52);
     s_pm1a_evt    = phys_read32(hdr_phys + 56);
     s_pm1b_cnt    = phys_read32(hdr_phys + 68);  /* 0 if absent */
     s_pm1a_cnt    = phys_read32(hdr_phys + 64);
     s_pm1_evt_len = phys_read8(hdr_phys + 88);
-
-    /* Transition from legacy to ACPI mode if not already in ACPI mode.
-     * This tells the firmware/EC that a real OS is running, so the power
-     * button generates an SCI instead of immediately cutting power. */
-    if (smi_cmd != 0 && acpi_enable != 0 && s_pm1a_cnt != 0) {
-        uint16_t pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
-        if (!(pm1_cnt & 1)) {  /* SCI_EN not set → still in legacy mode */
-            outb_port((uint16_t)smi_cmd, acpi_enable);
-            /* Wait for SCI_EN to be set (firmware processes the SMI) */
-            for (int i = 0; i < 1000; i++) {
-                pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
-                if (pm1_cnt & 1) break;
-                /* Small delay — read I/O port as a ~1us stall */
-                (void)inb_port(0x80);
-            }
-        }
-    }
+    /* ACPI mode transition is deferred to acpi_power_button_init() —
+     * must happen AFTER IOAPIC + SCI handler are installed. */
 
     /* DSDT pointer */
     uint64_t dsdt_phys = 0;
@@ -472,6 +459,21 @@ acpi_power_button_init(void)
 {
     if (!s_acpi_pm_ok || s_pm1a_evt == 0)
         return;
+
+    /* Transition from legacy to ACPI mode BEFORE enabling SCI events.
+     * This must happen after IOAPIC is configured (so the SCI IRQ is
+     * routable) but before we unmask the power button event. */
+    if (s_smi_cmd != 0 && s_acpi_enable != 0 && s_pm1a_cnt != 0) {
+        uint16_t pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
+        if (!(pm1_cnt & 1)) {  /* SCI_EN not set → still in legacy mode */
+            outb_port((uint16_t)s_smi_cmd, s_acpi_enable);
+            for (int i = 0; i < 3000; i++) {
+                pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
+                if (pm1_cnt & 1) break;
+                (void)inb_port(0x80);  /* ~1us delay */
+            }
+        }
+    }
 
     uint16_t evt_base = (uint16_t)s_pm1a_evt;
     uint16_t en_off   = (uint16_t)(s_pm1_evt_len / 2);  /* PM1_EN offset */
