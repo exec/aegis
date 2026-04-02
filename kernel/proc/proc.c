@@ -371,114 +371,39 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->task.state       = TASK_RUNNING;
     proc->task.waiting_for = 0;
 
-    /* Grant initial capabilities to this user process.
-     * cap_grant returns the slot index (>= 0) on success or -ENOCAP if the
-     * table is full. With CAP_TABLE_SIZE = 16 and 8 grants, this cannot fail. */
+    /* Grant initial capabilities to PID 1 (vigil/init).
+     * Init is the root of the capability delegation tree — it must hold
+     * FULL rights (READ|WRITE|EXEC = 7) on every cap so it can delegate
+     * any subset downward via exec_caps and capd.  The H5/H6 audit fixes
+     * enforce that a delegator holds at least the rights being granted. */
+#define CAP_RIGHTS_FULL (CAP_RIGHTS_READ | CAP_RIGHTS_WRITE | CAP_RIGHTS_EXEC)
 
-    /* Grant open capability. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_VFS_OPEN, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant VFS_OPEN returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant VFS_OPEN returned -ENOCAP");
+    static const struct { uint32_t kind; const char *name; } init_caps[] = {
+        { CAP_KIND_VFS_OPEN,      "VFS_OPEN" },
+        { CAP_KIND_VFS_WRITE,     "VFS_WRITE" },
+        { CAP_KIND_VFS_READ,      "VFS_READ" },
+        { CAP_KIND_AUTH,          "AUTH" },
+        { CAP_KIND_CAP_GRANT,    "CAP_GRANT" },
+        { CAP_KIND_SETUID,        "SETUID" },
+        { CAP_KIND_NET_SOCKET,    "NET_SOCKET" },
+        { CAP_KIND_NET_ADMIN,     "NET_ADMIN" },
+        { CAP_KIND_PROC_READ,     "PROC_READ" },
+        { CAP_KIND_IPC,           "IPC" },
+        { CAP_KIND_DISK_ADMIN,    "DISK_ADMIN" },
+        { CAP_KIND_FB,            "FB" },
+        { CAP_KIND_THREAD_CREATE, "THREAD_CREATE" },
+        { CAP_KIND_CAP_DELEGATE,  "CAP_DELEGATE" },
+        { CAP_KIND_CAP_QUERY,     "CAP_QUERY" },
+    };
+    for (uint32_t ci = 0; ci < sizeof(init_caps)/sizeof(init_caps[0]); ci++) {
+        if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                      init_caps[ci].kind, CAP_RIGHTS_FULL) < 0) {
+            printk("[CAP] FAIL: cap_grant %s returned -ENOCAP\n",
+                   init_caps[ci].name);
+            panic_halt("[CAP] FAIL: init cap_grant failed");
+        }
     }
-
-    /* Grant write capability. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) < 0) {
-        printk("[CAP] FAIL: cap_grant VFS_WRITE returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant VFS_WRITE returned -ENOCAP");
-    }
-
-    /* Grant read capability. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_VFS_READ, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant VFS_READ returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant VFS_READ returned -ENOCAP");
-    }
-
-    /* Grant auth capability — login needs CAP_KIND_AUTH to open /etc/shadow. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_AUTH, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant AUTH returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant AUTH returned -ENOCAP");
-    }
-
-    /* Grant cap-delegation capability (reserved for future use). */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_CAP_GRANT, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant CAP_GRANT returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant CAP_GRANT returned -ENOCAP");
-    }
-
-    /* Grant setuid capability — login calls sys_setuid/setgid after auth. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) < 0) {
-        printk("[CAP] FAIL: cap_grant SETUID returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant SETUID returned -ENOCAP");
-    }
-
-    /* Grant network socket capability — required for sys_socket. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant NET_SOCKET returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant NET_SOCKET returned -ENOCAP");
-    }
-
-    /* Grant network admin capability — required for sys_netcfg (DHCP daemon). */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_NET_ADMIN, CAP_RIGHTS_WRITE) < 0) {
-        printk("[CAP] FAIL: cap_grant NET_ADMIN returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant NET_ADMIN returned -ENOCAP");
-    }
-
-    /* Grant proc_read capability — reading other processes' /proc. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_PROC_READ, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant PROC_READ returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant PROC_READ returned -ENOCAP");
-    }
-
-    /* Grant IPC capability — AF_UNIX sockets and memfd. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_IPC, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant IPC returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant IPC returned -ENOCAP");
-    }
-
-    /* Grant disk admin capability — capd delegates to installer. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_DISK_ADMIN, CAP_RIGHTS_READ | CAP_RIGHTS_WRITE) < 0) {
-        printk("[CAP] FAIL: cap_grant DISK_ADMIN returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant DISK_ADMIN returned -ENOCAP");
-    }
-
-    /* Grant framebuffer capability — capd delegates to lumen. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_FB, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant FB returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant FB returned -ENOCAP");
-    }
-
-    /* Grant thread creation capability — capd delegates as needed. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant THREAD_CREATE returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant THREAD_CREATE returned -ENOCAP");
-    }
-
-    /* Grant cap delegate capability — capd needs this to call sys_cap_grant. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant CAP_DELEGATE returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant CAP_DELEGATE returned -ENOCAP");
-    }
-
-    /* Grant cap query capability — capd delegates to login->stsh chain. */
-    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ) < 0) {
-        printk("[CAP] FAIL: cap_grant CAP_QUERY returned -ENOCAP\n");
-        panic_halt("[CAP] FAIL: cap_grant CAP_QUERY returned -ENOCAP");
-    }
+#undef CAP_RIGHTS_FULL
 
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
