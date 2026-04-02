@@ -456,3 +456,47 @@ sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot)
 
     return 0;
 }
+
+/* ── sys_memfd_create ─────────────────────────────────────────────────── */
+
+uint64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags)
+{
+    (void)flags;
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)130;  /* ENOCAP */
+
+    char name[32] = {0};
+    if (name_ptr && user_ptr_valid(name_ptr, 1)) {
+        for (int i = 0; i < 31; i++) {
+            uint8_t c;
+            copy_from_user(&c, (const void *)(uintptr_t)(name_ptr + (uint64_t)i), 1);
+            if (!c) break;
+            name[i] = (char)c;
+        }
+    }
+
+    int mid = memfd_alloc(name);
+    if (mid < 0) return (uint64_t)-(int64_t)24;  /* EMFILE */
+
+    int fd = memfd_open_fd((uint32_t)mid, proc);
+    if (fd < 0) {
+        memfd_t *mf = memfd_get((uint32_t)mid);
+        if (mf) { mf->refcount = 0; mf->in_use = 0; }
+        return (uint64_t)-(int64_t)24;
+    }
+    return (uint64_t)fd;
+}
+
+/* ── sys_ftruncate ────────────────────────────────────────────────────── */
+
+uint64_t sys_ftruncate(uint64_t fd_arg, uint64_t length)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    memfd_t *mf = memfd_from_fd((int)fd_arg, proc);
+    if (!mf) return (uint64_t)-(int64_t)22;  /* EINVAL: not a memfd */
+
+    uint32_t mid = (uint32_t)(uintptr_t)proc->fd_table->fds[(int)fd_arg].priv;
+    int rc = memfd_truncate(mid, length);
+    return rc < 0 ? (uint64_t)(int64_t)rc : 0;
+}

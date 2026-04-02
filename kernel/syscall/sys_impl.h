@@ -105,6 +105,12 @@ typedef struct {
 
 #define EXECVE_ARGBUF_PAGES 7   /* ceil(25912 / 4096) */
 
+#define MAX_PROCESSES 64
+
+/* ── Fork count accessors (sys_process.c owns the state) ─────────────── */
+uint32_t proc_fork_count(void);
+void     proc_inc_fork_count(void);
+
 /* ── Path helpers (sys_file.c) ──────────────────────────────────────────── */
 int copy_path_from_user(char *kpath, uint64_t user_ptr, uint32_t bufsz);
 int stat_copy_path(uint64_t user_ptr, char *out, uint32_t bufsz);
@@ -125,23 +131,35 @@ uint64_t sys_mprotect(uint64_t a1, uint64_t a2, uint64_t a3);
 /* ── sys_process.c ──────────────────────────────────────────────────────── */
 uint64_t sys_exit(uint64_t a1);
 uint64_t sys_exit_group(uint64_t a1);
+uint64_t sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
+                   uint64_t ptid, uint64_t ctid, uint64_t tls);
+uint64_t sys_fork(syscall_frame_t *frame);
+uint64_t sys_waitpid(uint64_t a1, uint64_t a2, uint64_t a3);
+
+/* ── sys_exec.c ────────────────────────────────────────────────────────── */
+uint64_t sys_execve(syscall_frame_t *frame,
+                    uint64_t a1, uint64_t a2, uint64_t a3);
+uint64_t sys_spawn(uint64_t path, uint64_t argv, uint64_t envp, uint64_t stdio_fd, uint64_t cap_mask);
+
+/* ── sys_identity.c ────────────────────────────────────────────────────── */
 uint64_t sys_getpid(void);
 uint64_t sys_gettid(void);
 uint64_t sys_getppid(void);
 uint64_t sys_set_tid_address(uint64_t a1);
 uint64_t sys_set_robust_list(uint64_t a1, uint64_t a2);
 uint64_t sys_arch_prctl(uint64_t a1, uint64_t a2);
-uint64_t sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
-                   uint64_t ptid, uint64_t ctid, uint64_t tls);
-uint64_t sys_fork(syscall_frame_t *frame);
-uint64_t sys_waitpid(uint64_t a1, uint64_t a2, uint64_t a3);
-uint64_t sys_execve(syscall_frame_t *frame,
-                    uint64_t a1, uint64_t a2, uint64_t a3);
-uint64_t sys_cap_grant_exec(uint64_t kind, uint64_t rights);
-uint64_t sys_spawn(uint64_t path, uint64_t argv, uint64_t envp, uint64_t stdio_fd, uint64_t cap_mask);
+uint64_t sys_setuid(uint64_t uid_arg);
+uint64_t sys_setgid(uint64_t gid_arg);
+uint64_t sys_getuid(void);
+uint64_t sys_geteuid(void);
+uint64_t sys_getgid(void);
+uint64_t sys_getegid(void);
 uint64_t sys_reboot(uint64_t cmd);
-uint64_t sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen);
+
+/* ── sys_cap.c ─────────────────────────────────────────────────────────── */
+uint64_t sys_cap_grant_exec(uint64_t kind, uint64_t rights);
 uint64_t sys_cap_grant_runtime(uint64_t target_pid, uint64_t kind, uint64_t rights);
+uint64_t sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen);
 
 /* ── sys_file.c ─────────────────────────────────────────────────────────── */
 uint64_t sys_open(uint64_t a1, uint64_t a2, uint64_t a3);
@@ -152,7 +170,6 @@ uint64_t sys_chdir(uint64_t a1);
 uint64_t sys_stat(uint64_t a1, uint64_t a2);
 uint64_t sys_fstat(uint64_t a1, uint64_t a2);
 uint64_t sys_access(uint64_t a1, uint64_t a2);
-uint64_t sys_nanosleep(uint64_t a1, uint64_t a2);
 uint64_t sys_ioctl(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_fcntl(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_lseek(uint64_t a1, uint64_t a2, uint64_t a3);
@@ -162,15 +179,14 @@ uint64_t sys_dup2(uint64_t a1, uint64_t a2);
 uint64_t sys_mkdir(uint64_t a1, uint64_t a2);
 uint64_t sys_unlink(uint64_t a1);
 uint64_t sys_rename(uint64_t a1, uint64_t a2);
-uint64_t sys_getuid(void);
-uint64_t sys_geteuid(void);
-uint64_t sys_getgid(void);
-uint64_t sys_getegid(void);
-uint64_t sys_setuid(uint64_t uid_arg);
-uint64_t sys_setgid(uint64_t gid_arg);
 uint64_t sys_sync(void);
+
+/* ── sys_time.c ────────────────────────────────────────────────────────── */
+uint64_t sys_nanosleep(uint64_t a1, uint64_t a2);
 uint64_t sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr);
 uint64_t sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr);
+
+/* ── sys_file.c (continued: symlink, chmod, chown) ─────────────────────── */
 uint64_t sys_lstat(uint64_t arg1, uint64_t arg2);
 uint64_t sys_symlink(uint64_t arg1, uint64_t arg2);
 uint64_t sys_readlink(uint64_t arg1, uint64_t arg2, uint64_t arg3);
@@ -217,7 +233,7 @@ uint64_t sys_epoll_wait(uint64_t epfd, uint64_t events,
                         uint64_t maxevents, uint64_t timeout_ms);
 uint64_t sys_netcfg(uint64_t op, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
-/* ── Process group / session / resource syscalls (sys_process.c) ─────────── */
+/* ── Process group / session / resource syscalls (sys_identity.c) ───────── */
 uint64_t sys_setpgid(uint64_t pid_arg, uint64_t pgid_arg);
 uint64_t sys_getpgrp(void);
 uint64_t sys_setsid(void);

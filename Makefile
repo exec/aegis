@@ -148,7 +148,8 @@ FS_SRCS = \
     kernel/fs/ext2_dir.c \
     kernel/fs/ramfs.c \
     kernel/fs/procfs.c \
-    kernel/fs/memfd.c
+    kernel/fs/memfd.c \
+    kernel/fs/ext2_vfs.c
 
 TTY_SRCS = \
     kernel/tty/tty.c \
@@ -159,6 +160,10 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_io.c \
     kernel/syscall/sys_memory.c \
     kernel/syscall/sys_process.c \
+    kernel/syscall/sys_exec.c \
+    kernel/syscall/sys_identity.c \
+    kernel/syscall/sys_cap.c \
+    kernel/syscall/sys_time.c \
     kernel/syscall/sys_file.c \
     kernel/syscall/sys_signal.c \
     kernel/syscall/sys_socket.c \
