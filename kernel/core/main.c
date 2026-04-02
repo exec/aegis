@@ -57,17 +57,26 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_init();            /* serial_init + vga_init                        */
     arch_pat_init();        /* PAT MSR: PA1=WC for framebuffer mapping       */
     arch_mm_init(mb_info);  /* parse multiboot2 memory map + cmdline         */
-    /* Parse quiet flag immediately after cmdline is available — before any
-     * subsystem init lines can write to VGA/FB.
-     * This prevents the brief flash of kernel boot messages on the
-     * graphical framebuffer during graphical boot. */
+    /* Parse boot mode + quiet flag from kernel cmdline.
+     * boot=text  → text console, no splash, printk writes to FB normally.
+     * boot=graphical quiet → splash, printk suppressed on FB. */
+    int text_mode = 0;
     {
         const char *cmdline = arch_get_cmdline();
-        const char *q = cmdline;
-        while (*q) {
-            if (q[0]=='q' && q[1]=='u' && q[2]=='i' && q[3]=='e' && q[4]=='t')
-                { printk_set_quiet(1); break; }
-            q++;
+        const char *p = cmdline;
+        while (*p) {
+            if (p[0]=='b' && p[1]=='o' && p[2]=='o' && p[3]=='t' &&
+                p[4]=='=' && p[5]=='t' && p[6]=='e' && p[7]=='x' && p[8]=='t')
+                { text_mode = 1; break; }
+            p++;
+        }
+        if (!text_mode) {
+            p = cmdline;
+            while (*p) {
+                if (p[0]=='q' && p[1]=='u' && p[2]=='i' && p[3]=='e' && p[4]=='t')
+                    { printk_set_quiet(1); break; }
+                p++;
+            }
         }
         if (cmdline[0])
             printk("[CMDLINE] OK: %s\n", cmdline);
@@ -79,7 +88,8 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     kva_init();             /* kernel virtual allocator — [KVA] OK           */
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
     fb_init();              /* linear framebuffer — [FB] OK or silent        */
-    fb_boot_splash();       /* draw logo immediately, no lock                */
+    if (!text_mode)
+        fb_boot_splash();   /* draw logo immediately (graphical boot only)   */
     cap_init();             /* capability stub — [CAP] OK                    */
     smp_percpu_init_bsp();  /* per-CPU data — [SMP] OK                       */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */
