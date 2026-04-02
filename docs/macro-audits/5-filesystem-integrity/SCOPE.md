@@ -10,7 +10,8 @@ The VFS merges three data sources (initrd, ext2, ramfs) with implicit priority.
 | File | LOC | Focus |
 |------|-----|-------|
 | `kernel/fs/ext2.c` | 1177 | Read-write ext2, block cache, symlinks, directories |
-| `kernel/fs/vfs.c` | 590 | VFS dispatch, open order, stat, permission checks |
+| `kernel/fs/vfs.c` | 440 | VFS dispatch, open order, stat, permission checks |
+| `kernel/fs/ext2_vfs.c` | 156 | ext2 VFS adapter: fd pool, read/write/stat callbacks |
 | `kernel/fs/initrd.c` | 567 | Static initrd, synthetic root directory |
 | `kernel/fs/ramfs.c` | 260 | In-memory writable FS for /etc, /root |
 | `kernel/fs/procfs.c` | 807 | /proc virtual filesystem |

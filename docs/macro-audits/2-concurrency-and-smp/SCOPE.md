@@ -21,8 +21,8 @@ to find all synchronization points, then audit each for correctness.
 | `kernel/net/epoll.c` | 239 | Lost-wakeup patterns |
 | `kernel/fs/pipe.c` | 263 | Reader/writer synchronization |
 | `kernel/tty/pty.c` | 521 | Master/slave blocking |
-| `kernel/syscall/sys_socket.c` | 1051 | waiter_task patterns |
-| `kernel/syscall/sys_process.c` | 2059 | fork page copy under locks |
+| `kernel/syscall/sys_socket.c` | 1003 | waiter_task patterns |
+| `kernel/syscall/sys_process.c` | 732 | fork page copy under locks |
 | `kernel/arch/x86_64/idt.c` | — | ISR dispatch, nested interrupt handling |
 
 ## Checklist

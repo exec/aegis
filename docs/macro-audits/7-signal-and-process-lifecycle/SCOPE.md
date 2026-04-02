@@ -10,7 +10,8 @@ capabilities, and memory maps.
 
 | File | LOC | Focus |
 |------|-----|-------|
-| `kernel/syscall/sys_process.c` | 2059 | fork, execve, waitpid, clone, exit_group, spawn |
+| `kernel/syscall/sys_process.c` | 732 | fork, clone, waitpid, exit, exit_group |
+| `kernel/syscall/sys_exec.c` | 986 | execve, spawn |
 | `kernel/syscall/sys_signal.c` | 293 | sigaction, sigprocmask, sigreturn, kill |
 | `kernel/sched/signal.c` | — | Signal delivery, frame setup |
 | `kernel/sched/sched.c` | 572 | Task state transitions, exit cleanup |

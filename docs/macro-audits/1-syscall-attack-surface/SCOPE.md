@@ -9,9 +9,13 @@ This is the #1 source of kernel CVEs in any OS.
 
 | File | LOC | Focus |
 |------|-----|-------|
-| `kernel/syscall/sys_process.c` | 2059 | fork, execve, waitpid, clone, spawn — largest and most complex |
-| `kernel/syscall/sys_file.c` | 1194 | open, read, write, close, stat, lseek, dup, ioctl, getdents |
-| `kernel/syscall/sys_socket.c` | 1051 | socket, bind, listen, accept, connect, send, recv, epoll |
+| `kernel/syscall/sys_process.c` | 732 | fork, clone, waitpid, exit |
+| `kernel/syscall/sys_exec.c` | 986 | execve, spawn |
+| `kernel/syscall/sys_identity.c` | 297 | getpid, setuid, setsid, uname, reboot, getuid/gid |
+| `kernel/syscall/sys_cap.c` | 120 | cap_grant_exec, cap_grant_runtime, cap_query |
+| `kernel/syscall/sys_file.c` | 1150 | open, read, write, close, stat, lseek, dup, ioctl, getdents |
+| `kernel/syscall/sys_time.c` | 95 | nanosleep, clock_gettime, clock_settime |
+| `kernel/syscall/sys_socket.c` | 1003 | socket, bind, listen, accept, connect, send, recv, epoll |
 | `kernel/syscall/sys_memory.c` | 438 | mmap, munmap, mprotect, brk — virtual memory manipulation |
 | `kernel/syscall/sys_signal.c` | 293 | sigaction, sigprocmask, sigreturn, kill |
 | `kernel/syscall/sys_io.c` | 223 | writev, netcfg, fb_map, spawn, reboot |

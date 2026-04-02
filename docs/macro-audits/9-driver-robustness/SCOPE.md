@@ -13,7 +13,8 @@ resource cleanup on failure.
 | `kernel/drivers/xhci.c` | 996 | USB host controller — complex state machine |
 | `kernel/drivers/nvme.c` | 501 | NVMe block device — DMA, completion polling |
 | `kernel/drivers/virtio_net.c` | 505 | Virtio network — ring buffer DMA |
-| `kernel/drivers/fb.c` | 915 | Framebuffer — MMIO mapping |
+| `kernel/drivers/fb.c` | 640 | Framebuffer text driver — MMIO mapping |
+| `kernel/drivers/panic_screen.c` | 275 | Panic bluescreen + boot splash rendering |
 | `kernel/drivers/usb_mouse.c` | — | USB HID mouse — input from untrusted device |
 | `kernel/drivers/ramdisk.c` | 132 | RAM block device |
 

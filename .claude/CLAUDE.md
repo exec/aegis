@@ -63,13 +63,17 @@ kernel/arch/x86_64/   <- ALL x86-specific code. Nowhere else.
 kernel/core/          <- Architecture-agnostic logic only. Must port to ARM64 tomorrow.
 kernel/mm/            <- Memory management (arch-agnostic)
 kernel/cap/           <- Capability subsystem (Rust)
-kernel/fs/            <- VFS and filesystem drivers
-kernel/drivers/       <- Hardware drivers (NVMe, xHCI, virtio-net, RTL8125, etc.)
+kernel/fs/            <- VFS, filesystem drivers (ext2, initrd, ramfs, procfs, pipe, memfd)
+kernel/tty/           <- Terminal line discipline + PTY pairs
+kernel/drivers/       <- Hardware drivers (NVMe, xHCI, virtio-net, fb, etc.)
 kernel/net/           <- Network stack (netdev_t, Ethernet, ARP, IP, TCP, UDP, ICMP)
+kernel/proc/          <- Process creation, ELF loader
 kernel/sched/         <- Scheduler
+kernel/signal/        <- Signal delivery
+kernel/syscall/       <- Syscall dispatch + implementations (split by domain)
 tests/                <- Test harness and expected output
 tools/                <- Build helpers, QEMU wrappers
-docs/                 <- Architecture docs, capability model spec
+docs/                 <- Architecture docs, audit findings, capability model spec
 ```
 
 No x86 register names, port I/O, or MMIO addresses outside `kernel/arch/x86_64/`.
