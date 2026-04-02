@@ -347,6 +347,15 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     /* 6. Allocate child kernel stack (4 pages / 16 KB). */
     uint8_t *kstack = kva_alloc_pages(4);
     if (!kstack) {
+        /* Security: undo all allocations made before this point.
+         * fd_table was ref'd or copied at step 3, vma_share
+         * incremented the parent's vma_refcount at step 5, and
+         * thread_count was bumped at step 12. Leaking any of
+         * these corrupts the parent's bookkeeping permanently. */
+        if (cl & CLONE_THREAD)
+            parent->thread_count--;
+        vma_free(child);
+        fd_table_unref(child->fd_table);
         kva_free_pages(child, 2);
         return (uint64_t)-(int64_t)12;  /* -ENOMEM */
     }
@@ -771,7 +780,14 @@ retry:;
 
                 /* Free zombie resources. */
                 kva_free_pages(child->task.stack_base, child->task.stack_pages);
-                vmm_free_user_pml4(child->pml4_phys);
+
+                /* Security: threads (tgid != pid) share the leader's PML4.
+                 * Freeing it here would destroy the address space of all
+                 * sibling threads still running.  Only free for the group
+                 * leader (tgid == pid) or standalone processes. */
+                if (child->tgid == child->pid) {
+                    vmm_free_user_pml4(child->pml4_phys);
+                }
                 vma_free(child);
                 kva_free_pages(child, 2);
 
