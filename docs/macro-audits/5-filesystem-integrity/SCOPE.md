@@ -15,7 +15,7 @@ The VFS merges three data sources (initrd, ext2, ramfs) with implicit priority.
 | `kernel/fs/ramfs.c` | 260 | In-memory writable FS for /etc, /root |
 | `kernel/fs/procfs.c` | 807 | /proc virtual filesystem |
 | `kernel/fs/pipe.c` | 263 | Pipe ring buffer |
-| `kernel/fs/pty.c` | 521 | PTY master/slave |
+| `kernel/tty/pty.c` | 521 | PTY master/slave |
 | `kernel/fs/gpt.c` | 277 | GPT partition parsing, CRC validation |
 | `kernel/fs/memfd.c` | 245 | memfd_create, ftruncate |
 
