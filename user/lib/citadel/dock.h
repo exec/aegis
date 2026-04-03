@@ -32,5 +32,6 @@ void dock_init(int screen_w, int screen_h);
 void dock_draw(surface_t *fb, int screen_w, int screen_h);
 int dock_hit_test(int mx, int my);   /* returns item index or -1 */
 void dock_set_hover(int item);        /* -1 for no hover */
+void dock_get_rect(int *x, int *y, int *w, int *h);
 
 #endif

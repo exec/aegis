@@ -563,7 +563,9 @@ next_poll:
                     static int prev_dock_hover = -1;
                     if (dock_item != prev_dock_hover) {
                         dock_set_hover(dock_item);
-                        comp.full_redraw = 1;
+                        int dx, dy, dw, dh;
+                        dock_get_rect(&dx, &dy, &dw, &dh);
+                        comp_add_dirty(&comp, (glyph_rect_t){dx, dy, dw, dh});
                         prev_dock_hover = dock_item;
                     }
                 }
@@ -690,7 +692,8 @@ after_mouse:
                              tm->tm_hour, tm->tm_min);
                     if (strcmp(new_clock, s_clock_str) != 0) {
                         memcpy(s_clock_str, new_clock, sizeof(s_clock_str));
-                        comp.full_redraw = 1;
+                        /* Dirty just the topbar region */
+                        comp_add_dirty(&comp, (glyph_rect_t){0, 0, comp.fb.w, 28});
                         activity = 1;
                     }
                 }

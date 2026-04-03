@@ -255,3 +255,12 @@ dock_set_hover(int item)
 {
     s_hover_item = item;
 }
+
+void
+dock_get_rect(int *x, int *y, int *w, int *h)
+{
+    *x = s_dock_x;
+    *y = s_dock_y;
+    *w = s_dock_w;
+    *h = DOCK_HEIGHT;
+}
