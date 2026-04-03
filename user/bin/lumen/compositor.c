@@ -353,6 +353,53 @@ comp_composite(compositor_t *c)
         memcpy(c->fb.buf, c->back.buf,
                (size_t)c->fb.pitch * (size_t)c->fb.h * sizeof(uint32_t));
 
+        /* Build drag snapshot if pending: re-composite without dragged window,
+         * save backbuffer, then restore the full composite to fb. */
+        if (c->drag_snapshot_pending && c->drag_win) {
+            c->drag_snapshot_pending = 0;
+
+            /* Re-render background */
+            if (c->wallpaper.pixels) {
+                if ((int)c->wallpaper.w == c->back.w &&
+                    (int)c->wallpaper.h == c->back.h) {
+                    for (int y = 0; y < c->back.h; y++)
+                        memcpy(&c->back.buf[y * c->back.pitch],
+                               &c->wallpaper.pixels[y * c->back.w],
+                               (size_t)c->back.w * sizeof(uint32_t));
+                } else {
+                    draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
+                                     c->wallpaper.pixels,
+                                     (int)c->wallpaper.w, (int)c->wallpaper.h);
+                }
+            } else {
+                draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
+            }
+            if (c->on_draw_desktop)
+                c->on_draw_desktop(&c->back, c->back.w, c->back.h);
+
+            /* Render all windows EXCEPT the dragged one */
+            for (int i = 0; i < c->nwindows; i++) {
+                glyph_window_t *w2 = c->windows[i];
+                if (!w2->visible || w2 == c->drag_win)
+                    continue;
+                glyph_window_mark_all_dirty(w2);
+                glyph_window_render(w2);
+                blit_window_to_back(&c->back, w2, BLIT_FROST);
+            }
+            if (c->on_draw_overlay)
+                c->on_draw_overlay(&c->back, c->back.w, c->back.h);
+
+            /* Save as snapshot */
+            size_t sz = (size_t)c->back.pitch * (size_t)c->back.h * sizeof(uint32_t);
+            if (!c->drag_snapshot)
+                c->drag_snapshot = malloc(sz);
+            if (c->drag_snapshot)
+                memcpy(c->drag_snapshot, c->back.buf, sz);
+
+            /* Restore the full composite (with dragged window) to backbuffer */
+            memcpy(c->back.buf, c->fb.buf, sz);
+        }
+
         c->full_redraw = 0;
         c->ndirty = 0;
         c->bg_rendered = 1;
@@ -631,21 +678,13 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
                         glyph_window_mark_all_dirty(c->windows[i]);
                 }
 
-                /* Snapshot: do a full composite without the dragged window,
-                 * then save the backbuffer. This gives us a clean background
-                 * to restore from during drag moves. */
-                {
-                    int save_vis = win->visible;
-                    win->visible = 0;  /* hide from composite */
-                    c->full_redraw = 1;
-                    comp_composite(c);  /* renders everything except dragged win */
-                    win->visible = save_vis;
-
-                    size_t sz = (size_t)c->back.pitch * (size_t)c->back.h * sizeof(uint32_t);
-                    c->drag_snapshot = malloc(sz);
-                    if (c->drag_snapshot)
-                        memcpy(c->drag_snapshot, c->back.buf, sz);
-                }
+                /* Snapshot: on the next comp_composite, do a full redraw
+                 * (which shows the raised/focused state), then build a
+                 * snapshot without the dragged window for restore. */
+                c->full_redraw = 1;
+                c->drag_snapshot_pending = 1;
+                for (int i = 0; i < c->nwindows; i++)
+                    glyph_window_mark_all_dirty(c->windows[i]);
 
                 c->prev_buttons = buttons;
                 return;
