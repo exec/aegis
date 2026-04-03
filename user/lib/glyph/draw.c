@@ -347,11 +347,17 @@ void draw_box_blur(surface_t *s, int x, int y, int w, int h, int radius)
 
     int span = 2 * radius + 1;
 
-    /* Scratch buffer for one channel row/column — max of w or h */
+    /* Persistent scratch buffer — reused across calls to avoid
+     * malloc/free per blur (called for topbar + dock + every frosted window). */
+    static uint16_t *tmp = NULL;
+    static int tmp_cap = 0;
     int scratch_len = w > h ? w : h;
-    uint16_t *tmp = (uint16_t *)malloc((size_t)scratch_len * sizeof(uint16_t));
-    if (!tmp)
-        return;
+    if (scratch_len > tmp_cap) {
+        free(tmp);
+        tmp = (uint16_t *)malloc((size_t)scratch_len * sizeof(uint16_t));
+        if (!tmp) { tmp_cap = 0; return; }
+        tmp_cap = scratch_len;
+    }
 
     /* Horizontal pass — blur each row */
     for (int row = y; row < y + h; row++) {
@@ -423,7 +429,7 @@ void draw_box_blur(surface_t *s, int x, int y, int w, int h, int radius)
         }
     }
 
-    free(tmp);
+    /* tmp is retained for next call */
 }
 
 void draw_blit_keyed(surface_t *dst, int dx, int dy,
