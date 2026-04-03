@@ -145,7 +145,6 @@ uint64_t sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen);
 /* ── sys_file.c ─────────────────────────────────────────────────────────── */
 uint64_t sys_open(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_openat(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
-uint64_t sys_getdents64(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_getcwd(uint64_t a1, uint64_t a2);
 uint64_t sys_chdir(uint64_t a1);
 uint64_t sys_stat(uint64_t a1, uint64_t a2);
@@ -157,9 +156,6 @@ uint64_t sys_lseek(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_pipe2(uint64_t a1, uint64_t a2);
 uint64_t sys_dup(uint64_t a1);
 uint64_t sys_dup2(uint64_t a1, uint64_t a2);
-uint64_t sys_mkdir(uint64_t a1, uint64_t a2);
-uint64_t sys_unlink(uint64_t a1);
-uint64_t sys_rename(uint64_t a1, uint64_t a2);
 uint64_t sys_sync(void);
 
 /* ── sys_time.c ────────────────────────────────────────────────────────── */
@@ -167,7 +163,13 @@ uint64_t sys_nanosleep(uint64_t a1, uint64_t a2);
 uint64_t sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr);
 uint64_t sys_clock_settime(uint64_t clk_id, uint64_t timespec_uptr);
 
-/* ── sys_file.c (continued: symlink, chmod, chown) ─────────────────────── */
+/* ── sys_dir.c ─────────────────────────────────────────────────────────── */
+uint64_t sys_getdents64(uint64_t a1, uint64_t a2, uint64_t a3);
+uint64_t sys_mkdir(uint64_t a1, uint64_t a2);
+uint64_t sys_unlink(uint64_t a1);
+uint64_t sys_rename(uint64_t a1, uint64_t a2);
+
+/* ── sys_meta.c ────────────────────────────────────────────────────────── */
 uint64_t sys_lstat(uint64_t arg1, uint64_t arg2);
 uint64_t sys_symlink(uint64_t arg1, uint64_t arg2);
 uint64_t sys_readlink(uint64_t arg1, uint64_t arg2, uint64_t arg3);
