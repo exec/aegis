@@ -488,6 +488,12 @@ static int setup_user(void)
 
 int main(void)
 {
+    /* Restore cooked mode — stsh leaves the terminal in raw mode */
+    struct termios cooked;
+    tcgetattr(0, &cooked);
+    cooked.c_lflag |= (unsigned)(ECHO | ICANON | ISIG);
+    tcsetattr(0, TCSANOW, &cooked);
+
     printf("\n=== Aegis Installer ===\n\n");
     printf("This will install Aegis to your NVMe disk.\n");
     printf("WARNING: All data on the disk will be destroyed!\n\n");
