@@ -353,73 +353,83 @@ comp_composite(compositor_t *c)
     if (c->ndirty == 0)
         return 0;
 
-    /* Union all dirty rects into one bounding rect for simplicity in v0.1 */
-    glyph_rect_t combined = c->dirty_rects[0];
-    for (int i = 1; i < c->ndirty; i++)
-        combined = glyph_rect_union(combined, c->dirty_rects[i]);
+    /* Process each dirty rect individually instead of unioning into one
+     * giant bounding box. This avoids redrawing the entire horizontal
+     * span between two small dirty regions on opposite sides. */
+    int saved_ndirty = c->ndirty;
+    glyph_rect_t saved_rects[MAX_DIRTY_RECTS];
+    for (int i = 0; i < saved_ndirty; i++)
+        saved_rects[i] = c->dirty_rects[i];
 
-    /* Redraw background in dirty region */
-    if (c->wallpaper.pixels) {
-        if ((int)c->wallpaper.w == c->back.w &&
-            (int)c->wallpaper.h == c->back.h) {
-            /* Exact match — copy only the dirty region rows */
-            int dy0 = combined.y < 0 ? 0 : combined.y;
-            int dy1 = combined.y + combined.h;
-            if (dy1 > c->back.h) dy1 = c->back.h;
-            int x0 = combined.x < 0 ? 0 : combined.x;
-            int x1 = combined.x + combined.w;
-            if (x1 > c->back.w) x1 = c->back.w;
-            int count = x1 - x0;
-            if (count > 0) {
-                for (int y = dy0; y < dy1; y++)
-                    memcpy(&c->back.buf[y * c->back.pitch + x0],
-                           &c->wallpaper.pixels[y * c->back.w + x0],
-                           (unsigned)count * sizeof(uint32_t));
+    for (int ri = 0; ri < saved_ndirty; ri++) {
+        glyph_rect_t dr = saved_rects[ri];
+
+        /* Redraw background in this dirty rect */
+        if (c->wallpaper.pixels) {
+            if ((int)c->wallpaper.w == c->back.w &&
+                (int)c->wallpaper.h == c->back.h) {
+                int dy0 = dr.y < 0 ? 0 : dr.y;
+                int dy1 = dr.y + dr.h;
+                if (dy1 > c->back.h) dy1 = c->back.h;
+                int x0 = dr.x < 0 ? 0 : dr.x;
+                int x1 = dr.x + dr.w;
+                if (x1 > c->back.w) x1 = c->back.w;
+                int count = x1 - x0;
+                if (count > 0) {
+                    for (int y = dy0; y < dy1; y++)
+                        memcpy(&c->back.buf[y * c->back.pitch + x0],
+                               &c->wallpaper.pixels[y * c->back.w + x0],
+                               (unsigned)count * sizeof(uint32_t));
+                }
+            } else {
+                draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
+                                 c->wallpaper.pixels,
+                                 (int)c->wallpaper.w, (int)c->wallpaper.h);
             }
         } else {
-            /* Scaled wallpaper — expensive, but correct */
-            draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
-                             c->wallpaper.pixels,
-                             (int)c->wallpaper.w, (int)c->wallpaper.h);
+            int dy0 = dr.y < 0 ? 0 : dr.y;
+            int dy1 = dr.y + dr.h;
+            if (dy1 > c->back.h) dy1 = c->back.h;
+            int x0 = dr.x < 0 ? 0 : dr.x;
+            int x1 = dr.x + dr.w;
+            if (x1 > c->back.w) x1 = c->back.w;
+            for (int y = dy0; y < dy1; y++)
+                for (int x = x0; x < x1; x++)
+                    c->back.buf[y * c->back.pitch + x] = C_BG1;
         }
-    } else {
-        int dy0 = combined.y < 0 ? 0 : combined.y;
-        int dy1 = combined.y + combined.h;
-        if (dy1 > c->back.h) dy1 = c->back.h;
-        int x0 = combined.x < 0 ? 0 : combined.x;
-        int x1 = combined.x + combined.w;
-        if (x1 > c->back.w) x1 = c->back.w;
-        for (int y = dy0; y < dy1; y++)
-            for (int x = x0; x < x1; x++)
-                c->back.buf[y * c->back.pitch + x] = C_BG1;
     }
 
-    /* Desktop decorations (redraw into dirty region) */
+    /* Desktop decorations (once — not per-rect) */
     if (c->on_draw_desktop)
         c->on_draw_desktop(&c->back, c->back.w, c->back.h);
 
-    /* Render dirty windows and blit to backbuffer */
+    /* Render windows that overlap ANY dirty rect */
     for (int i = 0; i < c->nwindows; i++) {
         glyph_window_t *win = c->windows[i];
         if (!win->visible)
             continue;
-
-        /* Check if window overlaps dirty region */
         glyph_rect_t wr = win_screen_rect(win);
-        if (!glyph_rect_intersects(wr, combined))
+        int dominated = 0;
+        for (int ri = 0; ri < saved_ndirty; ri++) {
+            if (glyph_rect_intersects(wr, saved_rects[ri])) {
+                dominated = 1;
+                break;
+            }
+        }
+        if (!dominated)
             continue;
-
         glyph_window_render(win);
         int opaque = (c->dragging && win == c->drag_win);
         blit_window_to_back(&c->back, win, opaque);
     }
 
-    /* Overlay (frosted glass dock etc.) -- after windows, before flip */
+    /* Overlay (frosted glass dock etc.) — once, after windows */
     if (c->on_draw_overlay)
         c->on_draw_overlay(&c->back, c->back.w, c->back.h);
 
-    /* Partial flip */
-    partial_flip(&c->fb, &c->back, combined);
+    /* Partial flip — per dirty rect */
+    for (int ri = 0; ri < saved_ndirty; ri++)
+        partial_flip(&c->fb, &c->back, saved_rects[ri]);
 
     c->ndirty = 0;
     return 1;
