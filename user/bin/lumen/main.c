@@ -712,8 +712,15 @@ after_mouse:
                 activity = 1;
         }
 
-        /* Clock update — roughly once per second (60 frames) */
+        /* Cursor blink — toggle every ~30 frames (~500ms).
+         * Mark focused terminal window dirty to trigger re-render. */
         clock_counter++;
+        if ((clock_counter % 30) == 0 && comp.focused && comp.focused->priv) {
+            glyph_window_mark_all_dirty(comp.focused);
+            activity = 1;
+        }
+
+        /* Clock update — roughly once per second (60 frames) */
         if (clock_counter >= 60) {
             clock_counter = 0;
             struct timespec ts;

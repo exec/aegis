@@ -518,10 +518,44 @@ _fb_dispatch_csi(char cmd)
     /* Other sequences are silently ignored. */
 }
 
+/* Software text cursor — underline bar at current position */
+static int s_cursor_drawn;
+
+static void
+_fb_draw_cursor(void)
+{
+    if (s_cursor_drawn || s_fb_locked) return;
+    uint32_t base = s_row * 16u * s_pitch_px + s_col * 8u;
+    /* Draw underline on last 2 scanlines of the cell */
+    for (uint32_t y = 14; y < 16; y++)
+        for (uint32_t x = 0; x < 8; x++) {
+            uint32_t idx = base + y * s_pitch_px + x;
+            if (s_shadow) s_shadow[idx] = FB_FG;
+            s_fb_va[idx] = FB_FG;
+        }
+    s_cursor_drawn = 1;
+}
+
+static void
+_fb_erase_cursor(void)
+{
+    if (!s_cursor_drawn) return;
+    /* Redraw the character cell at cursor position to erase the underline */
+    uint32_t base = s_row * 16u * s_pitch_px + s_col * 8u;
+    for (uint32_t y = 14; y < 16; y++)
+        for (uint32_t x = 0; x < 8; x++) {
+            uint32_t idx = base + y * s_pitch_px + x;
+            if (s_shadow) s_shadow[idx] = FB_BG;
+            s_fb_va[idx] = FB_BG;
+        }
+    s_cursor_drawn = 0;
+}
+
 void
 fb_putchar(char c)
 {
     if (!fb_available || s_fb_locked) return;
+    _fb_erase_cursor();
 
     /* ANSI CSI state machine */
     if (s_esc_state == 1) {
@@ -570,6 +604,7 @@ fb_putchar(char c)
 
     if (s_row >= s_rows)
         _fb_scroll();
+    _fb_draw_cursor();
 }
 
 void

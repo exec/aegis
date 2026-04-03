@@ -185,6 +185,12 @@ vga_init(void)
     s_row = 0;
     vga_available = 1;
 
+    /* Enable hardware text cursor — underline style (scanlines 13-15).
+     * GRUB may have disabled it; re-enable via CRTC registers 0x0A/0x0B. */
+    outb(0x3D4, 0x0A); outb(0x3D5, 0x0D);  /* cursor start scanline 13 */
+    outb(0x3D4, 0x0B); outb(0x3D5, 0x0F);  /* cursor end scanline 15 */
+    vga_set_cursor(0, 0);
+
     /* Print directly — printk is not yet up at this point */
     vga_write_string("[VGA] OK: text mode 80x25\n");
     serial_write_string("[VGA] OK: text mode 80x25\n");

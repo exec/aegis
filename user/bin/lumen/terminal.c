@@ -205,10 +205,15 @@ static void render_term_grid(glyph_window_t *win)
         }
     }
 
-    /* Cursor block (only when viewing bottom) */
-    if (tp->master_fd >= 0 && tp->scroll_offset == 0)
-        draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
-                       cw, ch, C_TERM_FG);
+    /* Blinking cursor block (only when viewing bottom).
+     * Blink phase toggles every ~30 frames (~500ms at 60fps). */
+    if (tp->master_fd >= 0 && tp->scroll_offset == 0) {
+        static int blink_counter;
+        int phase = (blink_counter++ / 30) & 1;
+        if (!phase)
+            draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
+                           cw, ch, C_TERM_FG);
+    }
 
     /* Scrollbar — only visible when scrolled back or has scrollback content */
     if (tp->scroll_offset > 0 || tp->sb_dragging) {
