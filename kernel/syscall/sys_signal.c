@@ -243,10 +243,12 @@ sys_kill(uint64_t arg1, uint64_t arg2)
                   CAP_KIND_PROC_READ, CAP_RIGHTS_WRITE) < 0)
         return (uint64_t)-(int64_t)1;  /* EPERM */
 
-    /* S14: Prevent unprivileged processes from killing init (PID 1).
-     * Only vigil (PID 1 itself) can signal PID 1. */
-    if (pid == 1) {
-        if (cur->pid != 1)
+    /* S14: Signaling init (PID 1) requires CAP_KIND_POWER.
+     * This allows the compositor's Power Off button to work while
+     * preventing unprivileged processes from killing init. */
+    if (pid == 1 && cur->pid != 1) {
+        if (cap_check(cur->caps, CAP_TABLE_SIZE,
+                      CAP_KIND_POWER, CAP_RIGHTS_READ) < 0)
             return (uint64_t)-(int64_t)1;  /* EPERM */
     }
 

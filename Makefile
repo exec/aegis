@@ -656,7 +656,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/
 	printf 'service NET_SOCKET\n' > /tmp/aegis-cap-httpd
 	printf 'service NET_SOCKET NET_ADMIN\n' > /tmp/aegis-cap-dhcp
 	printf 'admin DISK_ADMIN POWER CAP_DELEGATE CAP_QUERY\nadmin PROC_READ\n' > /tmp/aegis-cap-stsh
-	printf 'service FB THREAD_CREATE PROC_READ\n' > /tmp/aegis-cap-lumen
+	printf 'service FB THREAD_CREATE PROC_READ POWER\n' > /tmp/aegis-cap-lumen
 	printf 'admin DISK_ADMIN\n' > /tmp/aegis-cap-installer
 	printf 'service POWER\n' > /tmp/aegis-cap-vigil
 	printf 'write /tmp/aegis-cap-login /etc/aegis/caps.d/login\nwrite /tmp/aegis-cap-bastion /etc/aegis/caps.d/bastion\nwrite /tmp/aegis-cap-httpd /etc/aegis/caps.d/httpd\nwrite /tmp/aegis-cap-dhcp /etc/aegis/caps.d/dhcp\nwrite /tmp/aegis-cap-stsh /etc/aegis/caps.d/stsh\nwrite /tmp/aegis-cap-lumen /etc/aegis/caps.d/lumen\nwrite /tmp/aegis-cap-installer /etc/aegis/caps.d/installer\nwrite /tmp/aegis-cap-vigil /etc/aegis/caps.d/vigil\n' \
