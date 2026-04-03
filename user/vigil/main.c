@@ -3,6 +3,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
@@ -319,6 +320,8 @@ main(void)
 
     shutdown_all();
     sync();
-    vigil_log("halted");
-    return 0;
+    vigil_log("powering off");
+    syscall(169, 0L);  /* sys_reboot(0) = ACPI S5 power off */
+    /* Should not return */
+    for (;;) pause();
 }

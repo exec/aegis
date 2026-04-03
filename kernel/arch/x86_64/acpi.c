@@ -6,6 +6,7 @@
  */
 #include "acpi.h"
 #include "arch.h"
+#include "signal.h"
 #include "printk.h"
 #include "vmm.h"
 #include "kva.h"
@@ -545,10 +546,10 @@ acpi_sci_handler(void)
     uint16_t en  = inw_port(evt_base + en_off);
 
     if ((sts & 0x0100) && (en & 0x0100)) {
-        /* Power button pressed — initiate shutdown */
+        /* Power button pressed — signal init for graceful shutdown */
         outw_port(evt_base, 0x0100);  /* clear PWRBTN_STS */
-        printk("[ACPI] power button pressed\n");
-        acpi_do_poweroff();
+        printk("[ACPI] power button pressed — sending SIGTERM to init\n");
+        signal_send_pid(1, 15);  /* SIGTERM to PID 1 (vigil) */
     }
     /* Not a power button event — spurious or other ACPI event, ignore */
 }
