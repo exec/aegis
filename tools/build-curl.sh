@@ -50,11 +50,11 @@ cd "$BUILD_DIR"
 make -j$(nproc) LDFLAGS="-static -no-pie -L$BEARSSL_INSTALL/lib -L$BEARSSL_INSTALL/lib64" V=1 2>&1 | tail -5
 
 # Libtool often ignores -static. Force a static relink if needed.
-if file src/curl | grep -q "dynamically linked"; then
-    echo "[curl] libtool produced dynamic binary, relinking statically..."
+if [ ! -f src/curl ] || file src/curl | grep -q "dynamically linked"; then
+    echo "[curl] relinking statically..."
     musl-gcc -static -no-pie -O2 -fno-pie -o src/curl \
-        src/curl-tool_main.o src/.libs/libcurltool.a lib/.libs/libcurl.a \
-        -L"$BEARSSL_INSTALL/lib" -L"$BEARSSL_INSTALL/lib64" -lbearssl
+        src/curl-*.o lib/curl-*.o \
+        -Wl,--start-group lib/.libs/libcurl.a -L"$BEARSSL_INSTALL/lib" -L"$BEARSSL_INSTALL/lib64" -lbearssl -Wl,--end-group
 fi
 
 cp src/curl "$OUT/curl"

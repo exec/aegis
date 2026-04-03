@@ -1,0 +1,55 @@
+# Aegis rootfs manifest — single source of truth for disk contents
+#
+# Format: SOURCE DEST
+# - Lines starting with # are comments, blank lines ignored
+# - Parent directories are created automatically
+# - Everything under /bin and /lib gets mode 0100755
+# - Everything else keeps default mode (0644)
+
+# Dynamic linker (two copies — ext2 symlinks work but debugfs is flaky)
+build/musl-dynamic/usr/lib/libc.so  /lib/libc.so
+build/musl-dynamic/usr/lib/libc.so  /lib/ld-musl-x86_64.so.1
+
+# Core system binaries
+user/bin/shell/shell.elf        /bin/sh
+user/bin/login/login.elf        /bin/login
+user/bin/vigil/vigil            /bin/vigil
+user/bin/vigictl/vigictl        /bin/vigictl
+user/bin/bastion/bastion.elf    /bin/bastion
+user/bin/lumen/lumen.elf        /bin/lumen
+user/bin/stsh/stsh.elf          /bin/stsh
+user/bin/installer/installer.elf /bin/installer
+
+# Coreutils
+user/bin/ls/ls.elf              /bin/ls
+user/bin/cat/cat.elf            /bin/cat
+user/bin/echo/echo.elf          /bin/echo
+user/bin/pwd/pwd.elf            /bin/pwd
+user/bin/uname/uname.elf        /bin/uname
+user/bin/clear/clear.elf        /bin/clear
+user/bin/true/true.elf          /bin/true
+user/bin/false/false.elf        /bin/false
+user/bin/wc/wc.elf              /bin/wc
+user/bin/grep/grep.elf          /bin/grep
+user/bin/sort/sort.elf          /bin/sort
+user/bin/mv/mv.elf              /bin/mv
+user/bin/cp/cp.elf              /bin/cp
+user/bin/rm/rm.elf              /bin/rm
+user/bin/mkdir/mkdir.elf        /bin/mkdir
+user/bin/touch/touch.elf        /bin/touch
+user/bin/whoami/whoami.elf      /bin/whoami
+user/bin/ln/ln.elf              /bin/ln
+user/bin/chmod/chmod.elf        /bin/chmod
+user/bin/chown/chown.elf        /bin/chown
+user/bin/readlink/readlink.elf  /bin/readlink
+
+# Network / services
+user/bin/httpd/httpd.elf        /bin/httpd
+user/bin/dhcp/dhcp              /bin/dhcp
+user/bin/chronos/chronos        /bin/chronos
+build/curl/curl                 /bin/curl
+tools/cacert.pem                /etc/ssl/certs/ca-certificates.crt
+
+# System control
+user/bin/shutdown/shutdown.elf  /bin/shutdown
+user/bin/reboot/reboot.elf      /bin/reboot
