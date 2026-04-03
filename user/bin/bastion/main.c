@@ -22,6 +22,7 @@
 #include <sys/syscall.h>
 
 #include <glyph.h>
+#include "font.h"
 #include "auth.h"
 
 extern char **environ;
@@ -90,58 +91,38 @@ load_logo(void)
 
 /* ---- Drawing helpers ------------------------------------------------- */
 
+static surface_t s_surf; /* wraps s_backbuf for Glyph drawing */
+
 static void
 fill_bg(void)
 {
-    for (int y = 0; y < s_fb_h; y++)
-        for (int x = 0; x < s_fb_w; x++)
-            s_backbuf[y * s_pitch_px + x] = 0xFF1A1A2E;
+    draw_fill_rect(&s_surf, 0, 0, s_fb_w, s_fb_h, 0x00202030);
 }
 
 static void
 blit_to_fb(void)
 {
-    for (int y = 0; y < s_fb_h; y++)
-        memcpy(s_fb + y * s_pitch_px, s_backbuf + y * s_pitch_px,
-               (size_t)s_fb_w * 4);
+    memcpy(s_fb, s_backbuf, (size_t)s_pitch_px * s_fb_h * 4);
 }
 
 static void
 draw_logo(int cx, int y)
 {
     if (!s_logo_pixels) return;
-    /* Draw at 50% scale */
     int dw = s_logo_w / 2;
     int dh = s_logo_h / 2;
     int x0 = cx - dw / 2;
-    for (int dy_off = 0; dy_off < dh; dy_off++) {
-        int dy = y + dy_off;
-        if (dy < 0 || dy >= s_fb_h) continue;
-        int ly = dy_off * 2;  /* nearest-neighbor sample */
-        for (int dx_off = 0; dx_off < dw; dx_off++) {
-            int dx = x0 + dx_off;
-            if (dx < 0 || dx >= s_fb_w) continue;
-            int lx = dx_off * 2;
-            uint32_t px = s_logo_pixels[ly * s_logo_w + lx];
-            uint32_t a = (px >> 24) & 0xFF;
-            if (a == 0xFF) {
-                s_backbuf[dy * s_pitch_px + dx] = px;
-            } else if (a > 0) {
-                uint32_t bg = s_backbuf[dy * s_pitch_px + dx];
-                uint32_t rb = (((px & 0xFF00FF) * a + (bg & 0xFF00FF) * (255-a)) >> 8) & 0xFF00FF;
-                uint32_t g  = (((px & 0x00FF00) * a + (bg & 0x00FF00) * (255-a)) >> 8) & 0x00FF00;
-                s_backbuf[dy * s_pitch_px + dx] = 0xFF000000 | rb | g;
-            }
-        }
-    }
+    draw_blit_scaled(&s_surf, x0, y, dw, dh,
+                     s_logo_pixels, s_logo_w, s_logo_h);
 }
 
 static void
 draw_text_simple(int x, int y, const char *text, uint32_t color)
 {
-    /* Minimal 8x16 text — use Glyph's bitmap font via surface */
-    surface_t s = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
-    draw_text_t(&s, x, y, text, color);
+    if (g_font_ui)
+        font_draw_text(&s_surf, g_font_ui, 14, x, y, text, color);
+    else
+        draw_text_t(&s_surf, x, y, text, color);
 }
 
 /* ---- Crossfade helper ------------------------------------------------ */
@@ -186,16 +167,18 @@ static int  s_focus; /* 0=username, 1=password, 2=button */
 static char s_error[128];
 static int  s_is_lock; /* 1 = lock screen mode */
 
+static int s_form_dirty = 1; /* 1 = needs redraw */
+
 static void
 draw_form(void)
 {
-    /* Charcoal background + own logo rendering */
-    for (int y = 0; y < s_fb_h; y++)
-        for (int x = 0; x < s_fb_w; x++)
-            s_backbuf[y * s_pitch_px + x] = 0x00202030;
+    if (!s_form_dirty) return;
+    s_form_dirty = 0;
+
+    fill_bg();
 
     int cx = s_fb_w / 2;
-    surface_t surf = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
+    surface_t *surf = &s_surf;
 
     /* Logo centered — middle of logo at middle of screen.
      * draw_logo renders at 50% scale (dh = s_logo_h/2), so use that
@@ -223,9 +206,9 @@ draw_form(void)
     }
 
     /* Username field */
-    draw_fill_rect(&surf, fx, fy, FIELD_W, FIELD_H, 0x002A2A3E);
+    draw_fill_rect(surf, fx, fy, FIELD_W, FIELD_H, 0x002A2A3E);
     if (s_focus == 0)
-        draw_rect(&surf, fx, fy, FIELD_W, FIELD_H, 0x004488CC);
+        draw_rect(surf, fx, fy, FIELD_W, FIELD_H, 0x004488CC);
     if (s_user_len > 0)
         draw_text_simple(fx + 8, fy + 8, s_user_buf, 0x00FFFFFF);
     else if (s_focus != 0)
@@ -233,9 +216,9 @@ draw_form(void)
     int ux = fx + FIELD_W + FIELD_GAP;
 
     /* Password field */
-    draw_fill_rect(&surf, ux, fy, FIELD_W, FIELD_H, 0x002A2A3E);
+    draw_fill_rect(surf, ux, fy, FIELD_W, FIELD_H, 0x002A2A3E);
     if (s_focus == 1)
-        draw_rect(&surf, ux, fy, FIELD_W, FIELD_H, 0x004488CC);
+        draw_rect(surf, ux, fy, FIELD_W, FIELD_H, 0x004488CC);
     if (s_pass_len > 0) {
         char stars[128];
         int i;
@@ -249,7 +232,7 @@ draw_form(void)
 
     /* Login/Unlock button */
     uint32_t btn_color = (s_focus == 2) ? 0x005577DD : 0x003A4A6A;
-    draw_fill_rect(&surf, bx, fy, 100, FIELD_H, btn_color);
+    draw_fill_rect(surf, bx, fy, 100, FIELD_H, btn_color);
     const char *btn_text = s_is_lock ? "Unlock" : "Login";
     int btn_tw = (int)strlen(btn_text) * 8;
     draw_text_simple(bx + 50 - btn_tw / 2, fy + 8, btn_text, 0x00FFFFFF);
@@ -268,23 +251,20 @@ draw_form(void)
 static void
 handle_key(char c)
 {
+    s_form_dirty = 1;
+
     if (c == '\t') {
-        /* Cycle focus: username -> password -> button -> username */
         s_focus = (s_focus + 1) % 3;
-        /* Skip username in lock mode */
         if (s_is_lock && s_focus == 0) s_focus = 1;
         return;
     }
 
     if (c == '\n' || c == '\r') {
-        /* Submit */
-        s_focus = 2; /* highlight button */
-        return; /* caller checks for enter */
+        s_focus = 2;
+        return;
     }
 
-    /* Typing into focused field */
     if (s_focus == 0 && !s_is_lock) {
-        /* Username field */
         if (c == '\x7f' || c == '\b') {
             if (s_user_len > 0) s_user_buf[--s_user_len] = '\0';
         } else if (c >= ' ' && s_user_len < 62) {
@@ -292,7 +272,6 @@ handle_key(char c)
             s_user_buf[s_user_len] = '\0';
         }
     } else if (s_focus == 1) {
-        /* Password field */
         if (c == '\x7f' || c == '\b') {
             if (s_pass_len > 0) s_pass_buf[--s_pass_len] = '\0';
         } else if (c >= ' ' && s_pass_len < 126) {
@@ -414,16 +393,15 @@ main(void)
         dprintf(2, "bastion: backbuffer alloc failed\n");
         return 1;
     }
+    s_surf = (surface_t){ .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
 
-    /* Load logo */
+    /* Load logo + fonts */
     load_logo();
+    font_init();
 
     /* Paint FB charcoal immediately to hide any kernel log remnants */
-    {
-        size_t npx = (size_t)s_pitch_px * s_fb_h;
-        for (size_t i = 0; i < npx; i++)
-            s_fb[i] = 0x00202030;
-    }
+    fill_bg();
+    blit_to_fb();
 
     /* Raw keyboard mode */
     struct termios t_orig;
@@ -468,12 +446,14 @@ greeter:
                     s_lumen_pid = spawn_lumen();
                     if (s_lumen_pid <= 0) {
                         snprintf(s_error, sizeof(s_error), "Failed to start session");
+                        s_form_dirty = 1;
                         continue;
                     }
                     goto session;
                 } else {
                     snprintf(s_error, sizeof(s_error), "Invalid credentials");
                     s_pass_buf[0] = '\0'; s_pass_len = 0;
+                    s_form_dirty = 1;
                 }
             } else {
                 handle_key(c);
@@ -528,6 +508,7 @@ session:
                             } else {
                                 snprintf(s_error, sizeof(s_error), "Invalid credentials");
                                 s_pass_buf[0] = '\0'; s_pass_len = 0;
+                                s_form_dirty = 1;
                             }
                         } else {
                             handle_key(c);
