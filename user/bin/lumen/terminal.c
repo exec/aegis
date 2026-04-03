@@ -108,16 +108,10 @@ sel_normalize(term_priv_t *tp, int *sr, int *sc, int *er, int *ec)
     }
 }
 
-/* Check if a cell (r, c) is within the selection range */
-static int
-cell_selected(term_priv_t *tp, int r, int c)
+/* Check if a cell (r, c) is within a pre-normalized selection range */
+static inline int
+cell_in_sel(int r, int c, int sr, int sc, int er, int ec)
 {
-    if (!tp->sel_active)
-        return 0;
-
-    int sr, sc, er, ec;
-    sel_normalize(tp, &sr, &sc, &er, &ec);
-
     if (r < sr || r > er)
         return 0;
     if (r == sr && r == er)
@@ -129,27 +123,53 @@ cell_selected(term_priv_t *tp, int r, int c)
     return 1; /* middle row, fully selected */
 }
 
-static void term_render_content(glyph_window_t *win)
+/* Shared terminal content renderer for both normal and dropdown terminals */
+static void render_term_grid(glyph_window_t *win)
 {
     term_priv_t *tp = win->priv;
-
     surface_t *s = &win->surface;
     int ox, oy;
     get_padding(tp, &ox, &oy);
     int cw = tp->cell_w;
     int ch = tp->cell_h;
 
-    draw_fill_rect(s, ox, oy, win->client_w, win->client_h, C_TERM_BG);
+    /* Clear client area */
+    if (tp->is_dropdown)
+        draw_fill_rect(s, 0, 0, win->surf_w, win->surf_h, C_TERM_BG);
+    else
+        draw_fill_rect(s, ox, oy, win->client_w, win->client_h, C_TERM_BG);
+
+    /* Pre-normalize selection once (not per-cell) */
+    int has_sel = tp->sel_active;
+    int sr = 0, sc = 0, er = 0, ec = 0;
+    if (has_sel)
+        sel_normalize(tp, &sr, &sc, &er, &ec);
 
     for (int r = 0; r < tp->rows; r++) {
+        /* Quick check: does this row have any non-space characters?
+         * If the row is all spaces and not selected, skip it entirely. */
+        char *row_start = grid_cell(tp, r, 0);
+        int row_has_content = 0;
+        int row_has_sel = has_sel && r >= sr && r <= er;
+
+        if (!row_has_sel) {
+            /* Scan for any non-space in the row */
+            for (int c = 0; c < tp->cols; c++) {
+                if (row_start[c] != ' ') {
+                    row_has_content = 1;
+                    break;
+                }
+            }
+            if (!row_has_content)
+                continue;  /* entirely blank, unselected row — skip */
+        }
+
         for (int c = 0; c < tp->cols; c++) {
             char gc = *grid_cell(tp, r, c);
 
-            /* Draw selection highlight */
-            if (cell_selected(tp, r, c)) {
+            if (row_has_sel && cell_in_sel(r, c, sr, sc, er, ec))
                 draw_blend_rect(s, ox + c * cw, oy + r * ch,
                                 cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
-            }
 
             if (gc != ' ') {
                 if (g_font_mono)
@@ -163,10 +183,15 @@ static void term_render_content(glyph_window_t *win)
         }
     }
 
-    /* Draw cursor only when viewing the bottom (no scroll offset) */
+    /* Cursor block (only when viewing bottom) */
     if (tp->master_fd >= 0 && tp->scroll_offset == 0)
         draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
                        cw, ch, C_TERM_FG);
+}
+
+static void term_render_content(glyph_window_t *win)
+{
+    render_term_grid(win);
 }
 
 static void term_on_key(glyph_window_t *self, char key)
@@ -535,83 +560,35 @@ terminal_scroll_back(glyph_window_t *win, int lines)
 
 #define DROPDOWN_CORNER_R 12
 
-/* Check if (px, py) is outside the rounded bottom corners.
- * Total surface is surf_w x surf_h. Only the bottom two corners are rounded. */
-static int
-outside_bottom_corner(int px, int py, int surf_w, int surf_h, int r)
-{
-    /* Only check the bottom strip (last r rows) */
-    if (py < surf_h - r)
-        return 0;
-
-    int dy = py - (surf_h - r - 1);
-
-    /* Bottom-left corner */
-    if (px < r) {
-        int dx = r - px;
-        if (dx * dx + dy * dy > r * r)
-            return 1;
-    }
-
-    /* Bottom-right corner */
-    if (px >= surf_w - r) {
-        int dx = px - (surf_w - r - 1);
-        if (dx * dx + dy * dy > r * r)
-            return 1;
-    }
-
-    return 0;
-}
-
 static void
 dropdown_render_content(glyph_window_t *win)
 {
-    term_priv_t *tp = win->priv;
-    surface_t *s = &win->surface;
-
-    /* Fill entire surface with terminal background */
-    draw_fill_rect(s, 0, 0, win->surf_w, win->surf_h, C_TERM_BG);
-
-    /* Terminal content starts at (4, 4) with small padding */
-    int ox, oy;
-    get_padding(tp, &ox, &oy);
-    int cw = tp->cell_w;
-    int ch = tp->cell_h;
-
-    for (int r = 0; r < tp->rows; r++) {
-        for (int c = 0; c < tp->cols; c++) {
-            /* Draw selection highlight */
-            if (cell_selected(tp, r, c)) {
-                draw_blend_rect(s, ox + c * cw, oy + r * ch,
-                                cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
-            }
-
-            char gc = *grid_cell(tp, r, c);
-            if (gc != ' ') {
-                if (g_font_mono)
-                    font_draw_char(s, g_font_mono, 16,
-                                   ox + c * cw, oy + r * ch,
-                                   gc, C_TERM_FG);
-                else
-                    draw_char(s, ox + c * cw, oy + r * ch,
-                              gc, C_TERM_FG, C_TERM_BG);
-            }
-        }
-    }
-
-    /* Cursor block (only when viewing bottom) */
-    if (tp->master_fd >= 0 && tp->scroll_offset == 0)
-        draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
-                       cw, ch, C_TERM_FG);
+    render_term_grid(win);
 
     /* Round the bottom corners by painting the background color
      * over pixels that fall outside the corner arcs. */
-    for (int y = win->surf_h - DROPDOWN_CORNER_R; y < win->surf_h; y++) {
-        for (int x = 0; x < win->surf_w; x++) {
-            if (outside_bottom_corner(x, y, win->surf_w, win->surf_h,
-                                      DROPDOWN_CORNER_R))
-                draw_px(s, x, y, C_BG1);  /* desktop bg color */
+    surface_t *s = &win->surface;
+    int r = DROPDOWN_CORNER_R;
+    int sw = win->surf_w;
+    int sh = win->surf_h;
+    for (int y = sh - r; y < sh; y++) {
+        int dy = y - (sh - r - 1);
+        /* Left corner: fill [0, cutoff) with bg */
+        int cutoff_l = r;
+        for (int px = 0; px < r; px++) {
+            int dx = r - px;
+            if (dx * dx + dy * dy <= r * r) { cutoff_l = px; break; }
         }
+        if (cutoff_l > 0)
+            draw_fill_rect(s, 0, y, cutoff_l, 1, C_BG1);
+        /* Right corner: fill [sw - cutoff, sw) with bg */
+        int cutoff_r = r;
+        for (int px = sw - 1; px >= sw - r; px--) {
+            int dx = px - (sw - r - 1);
+            if (dx * dx + dy * dy <= r * r) { cutoff_r = sw - 1 - px; break; }
+        }
+        if (cutoff_r > 0)
+            draw_fill_rect(s, sw - cutoff_r, y, cutoff_r, 1, C_BG1);
     }
 }
 
