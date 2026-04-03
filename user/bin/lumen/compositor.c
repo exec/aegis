@@ -429,12 +429,7 @@ comp_composite(compositor_t *c)
         if (!dominated)
             continue;
         glyph_window_render(win);
-        int mode = BLIT_FROST;
-        if (c->dragging) {
-            /* Dragged window: opaque. Others: fast frost (no blur). */
-            mode = (win == c->drag_win) ? BLIT_OPAQUE : BLIT_FAST_FROST;
-        }
-        blit_window_to_back(&c->back, win, mode);
+        blit_window_to_back(&c->back, win, BLIT_FROST);
     }
 
     /* Overlay (frosted glass dock etc.) — once, after windows */
@@ -555,26 +550,52 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         return;
     }
 
-    /* Titlebar drag in progress */
+    /* Titlebar drag in progress — use snapshot for zero-cost moves */
     if (c->dragging && left) {
-        if (c->drag_win) {
+        if (c->drag_win && c->drag_snapshot) {
             glyph_rect_t old_r = win_screen_rect(c->drag_win);
+
+            /* Restore old position from snapshot (both backbuffer and fb) */
+            for (int y = old_r.y; y < old_r.y + old_r.h && y < c->fb.h; y++) {
+                if (y < 0) continue;
+                int x0 = old_r.x < 0 ? 0 : old_r.x;
+                int x1 = old_r.x + old_r.w;
+                if (x1 > c->fb.w) x1 = c->fb.w;
+                if (x1 > x0) {
+                    memcpy(&c->back.buf[y * c->back.pitch + x0],
+                           &c->drag_snapshot[y * c->back.pitch + x0],
+                           (unsigned)(x1 - x0) * sizeof(uint32_t));
+                    memcpy(&c->fb.buf[y * c->fb.pitch + x0],
+                           &c->drag_snapshot[y * c->back.pitch + x0],
+                           (unsigned)(x1 - x0) * sizeof(uint32_t));
+                }
+            }
+
+            /* Move window */
             c->drag_win->x = c->cursor_x - c->drag_dx;
             c->drag_win->y = c->cursor_y - c->drag_dy;
+
+            /* Render dragged window at new position (opaque) */
+            glyph_window_render(c->drag_win);
+            blit_window_to_back(&c->back, c->drag_win, BLIT_OPAQUE);
+
+            /* Flip new position to framebuffer */
             glyph_rect_t new_r = win_screen_rect(c->drag_win);
-            comp_add_dirty(c, old_r);
-            comp_add_dirty(c, new_r);
-            glyph_window_mark_all_dirty(c->drag_win);
+            partial_flip(&c->fb, &c->back, new_r);
         }
         c->prev_buttons = buttons;
         return;
     }
 
-    /* Titlebar drag released — redraw to restore frosted glass */
+    /* Titlebar drag released — free snapshot, restore full frost */
     if (c->dragging && !left) {
         glyph_window_t *dw = c->drag_win;
         c->dragging = 0;
         c->drag_win = NULL;
+        if (c->drag_snapshot) {
+            free(c->drag_snapshot);
+            c->drag_snapshot = NULL;
+        }
         if (dw) {
             glyph_window_mark_all_dirty(dw);
             c->full_redraw = 1;
@@ -606,10 +627,26 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
                     c->focused = win;
                     win->focused_window = 1;
                     comp_raise_window(c, win);
-                    /* Mark both windows dirty for title bar color change */
                     for (int i = 0; i < c->nwindows; i++)
                         glyph_window_mark_all_dirty(c->windows[i]);
                 }
+
+                /* Snapshot: do a full composite without the dragged window,
+                 * then save the backbuffer. This gives us a clean background
+                 * to restore from during drag moves. */
+                {
+                    int save_vis = win->visible;
+                    win->visible = 0;  /* hide from composite */
+                    c->full_redraw = 1;
+                    comp_composite(c);  /* renders everything except dragged win */
+                    win->visible = save_vis;
+
+                    size_t sz = (size_t)c->back.pitch * (size_t)c->back.h * sizeof(uint32_t);
+                    c->drag_snapshot = malloc(sz);
+                    if (c->drag_snapshot)
+                        memcpy(c->drag_snapshot, c->back.buf, sz);
+                }
+
                 c->prev_buttons = buttons;
                 return;
             }

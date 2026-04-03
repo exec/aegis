@@ -25,6 +25,7 @@ typedef struct {
     int dragging;
     glyph_window_t *drag_win;
     int drag_dx, drag_dy;
+    uint32_t *drag_snapshot;  /* backbuffer snapshot at drag start (no dragged window) */
     glyph_window_t *content_drag_win; /* window receiving mouse drag events */
     int prev_buttons;
 
