@@ -72,6 +72,9 @@ glyph_window_create(const char *title, int client_w, int client_h)
         win->title[len] = '\0';
     }
 
+    win->chrome_cache = calloc((unsigned)(win->surf_w * win->surf_h), sizeof(uint32_t));
+    win->chrome_valid = 0;
+
     win->visible = 1;
     win->closeable = 1;
     win->frosted = 1;
@@ -91,6 +94,7 @@ glyph_window_destroy(glyph_window_t *win)
         return;
     if (win->root)
         glyph_widget_destroy_tree(win->root);
+    free(win->chrome_cache);
     free(win->surface.buf);
     free(win);
 }
@@ -226,8 +230,23 @@ glyph_window_render(glyph_window_t *win)
     if (!win || !win->has_dirty)
         return;
 
-    /* Render chrome (border, titlebar, buttons) */
-    render_chrome(win);
+    /* Auto-invalidate chrome cache on focus change */
+    if (win->chrome_valid && win->chrome_focused != win->focused_window)
+        win->chrome_valid = 0;
+
+    /* Render chrome from cache, or rebuild cache if invalid */
+    if (win->chrome_cache && win->chrome_valid) {
+        __builtin_memcpy(win->surface.buf, win->chrome_cache,
+                         (unsigned long)(win->surf_w * win->surf_h) * 4);
+    } else {
+        render_chrome(win);
+        if (win->chrome_cache) {
+            __builtin_memcpy(win->chrome_cache, win->surface.buf,
+                             (unsigned long)(win->surf_w * win->surf_h) * 4);
+            win->chrome_valid = 1;
+            win->chrome_focused = win->focused_window;
+        }
+    }
 
     /* Custom content renderer (terminal, info window) — called AFTER chrome
      * so it can draw into the client area without being overwritten. */

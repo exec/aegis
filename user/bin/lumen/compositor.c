@@ -546,10 +546,15 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         return;
     }
 
-    /* Titlebar drag released */
+    /* Titlebar drag released — redraw to restore frosted glass */
     if (c->dragging && !left) {
+        glyph_window_t *dw = c->drag_win;
         c->dragging = 0;
         c->drag_win = NULL;
+        if (dw) {
+            glyph_window_mark_all_dirty(dw);
+            c->full_redraw = 1;
+        }
         c->prev_buttons = buttons;
         return;
     }
