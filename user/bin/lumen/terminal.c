@@ -27,12 +27,27 @@
 #define SEL_HIGHLIGHT 0x004488CC  /* selection highlight color */
 #define SEL_ALPHA     80          /* highlight opacity (0-255) */
 
+/* ANSI 8-color palette (standard + bright) */
+static const uint32_t ansi_colors[16] = {
+    0x000000, 0xCC0000, 0x00CC00, 0xCCAA00,  /* black, red, green, yellow */
+    0x4488CC, 0xCC00CC, 0x00CCCC, 0xCCCCCC,  /* blue, magenta, cyan, white */
+    0x555555, 0xFF5555, 0x55FF55, 0xFFFF55,  /* bright variants */
+    0x5599FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
+};
+
+typedef struct {
+    char ch;
+    uint8_t fg;  /* index into ansi_colors, 0xFF = default */
+    uint8_t bg;  /* index into ansi_colors, 0xFF = default */
+} term_cell_t;
+
 typedef struct {
     int master_fd;  /* -1 if PTY failed */
     int cols, rows;
     int cx, cy;     /* cursor position (relative to visible area bottom) */
     int cell_w, cell_h; /* character cell size (TTF or bitmap fallback) */
-    char *grid;     /* ring buffer: total_rows * cols */
+    term_cell_t *grid;  /* ring buffer: total_rows * cols */
+    uint8_t cur_fg, cur_bg;  /* current SGR attributes (0xFF = default) */
     int total_rows; /* rows + SCROLLBACK_LINES */
     int scroll_top; /* index of first visible line in ring buffer (bottom view) */
     int scroll_offset; /* how far user has scrolled back (0 = bottom) */
@@ -53,7 +68,7 @@ typedef struct {
 /* Access a cell in the ring buffer.
  * vis_row is 0..rows-1 (top of visible area = 0).
  * scroll_offset shifts the view up into history. */
-static inline char *
+static inline term_cell_t *
 grid_cell(term_priv_t *tp, int vis_row, int col)
 {
     int ring_row = (tp->scroll_top - tp->scroll_offset + vis_row) % tp->total_rows;
@@ -64,7 +79,7 @@ grid_cell(term_priv_t *tp, int vis_row, int col)
 
 /* Access a cell at the cursor's absolute position (ignoring scroll_offset).
  * Used by the output path which always writes at the bottom. */
-static inline char *
+static inline term_cell_t *
 grid_cell_abs(term_priv_t *tp, int vis_row, int col)
 {
     int ring_row = (tp->scroll_top + vis_row) % tp->total_rows;
@@ -75,12 +90,11 @@ grid_cell_abs(term_priv_t *tp, int vis_row, int col)
 
 static void term_scroll(term_priv_t *tp)
 {
-    /* Advance scroll_top: the old top line scrolls into history,
-     * and the new bottom line is cleared. */
     tp->scroll_top = (tp->scroll_top + 1) % tp->total_rows;
-    /* Clear the new bottom row (which is now at visible row rows-1) */
     int new_bottom = (tp->scroll_top + tp->rows - 1) % tp->total_rows;
-    memset(&tp->grid[new_bottom * tp->cols], ' ', (unsigned)tp->cols);
+    term_cell_t *row = &tp->grid[new_bottom * tp->cols];
+    for (int i = 0; i < tp->cols; i++)
+        row[i] = (term_cell_t){' ', 0xFF, 0xFF};
     tp->cy = tp->rows - 1;
 }
 
@@ -146,39 +160,41 @@ static void render_term_grid(glyph_window_t *win)
         sel_normalize(tp, &sr, &sc, &er, &ec);
 
     for (int r = 0; r < tp->rows; r++) {
-        /* Quick check: does this row have any non-space characters?
-         * If the row is all spaces and not selected, skip it entirely. */
-        char *row_start = grid_cell(tp, r, 0);
+        /* Quick check: skip entirely blank, unselected rows */
+        term_cell_t *row_start = grid_cell(tp, r, 0);
         int row_has_content = 0;
         int row_has_sel = has_sel && r >= sr && r <= er;
 
         if (!row_has_sel) {
-            /* Scan for any non-space in the row */
             for (int c = 0; c < tp->cols; c++) {
-                if (row_start[c] != ' ') {
+                if (row_start[c].ch != ' ' || row_start[c].bg != 0xFF) {
                     row_has_content = 1;
                     break;
                 }
             }
             if (!row_has_content)
-                continue;  /* entirely blank, unselected row — skip */
+                continue;
         }
 
         for (int c = 0; c < tp->cols; c++) {
-            char gc = *grid_cell(tp, r, c);
+            term_cell_t *cell = grid_cell(tp, r, c);
+            int px = ox + c * cw;
+            int py = oy + r * ch;
+
+            /* Draw cell background if non-default */
+            if (cell->bg != 0xFF && cell->bg < 16)
+                draw_fill_rect(s, px, py, cw, ch, ansi_colors[cell->bg]);
 
             if (row_has_sel && cell_in_sel(r, c, sr, sc, er, ec))
-                draw_blend_rect(s, ox + c * cw, oy + r * ch,
-                                cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
+                draw_blend_rect(s, px, py, cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
 
-            if (gc != ' ') {
+            if (cell->ch != ' ') {
+                uint32_t fg = (cell->fg != 0xFF && cell->fg < 16)
+                              ? ansi_colors[cell->fg] : C_TERM_FG;
                 if (g_font_mono)
-                    font_draw_char(s, g_font_mono, 16,
-                                   ox + c * cw, oy + r * ch,
-                                   gc, C_TERM_FG);
+                    font_draw_char(s, g_font_mono, 16, px, py, cell->ch, fg);
                 else
-                    draw_char(s, ox + c * cw, oy + r * ch,
-                              gc, C_TERM_FG, C_TERM_BG);
+                    draw_char(s, px, py, cell->ch, fg, C_TERM_BG);
             }
         }
     }
@@ -211,7 +227,10 @@ static void term_grid_puts(term_priv_t *tp, const char *msg)
             if (tp->cy >= tp->rows)
                 term_scroll(tp);
         } else if (ch >= 32 && ch <= 126) {
-            *grid_cell_abs(tp, tp->cy, tp->cx) = (char)ch;
+            term_cell_t *cell = grid_cell_abs(tp, tp->cy, tp->cx);
+            cell->ch = (char)ch;
+            cell->fg = 0xFF;
+            cell->bg = 0xFF;
             tp->cx++;
             if (tp->cx >= tp->cols) {
                 tp->cx = 0;
@@ -262,31 +281,54 @@ static void term_csi(term_priv_t *tp, int final)
         break;
     }
     case 'J': /* ED -- erase in display */
-        if (n == 2) {
-            /* Clear entire visible area */
-            for (int r = 0; r < tp->rows; r++)
-                memset(grid_cell_abs(tp, r, 0), ' ', (unsigned)tp->cols);
-            tp->cx = 0;
-            tp->cy = 0;
-        } else if (n == 0) {
-            /* Clear from cursor to end */
-            for (int c = tp->cx; c < tp->cols; c++)
-                *grid_cell_abs(tp, tp->cy, c) = ' ';
-            for (int r = tp->cy + 1; r < tp->rows; r++)
-                memset(grid_cell_abs(tp, r, 0), ' ', (unsigned)tp->cols);
+        {
+            term_cell_t blank = {' ', 0xFF, 0xFF};
+            if (n == 2) {
+                for (int r = 0; r < tp->rows; r++)
+                    for (int c2 = 0; c2 < tp->cols; c2++)
+                        *grid_cell_abs(tp, r, c2) = blank;
+                tp->cx = 0;
+                tp->cy = 0;
+            } else if (n == 0) {
+                for (int c2 = tp->cx; c2 < tp->cols; c2++)
+                    *grid_cell_abs(tp, tp->cy, c2) = blank;
+                for (int r = tp->cy + 1; r < tp->rows; r++)
+                    for (int c2 = 0; c2 < tp->cols; c2++)
+                        *grid_cell_abs(tp, r, c2) = blank;
+            }
         }
         break;
     case 'K': /* EL -- erase in line */
-        if (n == 0) {
-            /* Clear from cursor to end of line */
-            for (int c = tp->cx; c < tp->cols; c++)
-                *grid_cell_abs(tp, tp->cy, c) = ' ';
-        } else if (n == 2) {
-            /* Clear entire line */
-            memset(grid_cell_abs(tp, tp->cy, 0), ' ', (unsigned)tp->cols);
+        {
+            term_cell_t blank = {' ', 0xFF, 0xFF};
+            if (n == 0) {
+                for (int c2 = tp->cx; c2 < tp->cols; c2++)
+                    *grid_cell_abs(tp, tp->cy, c2) = blank;
+            } else if (n == 2) {
+                for (int c2 = 0; c2 < tp->cols; c2++)
+                    *grid_cell_abs(tp, tp->cy, c2) = blank;
+            }
         }
         break;
-    case 'm': /* SGR -- ignore (no color support yet) */
+    case 'm': /* SGR -- set graphic rendition (colors) */
+        if (tp->esc_nparam == 0) {
+            /* ESC[m = reset */
+            tp->cur_fg = 0xFF;
+            tp->cur_bg = 0xFF;
+        }
+        for (int pi = 0; pi < tp->esc_nparam; pi++) {
+            int p = tp->esc_params[pi];
+            if (p == 0) { tp->cur_fg = 0xFF; tp->cur_bg = 0xFF; }
+            else if (p >= 30 && p <= 37) tp->cur_fg = (uint8_t)(p - 30);
+            else if (p == 39) tp->cur_fg = 0xFF;
+            else if (p >= 40 && p <= 47) tp->cur_bg = (uint8_t)(p - 40);
+            else if (p == 49) tp->cur_bg = 0xFF;
+            else if (p >= 90 && p <= 97) tp->cur_fg = (uint8_t)(p - 90 + 8);
+            else if (p >= 100 && p <= 107) tp->cur_bg = (uint8_t)(p - 100 + 8);
+            else if (p == 1) { /* bold → bright variant */
+                if (tp->cur_fg != 0xFF && tp->cur_fg < 8) tp->cur_fg += 8;
+            }
+        }
         break;
     default:
         break;
@@ -360,7 +402,10 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
                     term_scroll(tp);
             }
         } else if (ch >= 32 && ch <= 126) {
-            *grid_cell_abs(tp, tp->cy, tp->cx) = (char)ch;
+            term_cell_t *cell = grid_cell_abs(tp, tp->cy, tp->cx);
+            cell->ch = (char)ch;
+            cell->fg = tp->cur_fg;
+            cell->bg = tp->cur_bg;
             tp->cx++;
             if (tp->cx >= tp->cols) {
                 tp->cx = 0;
@@ -511,15 +556,14 @@ terminal_copy_selection(glyph_window_t *win, char *buf, int max)
         /* Find last non-space in this row segment to strip trailing spaces */
         int last_nonspace = c_start - 1;
         for (int c = c_end; c >= c_start; c--) {
-            char ch = *grid_cell(tp, r, c);
-            if (ch != ' ') {
+            if (grid_cell(tp, r, c)->ch != ' ') {
                 last_nonspace = c;
                 break;
             }
         }
 
         for (int c = c_start; c <= last_nonspace && pos < max - 1; c++) {
-            buf[pos++] = *grid_cell(tp, r, c);
+            buf[pos++] = grid_cell(tp, r, c)->ch;
         }
 
         /* Add newline between lines (not after last line) */
@@ -707,12 +751,15 @@ term_priv_alloc(int cols, int rows, int cell_w, int cell_h,
     tp->scroll_top = 0;
     tp->scroll_offset = 0;
 
-    tp->grid = calloc((unsigned)(tp->total_rows * cols), 1);
+    tp->cur_fg = 0xFF;
+    tp->cur_bg = 0xFF;
+    tp->grid = calloc((unsigned)(tp->total_rows * cols), sizeof(term_cell_t));
     if (!tp->grid) {
         free(tp);
         return NULL;
     }
-    memset(tp->grid, ' ', (unsigned)(tp->total_rows * cols));
+    for (int i = 0; i < tp->total_rows * cols; i++)
+        tp->grid[i] = (term_cell_t){' ', 0xFF, 0xFF};
 
     return tp;
 }
