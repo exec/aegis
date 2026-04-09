@@ -1,0 +1,9 @@
+[package]
+name = "aegis-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vortex = { path = "../../vortex", features = ["qemu"] }
+tokio = { version = "1", features = ["full"] }
+chrono = "0.4"
