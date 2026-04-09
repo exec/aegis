@@ -131,4 +131,65 @@ impl AegisHarness {
             .expect("serial_capture must be true in QemuOpts");
         Ok((stream, proc))
     }
+
+    /// Boot QEMU with a persistent disk image, NO ISO.
+    ///
+    /// Use this for the second boot of a two-boot test sequence —
+    /// the disk image was populated by the first boot and must be
+    /// loaded back with the same file path. The caller-supplied
+    /// `opts` determines everything else (machine, devices, drives,
+    /// extra args). `opts.drives` should contain the `-drive ...`
+    /// entries for the NVMe image (and any pflash firmware); this
+    /// function does not inject anything into `opts`.
+    ///
+    /// Returns the same (ConsoleStream, QemuProcess) tuple as
+    /// `boot_stream`. Caller is responsible for killing the process
+    /// and managing the disk file's lifetime.
+    pub async fn boot_disk_only(
+        opts: QemuOpts,
+    ) -> Result<(ConsoleStream, QemuProcess), HarnessError> {
+        let vm = VmInstance {
+            id: "aegis-installed".into(),
+            spec: VmSpec {
+                image: String::new(),
+                memory: 2048,
+                cpus: 1,
+                ports: HashMap::new(),
+                volumes: HashMap::new(),
+                environment: HashMap::new(),
+                command: None,
+                labels: HashMap::new(),
+                network_config: None,
+                resource_limits: ResourceLimits::default(),
+                backend: Some("qemu".into()),
+                /* No boot source — boot comes from pflash (UEFI) +
+                 * NVMe drive specified in opts.drives. Vortex's
+                 * BootSource enum has no "none" variant, so we pass
+                 * a fake Cdrom pointing at /dev/null which QEMU
+                 * ignores when -boot order overrides it via extra
+                 * args. */
+                boot_source: Some(BootSource::Cdrom {
+                    iso: std::path::PathBuf::from("/dev/null"),
+                }),
+                qemu_opts: Some(opts),
+                exit_mappings: vec![
+                    ExitMapping { raw: 33, meaning: ExitMeaning::Pass },
+                    ExitMapping { raw: 35, meaning: ExitMeaning::Fail },
+                ],
+            },
+            state: VmState::Stopped,
+            backend: Arc::new(QemuBackend::new()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let backend = QemuBackend::new();
+        let mut proc = backend
+            .spawn(&vm)
+            .map_err(|e| HarnessError::SpawnError(e.to_string()))?;
+        let stream = proc
+            .console
+            .take()
+            .expect("serial_capture must be true in QemuOpts");
+        Ok((stream, proc))
+    }
 }

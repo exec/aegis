@@ -87,6 +87,66 @@ pub fn aegis_q35_graphical_mouse() -> QemuOpts {
     }
 }
 
+/// q35 preset for installer tests: ISO + persistent NVMe drive + monitor socket.
+///
+/// The caller supplies the disk image path; this function does not
+/// create or delete it. Used for Boot 1 of the installer test (ISO
+/// boot with empty NVMe attached for installation).
+///
+/// No usb-kbd: HMP `sendkey` routes to the first keyboard device;
+/// with usb-kbd present it intercepts keys the PS/2 kernel driver
+/// expects. q35 LPC provides a default PS/2 keyboard.
+pub fn aegis_q35_installer(disk_path: &std::path::Path) -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "none".into(),
+        devices: vec![
+            "nvme,drive=nvme0,serial=aegis0".into(),
+        ],
+        drives: vec![
+            format!("file={},if=none,id=nvme0,format=raw", disk_path.display()),
+        ],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+            "-nodefaults".into(),
+            "-vga".into(), "std".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
+
+/// q35 preset for post-installer boot: NVMe drive only, no ISO, OVMF UEFI firmware.
+///
+/// Used for Boot 2 of the installer test to verify the installed
+/// system boots standalone via UEFI. `disk_path` is the same path
+/// that was used in the preceding `aegis_q35_installer` boot.
+/// `ovmf_path` is the OVMF_CODE firmware binary (typically
+/// `/usr/share/OVMF/OVMF_CODE_4M.fd` on Debian-derived systems).
+pub fn aegis_q35_installed_ovmf(disk_path: &std::path::Path,
+                                 ovmf_path: &std::path::Path) -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "none".into(),
+        devices: vec![
+            "nvme,drive=nvme0,serial=aegis0".into(),
+        ],
+        drives: vec![
+            format!("if=pflash,format=raw,readonly=on,file={}", ovmf_path.display()),
+            format!("file={},if=none,id=nvme0,format=raw", disk_path.display()),
+        ],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+            "-nodefaults".into(),
+            "-vga".into(), "std".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
