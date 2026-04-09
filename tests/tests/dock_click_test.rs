@@ -123,10 +123,25 @@ async fn dock_items_launch_apps() {
             .await
             .expect("QEMU failed to start");
 
-    // Wait for Lumen to fade in.
-    wait_for_line(&mut stream, "[LUMEN] ready", Duration::from_secs(30))
+    // Bastion owns the graphical session and ships a login greeter.
+    // We must authenticate before Lumen is spawned.
+    wait_for_line(&mut stream, "[BASTION] greeter ready", Duration::from_secs(30))
         .await
-        .expect("[LUMEN] ready never fired within 30s");
+        .expect("[BASTION] greeter ready never fired within 30s");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Type root<Tab>forevervigilant<Enter> — same credentials as
+    // login_flow_test. This routes to the PS/2 keyboard because the
+    // preset does not add usb-kbd.
+    proc.send_keys("root\tforevervigilant\n")
+        .await
+        .expect("send_keys failed");
+    eprintln!("sent: root<Tab>forevervigilant<Enter>");
+
+    // Wait for Lumen to finish fading in.
+    wait_for_line(&mut stream, "[LUMEN] ready", Duration::from_secs(20))
+        .await
+        .expect("[LUMEN] ready never fired within 20s");
 
     // Collect all [DOCK] lines up to the "[DOCK] ready" sentinel.
     let dock_lines = collect_until(&mut stream, "[DOCK] ready", Duration::from_secs(5))
