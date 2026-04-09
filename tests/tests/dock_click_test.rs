@@ -226,19 +226,37 @@ async fn dock_items_launch_apps() {
             eprintln!("  postclick screenshot: {}", diag.display());
         }
 
-        wait_for_line(
-            &mut stream,
-            &format!("[LUMEN] window_opened={}", key),
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap_or_else(|_| {
+        // Wait for window_opened sentinel, but collect every line
+        // seen so we can print a diagnostic trace on failure.
+        let sentinel = format!("[LUMEN] window_opened={}", key);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut trace: Vec<String> = Vec::new();
+        let mut found = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, stream.next_line()).await {
+                Ok(Some(line)) => {
+                    let done = line.contains(&sentinel);
+                    trace.push(line);
+                    if done {
+                        found = true;
+                        break;
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        if !found {
+            eprintln!("--- serial trace while waiting for {} ---", sentinel);
+            for l in &trace {
+                eprintln!("  {}", l);
+            }
+            eprintln!("--- end trace ({} lines) ---", trace.len());
             panic!(
                 "clicked {} at ({},{}) but no window opened within 5s (see {})",
                 key, item.cx, item.cy,
                 diag.display()
-            )
-        });
+            );
+        }
 
         // Small settle so the window fade-in doesn't alias the capture.
         tokio::time::sleep(Duration::from_millis(500)).await;
