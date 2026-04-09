@@ -275,6 +275,7 @@ $(GRUB_EFI):
 	grub-mkimage -O x86_64-efi -o $(GRUB_EFI) \
 	    -p /EFI/BOOT \
 	    part_gpt ext2 fat normal multiboot2 boot configfile \
+	    search search_fs_file \
 	    all_video efi_gop efi_uga video video_bochs video_cirrus gfxterm \
 	    font gfxmenu jpeg png
 
