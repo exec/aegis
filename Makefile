@@ -278,7 +278,7 @@ $(GRUB_EFI):
 	    all_video efi_gop efi_uga video video_bochs video_cirrus gfxterm \
 	    font gfxmenu jpeg png
 
-$(ESP_IMG): $(GRUB_EFI)
+$(ESP_IMG): $(GRUB_EFI) $(GRUB_FONT) tools/grub-installed.cfg
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ESP_IMG) bs=512 count=65536 2>/dev/null
 	/sbin/mkfs.fat -F 16 $(ESP_IMG) >/dev/null 2>&1
@@ -287,8 +287,9 @@ $(ESP_IMG): $(GRUB_EFI)
 	mcopy -i $(ESP_IMG) $(GRUB_EFI) ::EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ESP_IMG) /usr/share/grub/unicode.pf2 ::EFI/BOOT/unicode.pf2
 	mcopy -i $(ESP_IMG) tools/grub-bg.jpg ::EFI/BOOT/bg.jpg
-	@printf 'insmod all_video\ninsmod gfxterm\ninsmod jpeg\nset gfxmode=auto\nterminal_input console\nterminal_output gfxterm\nloadfont $$prefix/unicode.pf2\nbackground_image $$prefix/bg.jpg\nset menu_color_normal=light-green/black\nset menu_color_highlight=white/dark-gray\nset color_normal=light-green/black\nset color_highlight=white/dark-gray\nset timeout=3\nset default=0\n\nmenuentry "Aegis" {\n    set gfxpayload=keep\n    set root=(hd0,gpt2)\n    multiboot2 /boot/aegis.elf\n    boot\n}\n' > $(BUILD)/grub-installed.cfg
-	mcopy -i $(ESP_IMG) $(BUILD)/grub-installed.cfg ::EFI/BOOT/grub.cfg
+	@if [ -f assets/wallpaper.png ]; then mcopy -i $(ESP_IMG) assets/wallpaper.png ::EFI/BOOT/wallpaper.png; fi
+	@if [ -s $(GRUB_FONT) ]; then mcopy -i $(ESP_IMG) $(GRUB_FONT) ::EFI/BOOT/font.pf2; fi
+	mcopy -i $(ESP_IMG) tools/grub-installed.cfg ::EFI/BOOT/grub.cfg
 
 # ── Wallpaper / logo conversion ──���───────────────────────────────────────────
 $(BUILD)/logo.raw: tools/aegis-logo.png
@@ -400,10 +401,15 @@ gdb: iso
 sym:
 	@addr2line -e $(BUILD)/aegis.elf -f -p $(ADDR)
 
-# ── Test (placeholder — test suite being rebuilt) ────────────────────────────
-test:
-	@echo "Test suite is being rebuilt. Historical tests in tests/historical/"
-	@echo "Run individual historical tests with: python3 tests/historical/test_*.py"
+# ── Tests ─────────────────────────────────────────────────────────────────────
+test: iso
+	cargo test --manifest-path tests/Cargo.toml -- --nocapture
+
+test-q35: iso disk
+	AEGIS_PRESET=q35 cargo test --manifest-path tests/Cargo.toml -- --nocapture
+
+install-test: iso disk
+	vortex stack up aegis-install-test
 
 # ─��� Clean ────────���──────────────────────���────────────────────────────────────
 clean:
