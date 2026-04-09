@@ -1,9 +1,9 @@
 // End-to-end installer regression test.
 //
 // Two-boot sequence:
-//   Boot 1: Live ISO + empty NVMe → log in to stsh → run installer →
-//           drive its prompts via HMP sendkey → wait for
-//           "=== Installation complete! ===" → shut down.
+//   Boot 1: Text-mode live ISO + empty NVMe → log in to stsh →
+//           run installer → drive its prompts via HMP sendkey →
+//           wait for "=== Installation complete! ===" → shut down.
 //   Boot 2: OVMF UEFI + same NVMe (no ISO) → wait for
 //           "[BASTION] greeter ready" and "[EXT2] OK: mounted nvme0p1".
 //
@@ -11,13 +11,19 @@
 // tests/target/installer_test_disk.img (128 MB, raw). It's recreated
 // fresh at the start of every test run.
 //
+// This test requires build/aegis-test.iso (made with
+// `make test-iso`) instead of the default graphical build/aegis.iso
+// — the default ISO boots boot=graphical quiet which starts Bastion
+// and leaves no CLI for driving the text installer. aegis-test.iso
+// uses tools/grub-test.cfg (boot=text quiet, timeout=0).
+//
 // Skipped gracefully if OVMF_CODE_4M.fd is not installed — OVMF is a
 // Debian/Ubuntu package (apt install ovmf).
 //
-// Run: AEGIS_ISO=build/aegis.iso cargo test --manifest-path tests/Cargo.toml --test installer_test -- --nocapture
+// Run: AEGIS_INSTALLER_ISO=build/aegis-test.iso cargo test --manifest-path tests/Cargo.toml --test installer_test -- --nocapture
 
 use aegis_tests::{
-    aegis_q35_installed_ovmf, aegis_q35_installer, iso, wait_for_line,
+    aegis_q35_installed_ovmf, aegis_q35_installer, wait_for_line,
     AegisHarness,
 };
 use std::path::PathBuf;
@@ -31,6 +37,17 @@ const INSTALL_TIMEOUT_SECS: u64 = 90;
 const ROOT_PW: &str = "forevervigilant";
 const USER_NAME: &str = "alice";
 const USER_PW: &str = "alicepass";
+
+/// Text-mode ISO — required for the installer test because the
+/// default live ISO boots `boot=graphical quiet` which triggers
+/// Bastion, and Bastion has no CLI to drive the installer through.
+/// `make test-iso` produces build/aegis-test.iso using
+/// tools/grub-test.cfg (boot=text quiet, timeout=0).
+fn installer_iso() -> PathBuf {
+    let val = std::env::var("AEGIS_INSTALLER_ISO")
+        .unwrap_or_else(|_| "build/aegis-test.iso".into());
+    PathBuf::from(val)
+}
 
 fn disk_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/installer_test_disk.img")
@@ -64,9 +81,10 @@ fn make_fresh_disk(path: &std::path::Path) -> std::io::Result<()> {
 
 #[tokio::test]
 async fn install_and_boot_from_nvme() {
-    let iso = iso();
+    let iso = installer_iso();
     if !iso.exists() {
         eprintln!("SKIP: {} not found", iso.display());
+        eprintln!("      build with: make test-iso");
         return;
     }
     if !ovmf_path().exists() {

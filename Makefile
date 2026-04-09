@@ -332,6 +332,22 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf $(GRUB_CFG) $(ROOTFS) $(ESP_IMG) $(GRUB_F
 
 iso: $(BUILD)/aegis.iso
 
+# Text-mode ISO — tools/grub-test.cfg boots `boot=text quiet` with
+# timeout=0 so the kernel comes up on a TTY instead of Bastion's
+# graphical greeter. Used by installer_test.rs (which needs to drive
+# stsh via HMP sendkey) and any other test that prefers text mode.
+TEST_ISO_DIR = $(BUILD)/test-isodir
+$(BUILD)/aegis-test.iso: $(BUILD)/aegis.elf tools/grub-test.cfg $(ROOTFS) $(ESP_IMG) $(GRUB_FONT)
+	@mkdir -p $(TEST_ISO_DIR)/boot/grub
+	cp $(BUILD)/aegis.elf $(TEST_ISO_DIR)/boot/aegis.elf
+	cp tools/grub-test.cfg $(TEST_ISO_DIR)/boot/grub/grub.cfg
+	@if [ -s $(GRUB_FONT) ]; then cp $(GRUB_FONT) $(TEST_ISO_DIR)/boot/grub/font.pf2; fi
+	cp $(ROOTFS) $(TEST_ISO_DIR)/boot/rootfs.img
+	cp $(ESP_IMG) $(TEST_ISO_DIR)/boot/esp.img
+	grub-mkrescue -o $@ $(TEST_ISO_DIR)
+
+test-iso: $(BUILD)/aegis-test.iso
+
 # ── Rootfs image (built by script, reads rootfs.manifest) ───────────────────
 # Collect all source files mentioned in the manifest so Make knows to rebuild.
 MANIFEST_SRCS := $(shell grep -v '^\#' rootfs.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
