@@ -16,11 +16,11 @@ fn graphical_opts() -> QemuOpts {
     QemuOpts {
         machine: "q35".into(),
         display: "vnc=127.0.0.1:15".into(),
-        devices: vec![
-            "virtio-vga".into(),
-            "qemu-xhci,id=xhci".into(),
-            "usb-kbd,bus=xhci.0".into(),
-        ],
+        // NO usb-kbd: QEMU's HMP `sendkey` routes to the first keyboard
+        // device; when a usb-kbd is present it gets the keys instead of
+        // the i8042 PS/2 keyboard that Bastion reads from via /dev/kbd.
+        // On q35 + LPC, PS/2 is auto-provided by the chipset.
+        devices: vec!["virtio-vga".into()],
         drives: vec![],
         extra_args: vec![
             "-cpu".into(), "Broadwell".into(),
