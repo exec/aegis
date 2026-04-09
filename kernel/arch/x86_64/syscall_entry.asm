@@ -211,17 +211,31 @@ syscall_entry:
 proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — flushes TLB
-    ; SWAPGS omitted — see below.
-    ; proc_enter_user runs once (first ring-3 entry). At this point GS.base
-    ; is the kernel percpu pointer. The first interrupt from user mode will
-    ; SWAPGS at isr_common_stub entry (CS==0x23 check), swapping percpu→user.
-    ; On iretq return it SWAPGS again (user→percpu). Net effect: after the
-    ; first interrupt round-trip, GS.base is back to percpu in kernel context.
-    ; syscall_entry also does SWAPGS on entry. So skipping it here is safe
-    ; as long as the FIRST thing that happens in user mode triggers one of
-    ; those paths — which it will (LAPIC timer fires within 10ms).
+    ; SWAPGS: swap the active GS.base with IA32_KERNEL_GS_BASE.
     ;
-    ; On AMD Zen 2, adding SWAPGS here causes #GP on iretq. Root cause TBD.
+    ; Standard x86-64 convention: GS.base holds the kernel percpu pointer
+    ; in kernel mode, and holds the user TLS pointer (typically 0 for new
+    ; processes) in user mode. SWAPGS on trap/syscall entry promotes
+    ; IA32_KERNEL_GS_BASE→GS.base (kernel takeover), and on exit demotes
+    ; it back for user mode.
+    ;
+    ; History note: this instruction was removed twice during chaotic
+    ; bare-metal debugging sessions (2026-03-28) — both times as a "test"
+    ; to isolate phantom panics that turned out to be stale git-tracked
+    ; user binaries and unrelated IOAPIC/LAPIC issues. See c6b0deb for
+    ; the first revert ("the RIP=0 was caused by a stale vigil binary,
+    ; not SWAPGS"). The second removal (20d2e56) was never reverted and
+    ; left a "Root cause TBD" comment that survived until 2026-04-09.
+    ;
+    ; Root cause analysis (2026-04-09): in Aegis's current setup,
+    ; smp_percpu_init_bsp writes BOTH IA32_GS_BASE and IA32_KERNEL_GS_BASE
+    ; to the same percpu pointer, and nothing else touches them before
+    ; the first proc_enter_user. So SWAPGS here swaps two equal values —
+    ; a pure no-op at the architectural level — and cannot cause any
+    ; fault on any CPU. Adding it back restores standard semantics and
+    ; future-proofs against changes to smp_percpu_init_bsp that would
+    ; store the user GS base in IA32_KERNEL_GS_BASE.
+    swapgs
     iretq
 
 ; fork_child_return was removed in Phase 15 fix.
