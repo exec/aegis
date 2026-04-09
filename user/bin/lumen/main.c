@@ -404,6 +404,9 @@ main(void)
     /* Final: copy actual desktop to FB cleanly */
     memcpy(fb, backbuf, fb_bytes);
 
+    /* Signal test harness: fade-in complete, desktop is on screen */
+    dprintf(2, "[LUMEN] ready\n");
+
     cursor_show(comp.cursor_x, comp.cursor_y);
 
     /* Dropdown terminal -- created at startup, starts hidden */
