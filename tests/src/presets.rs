@@ -43,6 +43,7 @@ pub fn aegis_q35() -> QemuOpts {
             format!("file={},format=raw,if=none,id=nvme0", disk().display()),
         ],
         extra_args: vec![
+            "-nodefaults".into(),
             "-cpu".into(), "Broadwell".into(),
             "-netdev".into(),
             "user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80".into(),
@@ -122,5 +123,19 @@ mod tests {
         let opts = aegis_q35();
         let args = opts.extra_args.join(" ");
         assert!(args.contains("-cpu Broadwell"), "missing -cpu Broadwell in: {args}");
+    }
+
+    #[test]
+    fn q35_preset_has_nodefaults() {
+        let opts = aegis_q35();
+        assert!(opts.extra_args.contains(&"-nodefaults".to_string()));
+    }
+
+    #[test]
+    fn q35_preset_has_isa_debug_exit() {
+        let opts = aegis_q35();
+        let args = opts.extra_args.join(" ");
+        assert!(args.contains("isa-debug-exit"), "missing isa-debug-exit in: {args}");
+        assert!(args.contains("0xf4"), "missing iobase in: {args}");
     }
 }
