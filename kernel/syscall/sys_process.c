@@ -227,6 +227,11 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     __builtin_memcpy(child->mmap_free, parent->mmap_free,
                      parent->mmap_free_count * sizeof(mmap_free_t));
     child->mmap_free_count = parent->mmap_free_count;
+    /* M2: child gets a fresh lock — freelist is copied, not shared. */
+    {
+        spinlock_t init = SPINLOCK_INIT;
+        child->mmap_free_lock = init;
+    }
     vma_share(child, parent);
     __builtin_memcpy(child->exe_path, parent->exe_path, sizeof(parent->exe_path));
     __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
@@ -454,6 +459,11 @@ sys_fork(syscall_frame_t *frame)
     __builtin_memcpy(child->mmap_free, parent->mmap_free,
                      parent->mmap_free_count * sizeof(mmap_free_t));
     child->mmap_free_count = parent->mmap_free_count;
+    /* M2: child gets a fresh lock — freelist is copied, not shared. */
+    {
+        spinlock_t init = SPINLOCK_INIT;
+        child->mmap_free_lock = init;
+    }
     vma_clone(child, parent);
     __builtin_memcpy(child->exe_path, parent->exe_path, sizeof(parent->exe_path));
 #ifdef __aarch64__

@@ -7,6 +7,7 @@
 #include "cap.h"
 #include "signal.h"
 #include "vma.h"
+#include "spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -39,6 +40,7 @@ typedef struct aegis_process {
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
     mmap_free_t   mmap_free[MMAP_FREE_MAX]; /* VA freelist for munmap→mmap reuse */
     uint32_t      mmap_free_count;          /* number of entries in mmap_free[]  */
+    spinlock_t    mmap_free_lock;           /* M2: guards mmap_free[] for CLONE_VM threads on SMP */
     vma_entry_t  *vma_table;              /* kva-allocated VMA table; NULL until vma_init */
     uint32_t      vma_count;              /* number of valid VMA entries */
     uint32_t      vma_capacity;           /* max entries (170 per kva page) */

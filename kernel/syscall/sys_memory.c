@@ -112,9 +112,17 @@ sys_brk(uint64_t arg1)
 
 /* ── mmap VA freelist helpers ─────────────────────────────────────────── */
 
+/*
+ * M2 audit fix: mmap_free_insert / mmap_free_alloc take proc->mmap_free_lock
+ * for their full bodies. Two threads sharing a VM (CLONE_VM) can race on the
+ * freelist — latent on single-core, corrupting on SMP. The lock is per-process
+ * and does not nest with any other kernel lock, so no ordering constraints.
+ * Callers (sys_mmap, sys_munmap) do not hold other locks at the call site.
+ */
 static void
 mmap_free_insert(aegis_process_t *proc, uint64_t base, uint64_t len)
 {
+    irqflags_t fl = spin_lock_irqsave(&proc->mmap_free_lock);
     uint32_t i;
     for (i = 0; i < proc->mmap_free_count; i++) {
         mmap_free_t *e = &proc->mmap_free[i];
@@ -129,6 +137,7 @@ mmap_free_insert(aegis_process_t *proc, uint64_t base, uint64_t len)
                     break;
                 }
             }
+            spin_unlock_irqrestore(&proc->mmap_free_lock, fl);
             return;
         }
         if (base + len == e->base) {
@@ -143,6 +152,7 @@ mmap_free_insert(aegis_process_t *proc, uint64_t base, uint64_t len)
                     break;
                 }
             }
+            spin_unlock_irqrestore(&proc->mmap_free_lock, fl);
             return;
         }
     }
@@ -151,11 +161,13 @@ mmap_free_insert(aegis_process_t *proc, uint64_t base, uint64_t len)
         proc->mmap_free[proc->mmap_free_count].len  = len;
         proc->mmap_free_count++;
     }
+    spin_unlock_irqrestore(&proc->mmap_free_lock, fl);
 }
 
 static uint64_t
 mmap_free_alloc(aegis_process_t *proc, uint64_t len)
 {
+    irqflags_t fl = spin_lock_irqsave(&proc->mmap_free_lock);
     uint32_t best = (uint32_t)-1;
     uint64_t best_len = (uint64_t)-1;
     uint32_t i;
@@ -166,8 +178,10 @@ mmap_free_alloc(aegis_process_t *proc, uint64_t len)
             if (best_len == len) break;
         }
     }
-    if (best == (uint32_t)-1)
+    if (best == (uint32_t)-1) {
+        spin_unlock_irqrestore(&proc->mmap_free_lock, fl);
         return 0;
+    }
     uint64_t base = proc->mmap_free[best].base;
     if (proc->mmap_free[best].len == len) {
         proc->mmap_free[best] = proc->mmap_free[--proc->mmap_free_count];
@@ -175,6 +189,7 @@ mmap_free_alloc(aegis_process_t *proc, uint64_t len)
         proc->mmap_free[best].base += len;
         proc->mmap_free[best].len  -= len;
     }
+    spin_unlock_irqrestore(&proc->mmap_free_lock, fl);
     return base;
 }
 
