@@ -36,6 +36,23 @@ static volatile uint64_t *s_window_pte;     /* → s_window_pt[0], set at init  
                                              * the __asm__ volatile invlpg.     */
 static volatile uint64_t *s_window_pte2;    /* → s_window_pt[1], second window slot */
 
+/*
+ * Lock ordering invariant (canonical):
+ *
+ *   vmm_window_lock > pmm_lock > kva_lock
+ *
+ * Any code path holding vmm_window_lock MAY acquire pmm_lock / kva_lock
+ * while holding it (e.g. to allocate a backing frame before updating the
+ * window PTE).  The reverse is forbidden: never acquire vmm_window_lock
+ * while holding pmm_lock or kva_lock — doing so risks deadlock with a
+ * concurrent mapping operation.
+ *
+ * This ordering is documented globally in .claude/CLAUDE.md §"Lock
+ * Ordering (Canonical)".  Match it here because vmm.c is the most common
+ * place where the relationship gets reversed by accident.
+ *
+ * (Audit item M3 — 2026-03-29.)
+ */
 static spinlock_t vmm_window_lock = SPINLOCK_INIT;
 
 /*
