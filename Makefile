@@ -144,7 +144,7 @@ ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(SIGNAL_OBJS)
            $(MM_OBJS) $(SCHED_OBJS) $(TTY_OBJS) $(FS_OBJS) $(DRIVER_OBJS) \
            $(NET_OBJS) $(USERSPACE_OBJS) $(BLOB_OBJS)
 
-.PHONY: all iso disk rootfs run run-fb shell login test clean gdb sym curl_bin build-musl
+.PHONY: all iso disk rootfs run run-fb shell login test test-q35 install-test clean gdb sym curl_bin build-musl
 
 all: $(BUILD)/aegis.elf
 
