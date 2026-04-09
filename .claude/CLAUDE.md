@@ -259,7 +259,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | virtio-net + net stack | ✅ | Ethernet/ARP/IPv4/ICMP/TCP/UDP; netdev_t; 12-byte virtio header |
 | Vigil init system | ✅ | Service supervision + respawn |
 | Socket API + epoll | ✅ | socket/bind/listen/accept/connect/send/recv; sock_t VFS fds; httpd |
-| DHCP + curl | ✅ | Userspace RFC 2131; BearSSL+curl static; outbound TCP broken |
+| DHCP + curl | ✅ | Userspace RFC 2131; BearSSL+curl static; outbound TCP fixed in Phase 43a |
 | Threads (Phase 29) | ✅ | clone(CLONE_VM); per-thread TLS; fd_table_t refcount; futex |
 | mprotect + mmap (Phase 30) | ✅ | W^X via NX/EFER.NXE; 64-slot VA freelist |
 | /proc (Phase 31) | ✅ | VMA tracking; procfs VFS; CAP_KIND_PROC_READ |
@@ -468,19 +468,19 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 
 ---
 
-## Architecture Audit (2026-03-29) — Open Items
+## Architecture Audit (2026-03-29) — Status (updated 2026-04-09)
 
 ### HIGH — Fix Soon
 
 | ID | Issue | File | Status |
 |----|-------|------|--------|
-| C5 | **SYSRET signal delivery saves incomplete registers** — callee-saved (rbx, rbp, r12-r15) corrupted after signal handler. ISR path correct. | signal.c:360 | **TODO** |
+| C5 | **SYSRET signal delivery saves incomplete registers** — callee-saved (rbx, rbp, r12-r15) corrupted after signal handler. ISR path correct. | signal.c:365 | ✅ **FIXED** — save path signal.c:365-375, restore path sys_signal.c:147-152. Bonus X1 (non-canonical RIP reject) and X2 (RFLAGS sanitization) hardening in sys_rt_sigreturn. |
 
 ### MEDIUM — Track and Fix
 
 | ID | Issue | File | Status |
 |----|-------|------|--------|
-| M1 | **sched_wake has no memory barrier** — safe on x86, broken on ARM64. | sched.c:352 | **TODO** |
+| M1 | **sched_wake has no memory barrier** — safe on x86, broken on ARM64. | sched.c:358 | ✅ **FIXED** — `__atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE)`. |
 | M2 | **mmap freelist has no lock for CLONE_VM threads** — safe single-core, corruption on SMP. | sys_memory.c | **TODO** |
 | M3 | **vmm_window_lock > pmm_lock ordering fragile** — undocumented. | vmm.c | Document |
 
