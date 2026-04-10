@@ -434,14 +434,25 @@ issue_configure_ep(uint8_t slot_id, uint8_t port_num, uint8_t speed)
         ((volatile uint32_t *)sc)[1] = (uint32_t)port_num << 16;
     }
 
-    /* EP1 IN Context at byte offset (DCI+1) * ctx_size = 4 * ctx_size */
+    /* EP1 IN Context at byte offset (DCI+1) * ctx_size = 4 * ctx_size.
+     *
+     * Interval field encoding (xHCI 1.0 §6.2.3.6):
+     *   LS/FS interrupt: bInterval direct (1-255 ms)
+     *   HS interrupt:    2^(bInterval-1) × 125us
+     * For our LS K120 (bInterval=10), Interval=10 (0xA) = 10ms polling.
+     *
+     * MaxPacketSize is set to 64 even though boot keyboards declare 8,
+     * so the controller doesn't fire cc=3 (Babble) if the device sends
+     * a slightly oversized packet. K120 in practice sends 8 but the
+     * controller validates against the EP context value, not the
+     * descriptor value. */
     {
         uint8_t *ep1in = ictx + 4u * XHCI_CTX_ENTRY_SIZE;
-        /* dword0: Interval[23:16] = 0xA (2^10 microframes ≈ 128ms for HS) */
+        /* dword0: Interval[23:16] */
         ((volatile uint32_t *)ep1in)[0] = (0xAu << 16);
-        /* dword1: CErr=3, EPType=INT_IN(7), MaxBurstSize=0, MaxPacketSize=8 */
+        /* dword1: CErr=3, EPType=INT_IN(7), MaxPacketSize=64 */
         ((volatile uint32_t *)ep1in)[1] =
-            (3u << 1) | (XHCI_EP_TYPE_INT_IN << 3) | (8u << 16);
+            (3u << 1) | (XHCI_EP_TYPE_INT_IN << 3) | (64u << 16);
         /* dword2: TR Dequeue Pointer Lo [63:4] | DCS (dequeue cycle state) */
         ((volatile uint32_t *)ep1in)[2] =
             (uint32_t)(xfer_phys & 0xFFFFFFF0u) |
@@ -628,11 +639,18 @@ detect_hid_protocol(uint8_t slot_id)
         return 0;
 
     buf = s_hid_buf[slot_id];
-    printk("[XHCI] slot %u config desc head: %x %x %x %x %x %x %x %x %x\n",
-           (unsigned)slot_id,
-           (unsigned)buf[0], (unsigned)buf[1], (unsigned)buf[2],
-           (unsigned)buf[3], (unsigned)buf[4], (unsigned)buf[5],
-           (unsigned)buf[6], (unsigned)buf[7], (unsigned)buf[8]);
+    /* Dump 36 bytes of config descriptor — enough to see config + iface 0
+     * + HID descriptor + EP1 IN endpoint descriptor for the boot kbd. */
+    printk("[XHCI] cfg desc 0-15: %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x\n",
+           (unsigned)buf[0],  (unsigned)buf[1],  (unsigned)buf[2],  (unsigned)buf[3],
+           (unsigned)buf[4],  (unsigned)buf[5],  (unsigned)buf[6],  (unsigned)buf[7],
+           (unsigned)buf[8],  (unsigned)buf[9],  (unsigned)buf[10], (unsigned)buf[11],
+           (unsigned)buf[12], (unsigned)buf[13], (unsigned)buf[14], (unsigned)buf[15]);
+    printk("[XHCI] cfg desc 16-31: %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x\n",
+           (unsigned)buf[16], (unsigned)buf[17], (unsigned)buf[18], (unsigned)buf[19],
+           (unsigned)buf[20], (unsigned)buf[21], (unsigned)buf[22], (unsigned)buf[23],
+           (unsigned)buf[24], (unsigned)buf[25], (unsigned)buf[26], (unsigned)buf[27],
+           (unsigned)buf[28], (unsigned)buf[29], (unsigned)buf[30], (unsigned)buf[31]);
 
     /* Walk the descriptor chain */
     off = 0;
@@ -807,7 +825,10 @@ enumerate_port(uint32_t port_num)
         }
     }
 
-    /* Schedule the first interrupt IN transfer */
+    /* Schedule the first interrupt IN transfer.
+     * Note: we only queue ONE TRB and re-arm after each completion.
+     * This is fine for keyboards (typing rate << polling rate). If
+     * report drops are observed under load, increase the queue depth. */
     xhci_schedule_interrupt_in(slot_id, XHCI_EP1_IN_DCI,
                                s_hid_buf_phys[slot_id], 8u);
     printk("[XHCI] slot %u HID kbd ready, first interrupt-in scheduled\n",
@@ -1042,7 +1063,17 @@ xhci_poll(void)
 
         if (trb_type == XHCI_TRB_TRANSFER_EVENT &&
             slot > 0 && slot < XHCI_MAX_SLOTS && s_hid_slots[slot]) {
+            uint8_t cc = (uint8_t)((trb->status >> 24) & 0xFFu);
+            uint32_t residual = trb->status & 0xFFFFFFu;
             if (!s_hid_buf[slot]) goto next_trb;  /* alloc failure guard */
+            uint8_t *b = s_hid_buf[slot];
+            printk("[XHCI] xfer evt slot=%u cc=%u resid=%u\n",
+                   (unsigned)slot, (unsigned)cc, (unsigned)residual);
+            printk("[XHCI]  buf 0-15: %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x\n",
+                   (unsigned)b[0],  (unsigned)b[1],  (unsigned)b[2],  (unsigned)b[3],
+                   (unsigned)b[4],  (unsigned)b[5],  (unsigned)b[6],  (unsigned)b[7],
+                   (unsigned)b[8],  (unsigned)b[9],  (unsigned)b[10], (unsigned)b[11],
+                   (unsigned)b[12], (unsigned)b[13], (unsigned)b[14], (unsigned)b[15]);
             if (s_hid_slot_type[slot] == USB_DEV_KBD)
                 usb_hid_process_report(s_hid_buf[slot], 8u);
             else if (s_hid_slot_type[slot] == USB_DEV_MOUSE)
