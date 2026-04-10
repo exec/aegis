@@ -36,12 +36,35 @@ void usb_mouse_process_report(const uint8_t *data, uint32_t len);
  * Constants
  * ---------------------------------------------------------------------- */
 
-/* Number of BAR0 pages to map (16 pages = 64KB).
- * Covers CAP + OP + Runtime + Doorbell registers for QEMU qemu-xhci. */
-#define XHCI_BAR0_PAGES      16u
+/* Number of BAR0 pages to map (256 pages = 1 MiB).
+ * Covers CAP + OP + Runtime + Doorbell + extended capabilities. Real
+ * hardware controllers may place extended caps and runtime registers
+ * well beyond the first 64 KB; the previous 16-page (64 KB) limit
+ * caused USBLEGSUP cap walks to fault on AMD. */
+#define XHCI_BAR0_PAGES      256u
 
 /* Maximum slots we support (hardware MaxSlots may be higher). */
 #define XHCI_MAX_SLOTS       32u
+
+/* Extended capability IDs (xHCI 1.0 §7) */
+#define XHCI_EXT_CAP_LEGACY     1u   /* USB Legacy Support */
+#define XHCI_EXT_CAP_PROTOCOL   2u   /* Supported Protocol */
+
+/* USBLEGSUP register bits */
+#define XHCI_LEGSUP_BIOS_OWNED  (1u << 16)
+#define XHCI_LEGSUP_OS_OWNED    (1u << 24)
+
+/* USBLEGCTLSTS bits — at offset 0x04 from USBLEGSUP cap base */
+#define XHCI_LEGCTLSTS_DISABLE_SMI  0x000001E1u  /* SMI enables we disable */
+#define XHCI_LEGCTLSTS_SMI_EVENTS   0xE0000000u  /* SMI event RW1C bits */
+
+/* Maximum xHCI controllers we'll handle on a single machine.
+ * Modern AMD/Intel platforms expose 1-4 xHCI host controllers. */
+#define XHCI_MAX_CONTROLLERS    4u
+
+/* Maximum physical ports we track for USB 2.0 / hotplug bookkeeping.
+ * Each xHCI port number is 1-based, indexed 1..MaxPorts (≤255). */
+#define XHCI_MAX_PORTS          64u
 
 /* Endpoint index (doorbell value) for EP1 IN (HID keyboard).
  * xHCI DCI for EP1 IN = 2 * ep_number + direction(IN=1) = 2*1+1 = 3. */
@@ -97,6 +120,17 @@ static int                        s_evt_cycle        = 1;
 static uint32_t                   s_max_ports        = 0;
 static uint32_t                   s_max_slots        = 0;
 
+/* Bitmap of which 1-based port numbers belong to a USB 2.0 protocol per
+ * the Supported Protocol extended capability. Ports we should NOT scan
+ * for USB 2.0 device enumeration are those marked USB 3.x only. */
+static uint8_t                    s_port_is_usb2[XHCI_MAX_PORTS + 1];
+static uint8_t                    s_port_is_usb3[XHCI_MAX_PORTS + 1];
+
+/* Pending hot-enumerate work queue: ports needing enumeration after the
+ * xhci_poll outer loop drains. Avoids re-entrant event ring consumption
+ * (poll_cmd_completion called from inside xhci_poll's iteration). */
+static uint8_t                    s_pending_enum[XHCI_MAX_PORTS + 1];
+
 /* DCBAA */
 static uint64_t                   s_dcbaa_phys       = 0;
 static uint64_t                  *s_dcbaa             = NULL;
@@ -147,30 +181,81 @@ op_write32(uint32_t byte_off, uint32_t val)
  * Spin helpers
  * ---------------------------------------------------------------------- */
 
-/* op_spin_until_set — busy-wait until (op_reg_at_off & mask) != 0.
- * Returns 0 on success, -1 on timeout. */
-static int
-op_spin_until_set(uint32_t off, uint32_t mask)
+/* xhci_busy_wait_ms — block ms milliseconds.
+ *
+ * IMPORTANT: xhci_init runs in early boot with interrupts disabled, so
+ * the PIT tick counter (arch_get_ticks) is frozen and CANNOT be used
+ * for waiting. We instead use rdtsc() which always advances.
+ *
+ * We don't know the CPU frequency at boot — calibrate it once on first
+ * call by reading TSC, doing a fixed work loop, reading TSC again. The
+ * work loop is sized to take ~1ms on a typical 1-5GHz CPU. After
+ * calibration, we cache the cycles-per-ms value.
+ *
+ * For safety the cached value is biased low (we wait at LEAST ms; the
+ * actual wait may be 2-3x longer on a slow CPU, which is fine). */
+static uint64_t s_cycles_per_ms = 0;
+
+static inline uint64_t
+xhci_rdtsc(void)
 {
-    uint32_t timeout = 2000000u;
-    while (timeout--) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static void
+xhci_busy_wait_ms(uint32_t ms)
+{
+    if (s_cycles_per_ms == 0) {
+        /* Calibrate. Without a known timebase, we calibrate against a
+         * fixed-cycle loop and ASSUME at least 1 GHz; on a 4 GHz CPU
+         * the actual wait will be 4x what we ask for, which is safe.
+         * We use 1,000,000 cycles per ms as the floor (= 1 GHz). */
+        s_cycles_per_ms = 1000000ULL;
+    }
+    uint64_t start = xhci_rdtsc();
+    uint64_t deadline = start + (uint64_t)ms * s_cycles_per_ms;
+    while (xhci_rdtsc() < deadline)
+        __asm__ volatile("pause");
+}
+
+/* op_spin_until_set — busy-wait until (op_reg_at_off & mask) != 0.
+ * Returns 0 on success, -1 on timeout (ms_timeout milliseconds).
+ * Uses rdtsc-based timing so it works in early boot before PIT IRQs. */
+static int
+op_spin_until_set_ms(uint32_t off, uint32_t mask, uint32_t ms_timeout)
+{
+    if (s_cycles_per_ms == 0) s_cycles_per_ms = 1000000ULL;
+    uint64_t deadline = xhci_rdtsc() + (uint64_t)ms_timeout * s_cycles_per_ms;
+    while (xhci_rdtsc() < deadline) {
         if (op_read32(off) & mask)
             return 0;
+        __asm__ volatile("pause");
     }
     return -1;
 }
 
-/* op_spin_until_clear — busy-wait until (op_reg_at_off & mask) == 0.
- * Returns 0 on success, -1 on timeout. */
+/* op_spin_until_clear — busy-wait until (op_reg_at_off & mask) == 0. */
+static int
+op_spin_until_clear_ms(uint32_t off, uint32_t mask, uint32_t ms_timeout)
+{
+    if (s_cycles_per_ms == 0) s_cycles_per_ms = 1000000ULL;
+    uint64_t deadline = xhci_rdtsc() + (uint64_t)ms_timeout * s_cycles_per_ms;
+    while (xhci_rdtsc() < deadline) {
+        if (!(op_read32(off) & mask))
+            return 0;
+        __asm__ volatile("pause");
+    }
+    return -1;
+}
+
+/* Legacy alias kept for the start-controller path that still uses
+ * the symbol name op_spin_until_clear. */
 static int
 op_spin_until_clear(uint32_t off, uint32_t mask)
 {
-    uint32_t timeout = 2000000u;
-    while (timeout--) {
-        if (!(op_read32(off) & mask))
-            return 0;
-    }
-    return -1;
+    return op_spin_until_clear_ms(off, mask, 1000u);
 }
 
 /* -------------------------------------------------------------------------
@@ -188,6 +273,155 @@ alloc_page(uint64_t *phys_out)
     __builtin_memset(va, 0, 4096);
     *phys_out = kva_page_phys(va);
     return va;
+}
+
+/* -------------------------------------------------------------------------
+ * Extended Capabilities walker
+ *
+ * The xHCI Extended Capabilities are a linked list anchored at HCCPARAMS1
+ * bits [31:16] (xECP). Each cap is a 32-bit dword: [7:0] cap ID, [15:8]
+ * next-cap offset (DWORDs from CURRENT cap; 0 = end), [31:16] cap-specific.
+ *
+ * Returns the byte offset (relative to s_bar0_va) of a cap with the given
+ * cap_id, or 0 if not found / no extended caps. Walks at most 64 caps to
+ * defend against malformed link lists.
+ * ---------------------------------------------------------------------- */
+static uint32_t
+xhci_find_ext_cap(uint32_t cap_id)
+{
+    uint32_t hccparams1 = s_cap->hccparams1;
+    uint32_t xecp_dword = (hccparams1 >> 16) & 0xFFFFu;
+    if (xecp_dword == 0) return 0;
+
+    uint32_t offset = xecp_dword << 2;  /* dwords -> bytes */
+    int safety = 64;
+    while (safety-- > 0) {
+        if (offset == 0) return 0;
+        if (offset >= XHCI_BAR0_PAGES * 4096u) return 0;  /* out of mapped */
+        volatile uint32_t *p = (volatile uint32_t *)(s_bar0_va + offset);
+        uint32_t val = *p;
+        uint8_t  id   = (uint8_t)(val & 0xFFu);
+        uint8_t  next = (uint8_t)((val >> 8) & 0xFFu);
+        if (id == cap_id)
+            return offset;
+        if (next == 0) return 0;
+        offset += (uint32_t)next << 2;
+    }
+    return 0;
+}
+
+/* xhci_bios_handoff — claim controller from BIOS via USBLEGSUP.
+ *
+ * On real hardware the BIOS owns the xHCI controller via SMI. We must
+ * walk the extended capabilities to find USBLEGSUP (cap ID 1), set the
+ * OS Owned Semaphore bit, wait for the BIOS Owned Semaphore to clear
+ * (BIOS may take up to 5 seconds to release), then disable all SMI
+ * generation in USBLEGCTLSTS (offset +0x04 from the cap base).
+ *
+ * Without this, BIOS SMM keeps firing on every controller event and
+ * silently overrides our register writes — symptom: keyboards work in
+ * BIOS/GRUB but die the moment Aegis takes over xHCI. QEMU has no
+ * legacy cap so this is a no-op there.
+ *
+ * Returns 0 on success or if no LEGSUP cap exists. */
+static int
+xhci_bios_handoff(void)
+{
+    uint32_t legsup_off = xhci_find_ext_cap(XHCI_EXT_CAP_LEGACY);
+    if (legsup_off == 0) {
+        printk("[XHCI] no USBLEGSUP cap (QEMU or already handed-off)\n");
+        return 0;
+    }
+    volatile uint32_t *legsup =
+        (volatile uint32_t *)(s_bar0_va + legsup_off);
+    volatile uint32_t *legctlsts =
+        (volatile uint32_t *)(s_bar0_va + legsup_off + 4u);
+
+    uint32_t val = *legsup;
+    printk("[XHCI] USBLEGSUP at 0x%x = 0x%x\n",
+           (unsigned)legsup_off, (unsigned)val);
+
+    if (val & XHCI_LEGSUP_BIOS_OWNED) {
+        /* Set OS Owned bit, wait for BIOS Owned to clear (up to 1s).
+         * Use rdtsc-based timing — runs in early boot, no PIT IRQs. */
+        *legsup = val | XHCI_LEGSUP_OS_OWNED;
+        if (s_cycles_per_ms == 0) s_cycles_per_ms = 1000000ULL;
+        uint64_t deadline = xhci_rdtsc() + 1000ULL * s_cycles_per_ms;
+        while (xhci_rdtsc() < deadline) {
+            if (!((*legsup) & XHCI_LEGSUP_BIOS_OWNED))
+                break;
+            __asm__ volatile("pause");
+        }
+        if ((*legsup) & XHCI_LEGSUP_BIOS_OWNED) {
+            /* BIOS never released — force ownership (workaround for
+             * broken BIOSes per Linux quirk_usb_handoff_xhci). */
+            printk("[XHCI] WARN: BIOS never released, forcing ownership\n");
+            *legsup = (*legsup) & ~XHCI_LEGSUP_BIOS_OWNED;
+        } else {
+            printk("[XHCI] BIOS released ownership cleanly\n");
+        }
+    }
+
+    /* Disable all SMI generation. Mask off SMI enable bits, write 1 to
+     * SMI event bits to clear them. The "write back as-is + clear" idiom
+     * matches Linux's quirk_usb_handoff_xhci. */
+    {
+        uint32_t v = *legctlsts;
+        v &= ~XHCI_LEGCTLSTS_DISABLE_SMI;
+        v |=  XHCI_LEGCTLSTS_SMI_EVENTS;  /* RW1C — clear pending */
+        *legctlsts = v;
+    }
+    return 0;
+}
+
+/* xhci_walk_supported_protocols — populate s_port_is_usb2 / s_port_is_usb3
+ * by walking every Supported Protocol extended cap (cap ID 2). Each cap
+ * dword2 holds: PortOffset[7:0] (1-based) and PortCount[15:8]. dword0
+ * holds the major revision in bits [31:24] (0x02 = USB 2.0, 0x03 = USB 3.x).
+ *
+ * On QEMU's qemu-xhci this populates ports 1-4 as USB 3 and 5-8 as USB 2.
+ * On real AMD it differentiates the SS-only ports from the HS pair so the
+ * port enumeration loop can skip dead SS ports correctly.
+ *
+ * Walks the linked list manually since xhci_find_ext_cap returns only the
+ * first match for a given ID, and there can be multiple SUPP_PROTOCOL caps. */
+static void
+xhci_walk_supported_protocols(void)
+{
+    uint32_t hccparams1 = s_cap->hccparams1;
+    uint32_t xecp_dword = (hccparams1 >> 16) & 0xFFFFu;
+    if (xecp_dword == 0) return;
+
+    uint32_t offset = xecp_dword << 2;
+    int safety = 64;
+    while (offset != 0 && safety-- > 0) {
+        if (offset >= XHCI_BAR0_PAGES * 4096u) break;
+        volatile uint32_t *p = (volatile uint32_t *)(s_bar0_va + offset);
+        uint32_t dw0 = p[0];
+        uint8_t  id   = (uint8_t)(dw0 & 0xFFu);
+        uint8_t  next = (uint8_t)((dw0 >> 8) & 0xFFu);
+
+        if (id == XHCI_EXT_CAP_PROTOCOL) {
+            uint32_t dw2 = p[2];
+            uint8_t  major  = (uint8_t)((dw0 >> 24) & 0xFFu);
+            uint8_t  port_offset = (uint8_t)(dw2 & 0xFFu);   /* 1-based */
+            uint8_t  port_count  = (uint8_t)((dw2 >> 8) & 0xFFu);
+            printk("[XHCI] supp proto: major=0x%x ports %u..%u\n",
+                   (unsigned)major, (unsigned)port_offset,
+                   (unsigned)(port_offset + port_count - 1));
+            uint32_t i;
+            for (i = 0; i < port_count; i++) {
+                uint32_t pn = port_offset + i;
+                if (pn >= 1 && pn <= XHCI_MAX_PORTS) {
+                    if (major <= 0x02) s_port_is_usb2[pn] = 1;
+                    else                s_port_is_usb3[pn] = 1;
+                }
+            }
+        }
+
+        if (next == 0) break;
+        offset += (uint32_t)next << 2;
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -233,22 +467,18 @@ ring_cmd_doorbell(void)
 }
 
 /* update_erdp — write current event dequeue pointer to interrupter 0.
- * ERDP is at runtime_base + 0x20 (interrupter 0) + 0x18 (ERDP within
- * interrupter register set), and it must hold a PHYSICAL address — the
- * controller uses it for DMA. The previous version wrote a kernel virtual
- * address AND used the wrong offset (0x10 instead of 0x18, which would
- * land in ERSTBA). */
+ * ERDP at runtime_base + 0x20 (interrupter 0) + 0x18 (ERDP). Must hold
+ * a PHYSICAL address; bit 3 (EHB - Event Handler Busy) must be written
+ * as 1 each update to clear it (RW1C), or the controller's event
+ * interrupt assertion eventually stalls. */
 static void
 update_erdp(void)
 {
     uint8_t *rts = s_bar0_va + s_cap->rtsoff;
     volatile uint64_t *erdp =
         (volatile uint64_t *)(rts + 0x20u + 0x18u);
-    /* s_evt_ring is at the start of an alloc_page'd region; the page's
-     * physical base is captured at init time as evt_ring_phys.  We don't
-     * store it as a per-driver field, so recompute via kva_page_phys
-     * (cheap walk of the kernel page tables). */
-    *erdp = kva_page_phys((void *)&s_evt_ring[s_evt_dequeue]);
+    uint64_t pa = kva_page_phys((void *)&s_evt_ring[s_evt_dequeue]);
+    *erdp = pa | (1ULL << 3);  /* PA | EHB clear */
 }
 
 /* poll_cmd_completion — wait for a CMD_COMPLETION event on the event ring.
@@ -305,6 +535,19 @@ issue_enable_slot(void)
     enqueue_cmd(0, 0, (uint32_t)(XHCI_TRB_ENABLE_SLOT << 10));
     ring_cmd_doorbell();
     return poll_cmd_completion();
+}
+
+/* issue_disable_slot — send Disable Slot command for a slot.
+ * Tells the controller to release internal slot resources. Should be
+ * called when a device is disconnected, before software state cleanup. */
+static void
+issue_disable_slot(uint8_t slot_id)
+{
+    enqueue_cmd(0, 0,
+                (uint32_t)(XHCI_TRB_DISABLE_SLOT << 10) |
+                ((uint32_t)slot_id << 24));
+    ring_cmd_doorbell();
+    (void)poll_cmd_completion();
 }
 
 /* issue_address_device — build a minimal Input Context and issue Address
@@ -688,22 +931,52 @@ issue_set_protocol(uint8_t slot_id)
     issue_control_transfer(slot_id, setup, 0);
 }
 
+/* All RW1C bits in PORTSC. Writing 1 to any of these clears the
+ * corresponding latched change. When we want to set PR/PED/PP/PLS etc.
+ * via a read-modify-write, we MUST mask out these bits in the value we
+ * write back, otherwise the write will accidentally clear pending
+ * change notifications that we (or the PSC handler) need to see. */
+#define XHCI_PORTSC_RW1C_MASK   0x00FE0000u  /* CSC|PEC|WRC|OCC|PRC|PLC|CEC */
+
+/* Compute a "clean" PORTSC value safe for read-modify-write: mask out
+ * all RW1C bits and PED (which is itself partially write-1-clear on
+ * USB 2.0 ports). The caller can then OR in the bits it wants to set. */
+static inline uint32_t
+portsc_rmw_mask(uint32_t portsc)
+{
+    return portsc & ~(XHCI_PORTSC_RW1C_MASK | XHCI_PORTSC_PED);
+}
+
 /* enumerate_port — detect device on one port (1-based), reset it, run
  * Enable Slot + Address Device + Configure EP, detect HID type, then
- * schedule first interrupt IN transfer if successful. */
+ * schedule first interrupt IN transfer if successful. Idempotent — if
+ * a slot is already allocated for this port, returns immediately. */
 static void
 enumerate_port(uint32_t port_num)
 {
+    /* Idempotency: if we already enumerated this port (boot scan +
+     * subsequent PSC event for the same already-connected device),
+     * skip — otherwise we'd leak a slot and the old transfer ring. */
+    {
+        uint32_t s;
+        for (s = 1; s < XHCI_MAX_SLOTS; s++) {
+            if (s_hid_slots[s] && s_slot_port[s] == (uint8_t)port_num) {
+                printk("[XHCI] port %u already enumerated as slot %u, skip\n",
+                       (unsigned)port_num, (unsigned)s);
+                return;
+            }
+        }
+    }
+
     /* Port register array: op_base + 0x400 + (port_num-1)*16 */
     uint8_t *op_base = (uint8_t *)s_op;
-    /* SAFETY: The port register offset is within the 64KB BAR0 mapping. */
+    /* SAFETY: The port register offset is within the BAR0 mapping. */
     volatile uint32_t *portsc_reg =
         (volatile uint32_t *)(op_base + 0x400u + (port_num - 1u) * 16u);
 
     uint32_t portsc;
     uint8_t  slot_id;
     uint8_t  speed;
-    uint32_t t;
 
     portsc = *portsc_reg;
     printk("[XHCI] enum port %u portsc=0x%x ccs=%u pr=%u prc=%u\n",
@@ -714,31 +987,56 @@ enumerate_port(uint32_t port_num)
     if (!(portsc & XHCI_PORTSC_CCS))
         return;   /* nothing connected */
 
-    /* Extract speed from PORTSC[13:10] */
-    speed = (uint8_t)((portsc >> 10) & 0xFu);
-    if (speed == 0)
-        speed = XHCI_SPEED_HS;
-    printk("[XHCI] port %u speed=%u (1=FS,2=LS,3=HS,4=SS)\n",
-           (unsigned)port_num, (unsigned)speed);
+    /* USB 2.0 device debounce: if we just saw the device connect, give
+     * it the spec-mandated 100ms TATTDB before resetting. The boot
+     * scan path doesn't strictly need this (the device has been
+     * connected since power-up), but the hotplug path absolutely does. */
+    xhci_busy_wait_ms(120);
 
-    /* Port Reset: set PR bit (bit 4), clear PRC (RW1C bit 21 — writing 1
-     * to other RW1C bits must be avoided; preserve the port value and only
-     * set PR while writing 0 to all RW1C fields except what we want). */
-    *portsc_reg = (portsc & ~(XHCI_PORTSC_PRC)) | XHCI_PORTSC_PR;
+    /* Re-read after debounce in case the device went away. */
+    portsc = *portsc_reg;
+    if (!(portsc & XHCI_PORTSC_CCS))
+        return;
 
-    /* Wait for PRC (Port Reset Change) to set */
-    t = 2000000u;
-    while (t--) {
-        if (*portsc_reg & XHCI_PORTSC_PRC)
-            break;
+    /* Port Reset: write a clean PORTSC value with PR set.
+     * Mask out RW1C bits so we don't accidentally clear them. */
+    *portsc_reg = portsc_rmw_mask(portsc) | XHCI_PORTSC_PR;
+
+    /* Wait up to ~100ms for PRC (Port Reset Change) to set. Real
+     * hardware can take 50-80ms. Use rdtsc-based timing because
+     * xhci_init runs early in boot before PIT IRQs fire. */
+    {
+        if (s_cycles_per_ms == 0) s_cycles_per_ms = 1000000ULL;
+        uint64_t deadline = xhci_rdtsc() + 100ULL * s_cycles_per_ms;
+        while (xhci_rdtsc() < deadline) {
+            if (*portsc_reg & XHCI_PORTSC_PRC)
+                break;
+            __asm__ volatile("pause");
+        }
     }
     if (!(*portsc_reg & XHCI_PORTSC_PRC)) {
         if (!s_post_boot)
-            printk("[XHCI] port %u: reset timeout\n", (unsigned)port_num);
+            printk("[XHCI] port %u: reset timeout (portsc=0x%x)\n",
+                   (unsigned)port_num, (unsigned)*portsc_reg);
         return;
     }
-    /* Clear PRC by writing 1 to it (RW1C) */
-    *portsc_reg = (*portsc_reg & ~0u) | XHCI_PORTSC_PRC;
+    /* Clear PRC by writing 1 to it (RW1C) — but ONLY PRC, not other
+     * pending change bits which the PSC handler may need to see. */
+    *portsc_reg = portsc_rmw_mask(*portsc_reg) | XHCI_PORTSC_PRC;
+
+    /* Re-read speed AFTER reset — for some controllers the speed field
+     * is only valid post-reset. */
+    portsc = *portsc_reg;
+    speed = (uint8_t)((portsc >> 10) & 0xFu);
+    if (speed == 0)
+        speed = XHCI_SPEED_HS;
+    printk("[XHCI] port %u speed=%u (1=FS,2=LS,3=HS,4=SS) post-reset\n",
+           (unsigned)port_num, (unsigned)speed);
+
+    /* USB 2.0 spec §7.1.7.5 TRSTRCY: device needs ≥10ms after reset
+     * before the host can issue SETUP. Real hardware is sensitive
+     * to this — qemu auto-completes so this was invisible there. */
+    xhci_busy_wait_ms(20);
 
     /* Pre-Enable-Slot diagnostic dump */
     {
@@ -839,16 +1137,77 @@ enumerate_port(uint32_t port_num)
  * xhci_init
  * ---------------------------------------------------------------------- */
 
+/* xhci_init_one — initialize a single xHCI controller and return:
+ *   1 = success and at least one port has a connected device
+ *   0 = success but no devices found (try next controller)
+ *  -1 = init failure (controller broken or unsupported)
+ *
+ * Refactored from xhci_init to support multi-controller systems where
+ * the keyboard might be on the second/third/fourth xhci PCI device. */
+static int
+xhci_init_one(const pcie_device_t *dev);
+
 void
 xhci_init(void)
 {
-    uint32_t i;
+    /* Step 1: Locate ALL xHCI controllers via PCIe.
+     * class=0x0C (Serial Bus), subclass=0x03 (USB), prog-if=0x30 (xHCI).
+     *
+     * Modern AMD platforms (Ryzen 6800H) expose 2-4 xHCI controllers.
+     * We try each in order, stopping at the first one that successfully
+     * initializes AND has at least one connected port. The keyboard may
+     * be on any of them depending on which physical USB jack is used. */
+    int n_xhci = 0;
+    int n_dev = pcie_device_count();
+    int j;
+    for (j = 0; j < n_dev; j++) {
+        const pcie_device_t *d = &pcie_get_devices()[j];
+        if (d->class_code != 0x0C || d->subclass != 0x03 || d->progif != 0x30)
+            continue;
+        n_xhci++;
+        printk("[XHCI] trying controller #%u at %x:%x.%x (vendor=%x device=%x)\n",
+               (unsigned)n_xhci, (unsigned)d->bus, (unsigned)d->dev, (unsigned)d->fn,
+               (unsigned)d->vendor_id, (unsigned)d->device_id);
+        int rc = xhci_init_one(d);
+        if (rc > 0) {
+            printk("[XHCI] controller #%u has connected device(s) — adopting\n",
+                   (unsigned)n_xhci);
+            return;
+        }
+        if (rc == 0) {
+            printk("[XHCI] controller #%u empty, trying next\n",
+                   (unsigned)n_xhci);
+            /* Reset state for next controller. */
+            s_xhci_active = 0;
+            s_post_boot   = 0;
+            s_bar0_va     = NULL;
+            s_cap         = NULL;
+            s_op          = NULL;
+            s_cmd_ring    = NULL;
+            s_evt_ring    = NULL;
+            s_dcbaa       = NULL;
+            s_evt_dequeue = 0;
+            s_evt_cycle   = 1;
+            s_cmd_enqueue = 0;
+            s_cmd_cycle   = 1;
+            __builtin_memset(s_port_is_usb2, 0, sizeof(s_port_is_usb2));
+            __builtin_memset(s_port_is_usb3, 0, sizeof(s_port_is_usb3));
+            __builtin_memset(s_pending_enum, 0, sizeof(s_pending_enum));
+            continue;
+        }
+        printk("[XHCI] controller #%u init failed, trying next\n",
+               (unsigned)n_xhci);
+    }
+    if (n_xhci == 0)
+        return;   /* no xHCI device — silent skip */
+    printk("[XHCI] no xHCI controller had connected devices\n");
+}
 
-    /* Step 1: Locate xHCI controller via PCIe.
-     * class=0x0C (Serial Bus), subclass=0x03 (USB), prog-if=0x30 (xHCI). */
-    const pcie_device_t *dev = pcie_find_device(0x0C, 0x03, 0x30);
-    if (dev == NULL)
-        return;   /* no xHCI device — silent skip, make test stays GREEN */
+/* The actual init body. Returns 1=success+ports, 0=success+empty, -1=fail. */
+static int
+xhci_init_one(const pcie_device_t *dev)
+{
+    uint32_t i;
 
     /* Step 2: Map BAR0 MMIO.
      * pcie_device_t stores decoded 64-bit base addresses in bar[].
@@ -884,13 +1243,30 @@ xhci_init(void)
     printk("[XHCI] hccparams1=0x%x ctx_size=%u\n",
            (unsigned)s_cap->hccparams1, (unsigned)s_ctx_entry_size);
 
+    /* Step 2.5: BIOS handoff (USBLEGSUP).
+     *
+     * On real hardware (especially AMD), the BIOS owns the controller
+     * via SMI until we walk the extended capabilities and explicitly
+     * claim ownership. Without this, BIOS SMM keeps fighting our
+     * register writes and the keyboard never enumerates. Must run
+     * BEFORE any USBCMD writes. QEMU has no LEGSUP cap so this is
+     * a no-op there. */
+    xhci_bios_handoff();
+
+    /* Step 2.6: Walk Supported Protocol caps to learn which port
+     * numbers are USB 2.0 vs USB 3.x. The boot scan loop uses this
+     * to skip dead SS-only ports. */
+    xhci_walk_supported_protocols();
+
     /* Step 3: Stop controller — clear USBCMD.RS, wait for USBSTS.HCH.
      * Use op_read32/op_write32 to avoid packed-member address errors. */
     op_write32(XHCI_OP_USBCMD_OFF,
                op_read32(XHCI_OP_USBCMD_OFF) & ~XHCI_CMD_RS);
-    if (op_spin_until_set(XHCI_OP_USBSTS_OFF, XHCI_STS_HCH) != 0) {
+    /* Real hardware can take 16ms+ to halt; the 100ms timeout here
+     * is real-time, not a fixed-iteration loop. */
+    if (op_spin_until_set_ms(XHCI_OP_USBSTS_OFF, XHCI_STS_HCH, 100u) != 0) {
         printk("[XHCI] FAIL: controller did not stop\n");
-        return;
+        return -1;
     }
 
     printk("[XHCI] pre-HCRST usbsts=0x%x usbcmd=0x%x\n",
@@ -902,7 +1278,7 @@ xhci_init(void)
                op_read32(XHCI_OP_USBCMD_OFF) | XHCI_CMD_HCRST);
     if (op_spin_until_clear(XHCI_OP_USBCMD_OFF, XHCI_CMD_HCRST) != 0) {
         printk("[XHCI] FAIL: controller reset timeout\n");
-        return;
+        return -1;
     }
     printk("[XHCI] post-HCRST usbsts=0x%x\n",
            (unsigned)op_read32(XHCI_OP_USBSTS_OFF));
@@ -911,7 +1287,7 @@ xhci_init(void)
      * register (other than USBSTS) until USBSTS.CNR is '0'. */
     if (op_spin_until_clear(XHCI_OP_USBSTS_OFF, XHCI_STS_CNR) != 0) {
         printk("[XHCI] FAIL: CNR did not clear after reset\n");
-        return;
+        return -1;
     }
     printk("[XHCI] post-CNR-clear usbsts=0x%x\n",
            (unsigned)op_read32(XHCI_OP_USBSTS_OFF));
@@ -923,10 +1299,45 @@ xhci_init(void)
            (unsigned)op_read32(XHCI_OP_USBSTS_OFF));
 
     /* Step 5: Allocate DCBAA (Device Context Base Address Array).
-     * DCBAA[0] is reserved (must be 0); slots are 1..MaxSlots. */
+     * DCBAA[0] is reserved for the Scratchpad Buffer Array pointer
+     * (if MaxScratchpadBufs > 0); slots are 1..MaxSlots. */
     {
         uint8_t *dcbaa_va = (uint8_t *)alloc_page(&s_dcbaa_phys);
         s_dcbaa      = (uint64_t *)dcbaa_va;
+
+        /* Step 5.1: Scratchpad buffers.
+         *
+         * HCSPARAMS2 holds Max Scratchpad Bufs:
+         *   bits 25:21 = Max Scratchpad Bufs Hi
+         *   bits 31:27 = Max Scratchpad Bufs Lo
+         * Total = (Hi << 5) | Lo.
+         *
+         * If non-zero, the OS MUST allocate that many 4KB pages and
+         * install pointers in a Scratchpad Buffer Array, whose
+         * physical address goes in DCBAA[0]. AMD Ryzen / Renesas
+         * controllers commonly require 1-8 scratchpad buffers; QEMU
+         * reports 0. Without this on real HW, the controller posts
+         * Host System Error after USBCMD.RS=1 and Address Device
+         * fails with cc=5/HCE. */
+        uint32_t hcsp2 = s_cap->hcsparams2;
+        uint32_t max_sp = (((hcsp2 >> 21) & 0x1Fu) << 5) |
+                          ((hcsp2 >> 27) & 0x1Fu);
+        printk("[XHCI] hcsparams2=0x%x max_scratchpad_bufs=%u\n",
+               (unsigned)hcsp2, (unsigned)max_sp);
+        if (max_sp > 0) {
+            uint64_t  sp_array_phys;
+            uint64_t *sp_array = (uint64_t *)alloc_page(&sp_array_phys);
+            uint32_t  i;
+            for (i = 0; i < max_sp && i < 512; i++) {
+                uint64_t sp_buf_phys;
+                (void)alloc_page(&sp_buf_phys);
+                sp_array[i] = sp_buf_phys;
+            }
+            s_dcbaa[0] = sp_array_phys;
+            printk("[XHCI] scratchpad: allocated %u bufs, array PA=0x%x\n",
+                   (unsigned)max_sp, (unsigned)sp_array_phys);
+        }
+
         /* SAFETY: s_op->dcbaap is a packed MMIO field at a known fixed offset.
          * Writing through op_write32 would require a 64-bit accessor; the
          * dcbaap field is at offset 0x30 in xhci_op_regs_t.  Access it via
@@ -1016,7 +1427,7 @@ xhci_init(void)
                op_read32(XHCI_OP_USBCMD_OFF) | XHCI_CMD_RS);
     if (op_spin_until_clear(XHCI_OP_USBSTS_OFF, XHCI_STS_HCH) != 0) {
         printk("[XHCI] FAIL: controller did not start\n");
-        return;
+        return -1;
     }
     {
         uint32_t usbsts = op_read32(XHCI_OP_USBSTS_OFF);
@@ -1028,15 +1439,37 @@ xhci_init(void)
                (unsigned)*crcr, (unsigned)s_cmd_ring_phys);
     }
 
-    /* Step 12: Enumerate ports */
-    for (i = 1; i <= s_max_ports && i < XHCI_MAX_SLOTS; i++)
+    /* Step 12: Pre-scan ports to see if any have a connected device.
+     * If none do, return 0 to let xhci_init try the next controller
+     * — the keyboard might be on a different xhci PCI device. */
+    int connected_ports = 0;
+    for (i = 1; i <= s_max_ports && i <= XHCI_MAX_PORTS; i++) {
+        volatile uint32_t *portsc_reg =
+            (volatile uint32_t *)((volatile uint8_t *)s_op + 0x400u +
+                                  (i - 1u) * 16u);
+        if (*portsc_reg & XHCI_PORTSC_CCS)
+            connected_ports++;
+    }
+    printk("[XHCI] %u port(s) have CCS=1\n", (unsigned)connected_ports);
+    if (connected_ports == 0) {
+        /* No devices on this controller — caller will try the next. */
+        return 0;
+    }
+
+    /* Enumerate every port that has a connected device. We try ALL
+     * ports — even ones marked USB 3.x — because:
+     *   1. The Supported Protocol cap walk may have failed silently.
+     *   2. enumerate_port early-returns on CCS=0, so it's cheap.
+     *   3. A misclassified port would otherwise become invisible. */
+    for (i = 1; i <= s_max_ports && i <= XHCI_MAX_PORTS; i++)
         enumerate_port(i);
 
-    s_post_boot   = 1;
     s_xhci_active = 1;
+    s_post_boot   = 1;
 
     printk("[XHCI] OK: %u ports, %u slots\n",
            (unsigned)s_max_ports, (unsigned)s_max_slots);
+    return 1;
 }
 
 /* -------------------------------------------------------------------------
@@ -1088,31 +1521,45 @@ xhci_poll(void)
              * xHCI spec §6.4.2.3: Port Status Change Event TRB
              * param[31:24] = Port ID (1-based). */
             uint8_t port_id = (uint8_t)((trb->param >> 24) & 0xFFu);
-            if (port_id >= 1 && port_id <= s_max_ports) {
+            if (port_id >= 1 && port_id <= s_max_ports &&
+                port_id <= XHCI_MAX_PORTS) {
                 volatile uint32_t *portsc_reg =
                     (volatile uint32_t *)((volatile uint8_t *)s_op + 0x400u +
                                           (port_id - 1u) * 16u);
                 uint32_t portsc = *portsc_reg;
 
-                if (portsc & XHCI_PORTSC_CSC) {
-                    /* Clear CSC (RW1C bit 17). Write 1 to CSC while preserving
-                     * non-RW1C bits and not accidentally clearing other RW1C
-                     * bits. PORTSC RW1C bits: CSC(17), PEC(18), WRC(19),
-                     * OCC(20), PRC(21), PLC(22), CEC(23).
-                     * Mask = 0x00FE0000. Write 1 only to CSC. */
-                    *portsc_reg = (portsc & ~0x00FE0000u) | XHCI_PORTSC_CSC;
+                /* Clear ALL latched RW1C change bits at once. We're not
+                 * acting on most of them (PEC/WRC/OCC/PLC/CEC) but
+                 * leaving them latched would re-fire PSC events forever.
+                 * Use a clean RW1C value: keep non-RW1C state, set ALL
+                 * change bits to 1 to clear them. */
+                *portsc_reg = portsc_rmw_mask(portsc) | XHCI_PORTSC_RW1C_MASK;
 
+                if (portsc & XHCI_PORTSC_CSC) {
                     if (portsc & XHCI_PORTSC_CCS) {
-                        /* Device connected — enumerate silently (s_post_boot=1) */
-                        enumerate_port(port_id);
+                        /* Device connected — DEFER enumeration to after
+                         * the event ring drain to avoid the re-entrancy
+                         * bug where poll_cmd_completion (called inside
+                         * enumerate_port) corrupts s_evt_dequeue. */
+                        s_pending_enum[port_id] = 1;
                     } else {
-                        /* Device disconnected — deactivate slot */
+                        /* Device disconnected — issue Disable Slot to
+                         * release controller resources, then free the
+                         * driver-side slot. */
                         uint32_t s;
                         for (s = 1; s < XHCI_MAX_SLOTS; s++) {
                             if (s_slot_port[s] == port_id && s_hid_slots[s]) {
+                                printk("[XHCI] port %u disconnect, freeing slot %u\n",
+                                       (unsigned)port_id, (unsigned)s);
+                                issue_disable_slot((uint8_t)s);
                                 s_hid_slots[s]     = 0;
-                                s_hid_slot_type[s]  = USB_DEV_NONE;
-                                s_slot_port[s]      = 0;
+                                s_hid_slot_type[s] = USB_DEV_NONE;
+                                s_slot_port[s]     = 0;
+                                if (s_dcbaa)
+                                    s_dcbaa[s] = 0;
+                                /* Note: leaks transfer ring + HID buf
+                                 * pages — Aegis has no reverse free path.
+                                 * Acceptable for short-lived hotplug. */
                                 break;
                             }
                         }
@@ -1130,6 +1577,21 @@ xhci_poll(void)
         update_erdp();
 
         trb = &s_evt_ring[s_evt_dequeue];
+    }
+
+    /* Now that the outer event ring drain is complete, process any
+     * pending hot-enumerate requests. enumerate_port internally calls
+     * poll_cmd_completion which advances s_evt_dequeue / s_evt_cycle —
+     * doing this OUTSIDE the outer while loop avoids the re-entrancy
+     * corruption that breaks both initial enumeration and hotplug. */
+    {
+        uint32_t p;
+        for (p = 1; p <= s_max_ports && p <= XHCI_MAX_PORTS; p++) {
+            if (s_pending_enum[p]) {
+                s_pending_enum[p] = 0;
+                enumerate_port(p);
+            }
+        }
     }
 }
 

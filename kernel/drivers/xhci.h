@@ -65,6 +65,9 @@ typedef struct __attribute__((packed)) {
 #define XHCI_TRB_CMD_COMPLETION    33
 #define XHCI_TRB_PORT_STATUS_CHG   34
 
+/* TRB additional types */
+#define XHCI_TRB_DISABLE_SLOT      10
+
 /* USBCMD bits */
 #define XHCI_CMD_RS                (1u << 0)
 #define XHCI_CMD_HCRST             (1u << 1)
