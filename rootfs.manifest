@@ -56,3 +56,4 @@ tools/cacert.pem                /etc/ssl/certs/ca-certificates.crt
 # System control
 user/bin/shutdown/shutdown.elf  /bin/shutdown
 user/bin/reboot/reboot.elf      /bin/reboot
+user/bin/rune                   /bin/rune
