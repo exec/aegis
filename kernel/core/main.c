@@ -27,6 +27,8 @@
 #include "random.h"
 #include <stdint.h>
 
+void poll_test(void);
+
 /*
  * kernel_main — top-level kernel entry point.
  *
@@ -145,6 +147,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
         printk("[VFS] WARN: no ramdisk and no Aegis root on NVMe — running from initrd only\n");
     }
     cap_policy_load();      /* load /etc/aegis/caps.d/ — must be after ext2  */
+    poll_test();            /* VFS .poll self-test — [POLL] OK               */
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     rtl8169_init();         /* RTL8168/8169 NIC — [NET] OK or silent skip   */

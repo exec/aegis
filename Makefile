@@ -90,7 +90,8 @@ FS_SRCS = \
     kernel/fs/console.c kernel/fs/kbd_vfs.c kernel/fs/pipe.c \
     kernel/fs/blkdev.c kernel/fs/gpt.c \
     kernel/fs/ext2.c kernel/fs/ext2_cache.c kernel/fs/ext2_dir.c kernel/fs/ext2_vfs.c \
-    kernel/fs/ramfs.c kernel/fs/procfs.c kernel/fs/memfd.c
+    kernel/fs/ramfs.c kernel/fs/procfs.c kernel/fs/memfd.c \
+    kernel/fs/poll_test.c
 
 DRIVER_SRCS = \
     kernel/drivers/nvme.c kernel/drivers/xhci.c \

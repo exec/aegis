@@ -35,6 +35,7 @@ const BOOT_ORACLE: &[&str] = &[
     "[PCIE] OK:",
     "[EXT2] OK: mounted ramdisk0",
     "[CAP_POLICY] OK:",
+    "[POLL] OK:",
     "[SMP] OK:",
     "[CAP] OK: 7 baseline capabilities",
     "[VMM] OK: identity map removed",
