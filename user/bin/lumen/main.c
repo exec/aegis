@@ -431,8 +431,7 @@ main(void)
         comp.full_redraw = 0;
     }
 
-    /* Escape state for Ctrl+Alt+T detection (ESC prefix from kbd driver) */
-    int esc_pending = 0;
+    (void)0; /* esc_pending removed — sequences collected inline */
 
     /* Clock update counter */
     int clock_counter = 0;
@@ -455,24 +454,37 @@ main(void)
             goto next_poll;
         }
         if (n == 1) {
-            /* ESC prefix detection: kbd driver sends ESC for Alt, Ctrl+Shift,
-             * and Ctrl+Alt combos. After ESC, the next byte identifies the combo:
-             * 0x14 = Ctrl+Alt+T (dropdown toggle)
-             * 0x03 = Ctrl+Shift+C (copy)
-             * 0x16 = Ctrl+Shift+V (paste)
-             * 'c'  = Alt+C (copy alias)
-             * 'v'  = Alt+V (paste alias) */
+            /* ESC prefix handling: collect the full escape sequence
+             * immediately (no sleeping between bytes).  The kbd ISR pushes
+             * all bytes of an escape sequence in one handler invocation,
+             * so they are in the ring buffer within microseconds. */
             if (kbd_byte == '\033') {
-                esc_pending = 1;
-                activity = 1;
-                goto next_poll;
-            }
-            if (esc_pending) {
-                esc_pending = 0;
-                if (kbd_byte == 0x14 && dropdown_win) {
-                    /* Toggle dropdown terminal visibility */
+                /* Try to read the next byte with a tight retry loop.
+                 * VMIN=0 means read returns 0 if nothing is buffered yet. */
+                char eb = 0;
+                int got_eb = 0;
+                for (int retry = 0; retry < 80; retry++) {
+                    if (read(0, &eb, 1) == 1) {
+                        got_eb = 1;
+                        break;
+                    }
+                }
+
+                if (!got_eb) {
+                    /* Bare ESC — forward to focused PTY */
+                    int mfd = (comp.focused && comp.focused->tag > 0)
+                              ? comp.focused->tag : -1;
+                    if (mfd >= 0) {
+                        char esc = '\033';
+                        write(mfd, &esc, 1);
+                    }
+                    activity = 1;
+                    goto next_poll;
+                }
+
+                /* Ctrl+Alt+T (0x14) — toggle dropdown */
+                if (eb == 0x14 && dropdown_win) {
                     if (dropdown_win->visible) {
-                        /* Hide dropdown, restore previous focus */
                         dropdown_win->visible = 0;
                         dropdown_win->focused_window = 0;
                         int prev_valid = 0;
@@ -499,7 +511,6 @@ main(void)
                             }
                         }
                     } else {
-                        /* Show dropdown, save current focus, take focus */
                         prev_focus = comp.focused;
                         if (prev_focus)
                             prev_focus->focused_window = 0;
@@ -514,17 +525,16 @@ main(void)
                     goto next_poll;
                 }
 
-                /* Ctrl+Alt+L (0x0C) — lock screen.
-                 * Freeze input, signal Bastion (parent) to show lock form. */
-                if (kbd_byte == 0x0C) {
+                /* Ctrl+Alt+L (0x0C) — lock screen */
+                if (eb == 0x0C) {
                     s_input_frozen = 1;
                     kill(getppid(), SIGUSR1);
                     activity = 1;
                     goto next_poll;
                 }
 
-                /* Ctrl+Shift+C (0x03) or Alt+C ('c') — copy selection */
-                if ((kbd_byte == 0x03 || kbd_byte == 'c') && comp.focused &&
+                /* Ctrl+Shift+C (0x03) or Alt+C ('c') — copy */
+                if ((eb == 0x03 || eb == 'c') && comp.focused &&
                     terminal_has_selection(comp.focused)) {
                     char sel_buf[CLIPBOARD_MAX];
                     int sel_len = terminal_copy_selection(comp.focused,
@@ -537,8 +547,8 @@ main(void)
                     goto next_poll;
                 }
 
-                /* Ctrl+Shift+V (0x16) or Alt+V ('v') — paste clipboard */
-                if ((kbd_byte == 0x16 || kbd_byte == 'v') && comp.focused &&
+                /* Ctrl+Shift+V (0x16) or Alt+V ('v') — paste */
+                if ((eb == 0x16 || eb == 'v') && comp.focused &&
                     comp.focused->tag > 0 && s_clipboard_len > 0) {
                     write(comp.focused->tag, s_clipboard,
                           (unsigned)s_clipboard_len);
@@ -546,17 +556,25 @@ main(void)
                     goto next_poll;
                 }
 
-                /* CSI sequence (ESC [): read remaining bytes and flush
-                 * as a single write so the shell sees a complete sequence. */
-                if (kbd_byte == '[') {
+                /* CSI sequence (ESC [): collect params + final byte,
+                 * then write the whole sequence in one shot. */
+                if (eb == '[') {
                     int mfd = (comp.focused && comp.focused->tag > 0)
                               ? comp.focused->tag : -1;
                     if (mfd >= 0) {
-                        char seq[8] = { '\033', '[' };
+                        char seq[16] = { '\033', '[' };
                         int slen = 2;
-                        /* Read parameter bytes + final byte */
                         char cb;
-                        while (slen < 7 && read(0, &cb, 1) == 1) {
+                        /* Collect remaining CSI bytes with retries */
+                        while (slen < 15) {
+                            int got = 0;
+                            for (int retry = 0; retry < 80; retry++) {
+                                if (read(0, &cb, 1) == 1) {
+                                    got = 1;
+                                    break;
+                                }
+                            }
+                            if (!got) break;
                             seq[slen++] = cb;
                             if (cb >= 0x40 && cb <= 0x7E)
                                 break;  /* final byte */
@@ -567,13 +585,16 @@ main(void)
                     goto next_poll;
                 }
 
-                /* Not a recognized combo -- flush ESC + char to focused PTY */
-                int mfd = (comp.focused && comp.focused->tag > 0)
-                          ? comp.focused->tag : -1;
-                if (mfd >= 0) {
-                    char esc = '\033';
-                    write(mfd, &esc, 1);
-                    write(mfd, &kbd_byte, 1);
+                /* Alt+key or unrecognized ESC combo — forward ESC + byte
+                 * to focused PTY as a single write so crossterm sees it
+                 * atomically. */
+                {
+                    int mfd = (comp.focused && comp.focused->tag > 0)
+                              ? comp.focused->tag : -1;
+                    if (mfd >= 0) {
+                        char pair[2] = { '\033', eb };
+                        write(mfd, pair, 2);
+                    }
                 }
                 activity = 1;
                 goto next_poll;
