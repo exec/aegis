@@ -447,6 +447,7 @@ install-test: iso disk
 clean:
 	rm -rf $(BUILD)
 	rm -f .init_stamp_*
+	rm -f user/bin/rune
 	@for d in user/bin/*/; do \
 		[ -f "$$d/Makefile" ] && $(MAKE) -C "$$d" clean 2>/dev/null; \
 	done; true
@@ -454,3 +455,4 @@ clean:
 		[ -f "$$d/Makefile" ] && $(MAKE) -C "$$d" clean 2>/dev/null; \
 	done; true
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml
+	$(CARGO) clean --manifest-path tests/Cargo.toml 2>/dev/null || rm -rf tests/target
