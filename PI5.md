@@ -1,8 +1,8 @@
 # Booting Aegis on Raspberry Pi 5
 
-Step-by-step guide to flashing Aegis onto a Pi 5 and getting it booted over a serial console. This is the practical "I have the hardware in front of me" companion to [ARM64.md](ARM64.md) §17-18, which has the technical deep dive on GICv3, DTB parsing, and memory layout.
+Step-by-step guide to flashing Aegis onto a Pi 5 and getting it booted over a serial console. This is the practical "I have the hardware in front of me" companion to [ARM64.md](ARM64.md) §17-18, which has the technical deep dive on GIC-400, DTB parsing, and memory layout.
 
-**Hardware status as of 2026-04-12:** untested on real silicon. Everything in this guide has been verified under `qemu-system-aarch64 -machine virt,gic-version=3 -cpu cortex-a76` which emulates the BCM2712's GIC-600 closely but not perfectly. First-boot diagnosis on real hardware requires a USB-TTL serial cable.
+**Hardware status as of 2026-04-12:** untested on real silicon. Everything in this guide has been verified under `qemu-system-aarch64 -machine virt -cpu cortex-a72` which approximates BCM2712 closely but not perfectly. First-boot diagnosis on real hardware requires a serial cable plugged into the Pi 5's dedicated JST-SH debug header.
 
 ---
 
@@ -12,88 +12,80 @@ You need three things besides the Pi 5:
 
 | Item | Cost | Notes |
 |------|------|-------|
-| **USB-TTL serial cable** (Adafruit #954 or equivalent) | ~$10 | See §2 for the exact cable |
-| **SD card, any size ≥ 128 MB, FAT32-formatted** | ~$5 | The Aegis boot image is 6.1 MB. Any microSD card works. |
+| **Raspberry Pi Debug Probe** | $12 | First-party JST-SH debug cable. See §2 for why this and not a 40-pin GPIO cable. |
+| **SD card, any size ≥ 128 MB, FAT32-formatted** | ~$5 | The Aegis boot image is ~2 MB. Any microSD card works. |
 | **USB-C power supply for the Pi 5** | ~$15 | 27W official Pi 5 PSU recommended. 5V 3A minimum. |
 
-You do **not** need: HDMI cable, monitor, USB keyboard, Ethernet cable, Wi-Fi. All interaction with Aegis during first boot is through the serial console.
+You do **not** need: HDMI cable, monitor, USB keyboard, Ethernet cable, Wi-Fi. All interaction with Aegis during first boot is through the serial console on the JST-SH debug header.
 
 ---
 
 ## 2. The serial cable
 
-### Primary recommendation: Adafruit #954
+### Why the 40-pin GPIO header does not work on Pi 5
 
-**[adafruit.com/product/954](https://www.adafruit.com/product/954)** — $9.95, in stock, uses Silicon Labs CP2102 chip, 3.3V logic levels (correct for the Pi), and comes with pre-terminated female sockets that drop directly onto the Pi GPIO header pins.
+On Pi 4 and earlier, the debug UART (UART0) was wired directly from the BCM283x/BCM271x SoC to pins 8 and 10 of the 40-pin GPIO header (GPIO 14/15). A $10 USB-TTL cable like the Adafruit #954 dropped onto three pins and you were done.
 
-**Wire colors** (this is the canonical Adafruit 954 layout):
+**This does not work on Pi 5.** The BCM2712 routes its 40-pin GPIO through the RP1 south bridge — a dedicated I/O companion chip on the PCIe x4 link. To reach GPIO 14/15 from software you'd need:
 
-| Wire | Function |
-|------|----------|
-| **Red** | +5V power from USB — **DO NOT CONNECT TO THE PI** |
-| **Black** | GND |
-| **White** | RX into the USB port (data flowing *from* the Pi) |
-| **Green** | TX out of the USB port (data flowing *to* the Pi) |
+1. A PCIe host controller driver for the BCM2712 internal PCIe root complex
+2. An RP1 driver that knows the (partially documented) register map
+3. Configuration for RP1's own UART0 block
 
-### Amazon alternatives (if you need it faster or prefer Prime)
+None of that exists in Aegis yet. Running the 40-pin cable will produce silence.
 
-- **[Waveshare Industrial USB to TTL (D) on Amazon](https://www.amazon.com/waveshare-USB-Serial-Adapter-Cable/dp/B0CYGL421W)** — uses FT232RNL chip, Pi 5-specific, switchable 3.3V/5V logic, better ESD/fuse protection than Adafruit. ~$10-15. Slightly bulkier but rock-solid. Comes with SH1.0 3-pin cable for Pi 5's dedicated UART header AND a separated 4-pin header for the 40-pin GPIO (you'll use the GPIO version).
-- **[FTDI TTL-232R-3V3 on Amazon](https://www.amazon.com/FTDI-TTL-232R-RPI-DEBUG-RASPBERRY-MODULE/dp/B00HKJOVK4)** — the "original" FTDI-branded cable, ~$25. Overkill but if you already trust FTDI, it works.
+What Aegis *does* use on Pi 5 is the BCM2712 **internal** PL011 debug UART at physical address `0x107D001000`. This UART is not on the 40-pin header at all — it's on a dedicated 3-pin JST-SH connector silkscreened "UART" between the two micro-HDMI ports on the board edge. The on-board SPI EEPROM bootloader pre-initializes it to 115200 8N1 when `enable_uart=1` is set in `config.txt`.
+
+### Primary recommendation: Raspberry Pi Debug Probe
+
+**[raspberrypi.com/products/debug-probe](https://www.raspberrypi.com/products/debug-probe/)** — $12, first-party, designed for exactly this purpose. One end is a JST-SH 3-pin plug that snaps directly onto the Pi 5's debug header. The other end is USB-A. On the laptop it shows up as a standard USB CDC serial device (`/dev/tty.usbmodem*` on macOS, `/dev/ttyACM0` on Linux). No drivers, no wiring diagram, no wire-color mnemonic to memorize.
+
+It also exposes an SWD probe on a second cable for flashing firmware, which we don't need — just the UART side.
+
+### Alternatives
+
+- **Adafruit #5054** — a bare JST-SH 3-pin cable (~$2). Plug one end into the Pi 5 and wire the other three leads to any USB-TTL adapter you already own (CP2102, FT232RNL, etc). You'll need to match pinout by hand: the JST-SH pinout is documented on the [Pi 5 hardware page](https://www.raspberrypi.com/documentation/computers/raspberry-pi-5.html).
+- **Generic JST-SH-to-Dupont jumper cables** (~$5-10 on Amazon) — same idea, pre-terminated as female Dupont jumpers on the non-Pi end so you can breadboard them into an existing USB-TTL adapter.
 
 ### What NOT to buy
 
-- **Generic $3 CP2102 modules with breakaway pin headers** — you'd also need female-to-female jumper wires, and those modules are poorly QC'd. False economy.
-- **RS-232 serial adapters (DB9 connectors)** — these are +12V/-12V logic, will destroy the Pi if connected directly. You want **TTL serial**, not RS-232.
-- **Prolific PL2303 cables** — work on most platforms but have recurring macOS driver issues. CP2102 and FT232RNL are more reliable on macOS.
+- **Adafruit #954** — the classic CP2102 cable with 2.54 mm Dupont female headers. Works beautifully on Pi 4. Will not work on Pi 5 without also acquiring a JST-SH adapter *and* an RP1 driver. Skip it.
+- **Any "Pi GPIO UART" cable that terminates in a 4-pin Dupont block** — those target GPIO 14/15, which is RP1-only on Pi 5.
+- **RS-232 serial adapters (DB9 connectors)** — ±12 V logic, would destroy the Pi. You want **TTL** serial, 3.3 V logic.
+
+### On running the Debug Probe *and* an HDMI monitor
+
+You can still plug HDMI displays into the two micro-HDMI ports while the JST-SH cable is connected; the UART header sits between them and the plug is low-profile. No physical conflict.
 
 ---
 
-## 3. Pi 5 GPIO pinout
+## 3. The Pi 5 debug header
 
-The Pi 5 uses the same 40-pin GPIO header as Pi 4, Pi 3, and Pi B+. The debug UART (UART0 / PL011) is on **physical pins 8 and 10**.
-
-Viewing the Pi 5 with the **GPIO header at the top edge**, **USB/Ethernet at the bottom edge**, **HDMI on the left**:
+Find the two micro-HDMI ports on the edge of the Pi 5. Between them, closer to the USB-C power port, is a small white 3-pin horizontal connector silkscreened **"UART"**. That is the JST-SH 1.0 mm 3-pin debug header.
 
 ```
-                  ┌─────────────── 40-pin GPIO header ───────────────┐
-                  │                                                  │
-     Pin 1 (3.3V) ┤ ● ●                                              ├ Pin 2 (5V)    ── DO NOT USE
-    Pin 3 (SDA1)  ┤ ● ●                                              ├ Pin 4 (5V)    ── DO NOT USE
-    Pin 5 (SCL1)  ┤ ● ●                                              ├ Pin 6 (GND)   ◄── Black wire
-    Pin 7 (GPIO4) ┤ ● ●                                              ├ Pin 8 (TXD0)  ◄── White wire
-    Pin 9 (GND)   ┤ ● ●                                              ├ Pin 10 (RXD0) ◄── Green wire
-    Pin 11...     ┤ ● ●                                              ├ Pin 12...
-                  │  ⋮    (remaining 28 pins not used)  ⋮             │
-                  └──────────────────────────────────────────────────┘
+     board edge, USB-C on the left
+     ─────────────────────────────────────────
+       USB-C ┃  ┃ HDMI0 ┃  ┃ UART ┃  ┃ HDMI1 ┃
+      power  ┃  ┃ micro ┃  ┃ JST  ┃  ┃ micro ┃
+             ┗━━┛       ┗━━┛ SH   ┗━━┛       ┗━━
+                              ▲
+                              │
+                              └── plug the Debug Probe here
 ```
 
-**Pin 1 is the corner closest to the SD card slot and micro-HDMI ports.** Pins are numbered: odd on the outer row (closer to the board edge), even on the inner row.
+The three pins on the header are, reading from the inside of the board outward: **TX**, **RX**, **GND**. The Raspberry Pi Debug Probe cable is keyed so it only inserts one way; you cannot get the polarity wrong with a first-party cable.
 
-| Physical pin | GPIO | Function | Cable wire |
-|--------------|------|----------|-----------|
-| Pin 2 | — | +5V | **Leave disconnected** |
-| Pin 4 | — | +5V | **Leave disconnected** |
-| Pin 6 | — | GND | **Black** (GND) |
-| Pin 8 | GPIO 14 | UART0 TXD (Pi transmits) | **White** (cable RX) |
-| Pin 10 | GPIO 15 | UART0 RXD (Pi receives) | **Green** (cable TX) |
+If you're wiring a bare JST-SH adapter to a generic USB-TTL module by hand, the rules are the same as any serial link:
 
-Pin 6 and Pin 8 are adjacent. Pin 8 and Pin 10 are adjacent. All three cable connections land on three consecutive positions on the inner row — easy.
+- Pi **TX** → adapter **RX** (data flowing out of the Pi into the laptop)
+- Pi **RX** → adapter **TX** (data flowing from the laptop into the Pi)
+- Pi **GND** → adapter **GND**
+- Do **not** connect any VCC/5V/3.3V line — the Pi is self-powered from its USB-C port
 
-### Critical: the red wire
+The two most common mistakes with hand-wired adapters are swapping TX/RX (you'll see silence) and accidentally connecting a second power rail (you'll see boot timing jitter or back-powering).
 
-**Do not connect the red +5V wire from the cable to anything on the Pi.** The Pi is self-powered from its USB-C port. The red wire carries +5V from your laptop's USB port. If you connect it to a 5V pin on the Pi, you have two independent power supplies feeding the same rail, which can:
-
-1. Back-feed current through your laptop's USB port
-2. Interfere with the Pi's own power-on-reset timing
-3. In extreme cases, damage the laptop USB port or the Pi
-
-Just fold the red wire back along the cable body and tape it down, or snip it off at the connector with wire cutters. It's the one wire you never touch.
-
-### Cross-over wiring
-
-Notice that **Pi TX connects to cable RX**, and **Pi RX connects to cable TX**. The signals cross over. This is because "TX" and "RX" are named from whichever device is talking — data flowing *out of* one device's TX pin flows *into* the other device's RX pin.
-
-If you wire them straight-through (Pi TX → cable TX, Pi RX → cable RX), you'll see nothing. No smoke, just silence. This is the single most common wiring mistake.
+With the first-party Debug Probe: none of the above is your problem. Plug it in, done.
 
 ---
 
@@ -109,49 +101,75 @@ make -C kernel/arch/arm64 image
 bash tools/build-pi5-image.sh
 ```
 
-The first run downloads Pi firmware blobs (~6 MB total) from [github.com/raspberrypi/firmware](https://github.com/raspberrypi/firmware/tree/master/boot) and caches them in `references/pi-firmware/`. Subsequent runs are offline.
+The first run downloads the Pi 5 device tree blob (~80 KB) and the optional BCM2712 D0-stepping overlay (~1 KB) from [github.com/raspberrypi/firmware](https://github.com/raspberrypi/firmware/tree/master/boot) and caches them in `references/pi-firmware/`. Subsequent runs are offline.
 
 **Output:** `build/pi5-image/` containing:
 
 ```
-bcm2712-rpi-5-b.dtb    78 KB   # Pi 5 device tree blob
-bootcode.bin           52 KB   # early bootloader (harmless on Pi 5, not strictly used)
-config.txt            831 B    # boot config (kernel name, UART enable, load address)
-fixup.dat              7 KB    # memory pre-load config
-fixup4.dat             5 KB    # memory pre-load config (newer firmware)
-kernel8.img           869 KB   # Aegis kernel in Linux arm64 Image format
-start.elf             3.0 MB   # GPU firmware (main bootloader)
-start4.elf            2.3 MB   # GPU firmware (newer, used on Pi 5)
+bcm2712-rpi-5-b.dtb    78 KB    # Pi 5 device tree (firmware auto-selects this name)
+overlays/
+  bcm2712d0.dtbo        1 KB    # optional: D0-stepping overlay for rev 1.1 boards
+config.txt              2 KB    # boot config
+kernel_2712.img       ~900 KB   # Aegis kernel in Linux arm64 Image format
 ```
 
-Total: 6.1 MB.
+Total: ~1 MB. Significantly smaller than a Pi 4 image because Pi 5 does not use `bootcode.bin`, `start4.elf`, `fixup4.dat`, or any other pre-kernel firmware files from the SD card — that second-stage bootloader lives entirely in the on-board SPI EEPROM.
 
-### config.txt contents
-
-The build script writes this exact file:
+The boot flow on Pi 5 is:
 
 ```
-arm_64bit=1
-kernel=kernel8.img
-device_tree=bcm2712-rpi-5-b.dtb
-kernel_address=0x200000
-enable_uart=1
-uart_2ndstage=1
-disable_commandline_tags=1
+BCM2712 boot ROM          (immutable, on-die)
+      │
+      ▼
+SPI EEPROM bootloader     (on-board flash — NOT on the SD card)
+      │
+      ▼
+TF-A BL31 at EL3          (built into the EEPROM)
+      │
+      ▼
+Aegis kernel at EL2       (loaded from the SD card as kernel_2712.img)
 ```
 
-The key settings:
+The SD card only needs three files (plus the optional overlay subdirectory).
 
-- **`arm_64bit=1`** — boot the kernel as aarch64, not 32-bit ARM
-- **`kernel=kernel8.img`** — tells the firmware which file to load
-- **`device_tree=bcm2712-rpi-5-b.dtb`** — the Pi 5 device tree that `arch_mm.c` parses for memory layout and GIC-600 detection
-- **`kernel_address=0x200000`** — overrides the firmware's default load address (0x80000). Aegis is linked with `KERN_LMA = 0x40200000`, which equals Pi 5's RAM base (0x40000000) + 0x200000 offset. Without this override, the Image header branch at offset 0 would land at the wrong address.
-- **`enable_uart=1`** + **`uart_2ndstage=1`** — enables the debug UART on GPIO 14/15 at 115200 8N1 and makes the GPU firmware itself emit status info over serial (which gives you a diagnosis channel even if the kernel never starts).
-- **`disable_commandline_tags=1`** — suppresses the firmware appending its own cmdline to the kernel, which would violate the arm64 boot protocol.
+### About `bcm2712d0.dtbo`
+
+Pi 5 boards exist in two silicon revisions. The original release used BCM2712 C-stepping. Newer 2 GB and 16 GB SKUs (board revision 1.1) use BCM2712 D-stepping, which has small register-layout quirks that need an overlay to boot cleanly. The [Circle](https://github.com/rsta2/circle) bare-metal library documents this as a hard requirement for rev 1.1 boards.
+
+The packager fetches the overlay best-effort and drops it under `overlays/`. On C-stepping silicon it's harmless and ignored. On D-stepping silicon the EEPROM bootloader applies it automatically based on the detected board revision. Including it costs a kilobyte and eliminates a class of "why doesn't my Pi 5 boot" complaints.
 
 ---
 
-## 5. Flashing the SD card
+## 5. config.txt contents
+
+The build script writes this exact file to the root of the image:
+
+```
+kernel=kernel_2712.img
+kernel_address=0x40200000
+enable_uart=1
+os_check=0
+pciex4_reset=0
+```
+
+Per-line rationale:
+
+- **`kernel=kernel_2712.img`** — canonical Pi 5 kernel filename. The Pi 5 EEPROM bootloader looks for `kernel_2712.img` by default; `kernel8.img` still works as a backward-compatible fallback, but the new name is more honest about what it is.
+- **`kernel_address=0x40200000`** — where the firmware loads the kernel image in physical RAM. Our linker pins `KERN_LMA = 0x40200000`, so we load there directly. Pi 5 RAM starts at physical `0x00000000` (unlike Pi 4, where it started at `0x40000000`), so `0x40200000` is always valid RAM on any Pi 5 SKU (4 GB / 8 GB / 16 GB all cover it).
+- **`enable_uart=1`** — enables and pre-initializes the BCM2712 internal PL011 debug UART at `0x107D001000` for 115200 8N1 from a 48 MHz reference clock. This is the UART exposed on the JST-SH header. It is *not* the same as GPIO 14/15.
+- **`os_check=0`** — suppresses the firmware's "This OS does not indicate support for Raspberry Pi 5" banner that would otherwise be printed to our debug UART before Aegis even runs. Cosmetic but noisy.
+- **`pciex4_reset=0`** — do NOT reset the PCIe x4 root complex at OS handoff. RP1 hangs off this link, and resetting it leaves RP1 in an indeterminate state. Leaving it alone keeps RP1 in whatever configuration the EEPROM established, so a future RP1 driver has a clean starting point.
+
+Things that were in the old Pi 4 config but are **deliberately absent**:
+
+- `arm_64bit=1` — ignored on Pi 5 (Cortex-A76 is AArch64-only)
+- `device_tree=...` — Pi 5 firmware auto-selects `bcm2712-rpi-5-b.dtb` and applies D-stepping overlays automatically; explicitly setting this breaks overlay selection
+- `uart_2ndstage=1` — that flag controls the *RP1* UART0 path (for GPIO 14/15 users), which we don't have a driver for anyway
+- `disable_commandline_tags=1` — we don't parse firmware cmdline args; default is fine
+
+---
+
+## 6. Flashing the SD card
 
 ### macOS
 
@@ -162,8 +180,8 @@ diskutil list
 # Format as FAT32, single partition. Replace 'diskN' with your actual device.
 diskutil eraseDisk FAT32 AEGISBOOT MBRFormat /dev/diskN
 
-# Copy everything from build/pi5-image/ to the card root
-cp -v build/pi5-image/* /Volumes/AEGISBOOT/
+# Copy everything from build/pi5-image/ to the card root (note -r for overlays/)
+cp -rv build/pi5-image/* /Volumes/AEGISBOOT/
 
 # Flush and eject
 diskutil eject /dev/diskN
@@ -184,67 +202,74 @@ sudo mkfs.vfat -F 32 -n AEGISBOOT /dev/sdX1
 # Mount and copy
 sudo mkdir -p /mnt/sd
 sudo mount /dev/sdX1 /mnt/sd
-sudo cp -v build/pi5-image/* /mnt/sd/
+sudo cp -rv build/pi5-image/* /mnt/sd/
 sudo umount /mnt/sd
 ```
 
 Same warning: verify `/dev/sdX` before running. `sudo fdisk -l` will show sizes so you can tell your SSD apart from the SD card.
 
+After flashing, the SD card root should contain exactly:
+
+```
+/bcm2712-rpi-5-b.dtb
+/config.txt
+/kernel_2712.img
+/overlays/bcm2712d0.dtbo   (optional, present if the fetch succeeded)
+```
+
+Nothing else. No `bootcode.bin`, no `start*.elf`, no `fixup*.dat`. If those files appear on your card from an earlier Pi 4 experiment, they're harmless on Pi 5 but can be deleted.
+
 ---
 
-## 6. Physical setup
+## 7. Physical setup
 
 1. **Insert the SD card** into the Pi 5's slot (underside of the board, near the USB-C port).
-2. **Wire the serial cable** to the GPIO header per §3. Three wires:
-   - Black → Pin 6 (GND)
-   - White → Pin 8 (GPIO 14 TXD)
-   - Green → Pin 10 (GPIO 15 RXD)
-   - Red → **not connected** (tape it back or snip it off)
-3. **Plug the USB-TTL cable's USB end into your laptop.** Don't power the Pi yet.
-4. **Open a serial terminal** on your laptop (see §7). Leave it running, ready to capture output.
+2. **Plug the Debug Probe** into the JST-SH "UART" header between the two micro-HDMI ports. The connector is keyed — only goes in one way.
+3. **Plug the Debug Probe's USB end** into your laptop. Don't power the Pi yet.
+4. **Open a serial terminal** on your laptop (see §8). Leave it running, ready to capture output.
 5. **Plug the Pi 5 into USB-C power.** Boot starts immediately.
 
 ---
 
-## 7. Serial terminal on your laptop
+## 8. Serial terminal on your laptop
 
 ### macOS
 
 ```bash
 # Find the serial device (cable must be plugged in)
-ls /dev/tty.usbserial-*
-# Output like: /dev/tty.usbserial-1410
+ls /dev/tty.usbmodem*       # Debug Probe (CDC ACM)
+ls /dev/tty.usbserial-*     # USB-TTL adapter (CP2102/FT232)
 
-# Open terminal
-screen /dev/tty.usbserial-1410 115200
+# Open terminal (substitute the device you actually see)
+screen /dev/tty.usbmodem14101 115200
 ```
 
 Or if you prefer `minicom`:
 
 ```bash
 brew install minicom
-minicom -b 115200 -o -D /dev/tty.usbserial-1410
+minicom -b 115200 -o -D /dev/tty.usbmodem14101
 ```
 
 ### Linux
 
 ```bash
 # Find the serial device
-ls /dev/ttyUSB*
-# Output: /dev/ttyUSB0
+ls /dev/ttyACM*             # Debug Probe (CDC ACM)
+ls /dev/ttyUSB*             # USB-TTL adapter
 
 # You may need to add yourself to the dialout group first:
 sudo usermod -aG dialout $USER   # then log out + back in
 
 # Open terminal
-screen /dev/ttyUSB0 115200
+screen /dev/ttyACM0 115200
 ```
 
 Or:
 
 ```bash
 sudo apt install minicom
-minicom -b 115200 -o -D /dev/ttyUSB0
+minicom -b 115200 -o -D /dev/ttyACM0
 ```
 
 ### Exiting `screen`
@@ -257,21 +282,20 @@ Baud rate **115200**, **8 data bits**, **no parity**, **1 stop bit** (8N1). No f
 
 ---
 
-## 8. Expected boot output
+## 9. Expected boot output
 
 ### Success
 
 If everything works, within a second of powering on the Pi you'll see output like:
 
 ```
-[firmware banner from start4.elf if uart_2ndstage=1]
-
+[BOOT] aegis arm64 (pre-MMU)
 [SERIAL] OK: PL011 UART initialized
 [PMM] OK: 4096MB usable across 1 regions
 [VMM] OK: ARM64 4KB-granule page tables active
 [VMM] OK: mapped-window allocator active
 [KVA] OK: kernel virtual allocator active
-[GIC] OK: GICv3 initialized                     ← critical line
+[GIC] OK: GICv2 initialized                     ← Pi 5 uses GIC-400
 [TIMER] OK: ARM generic timer at 100 Hz
 [CAP] OK: capability subsystem initialized
 [RNG] OK: ChaCha20 CSPRNG seeded
@@ -282,8 +306,7 @@ If everything works, within a second of powering on the Pi you'll see output lik
 vigil: starting
 vigil: boot mode: text
 vigil: getty
-vigil: httpd
-vigil: dhcp
+...
 
  _______ _______  ______ _____ _______
  |_____| |______ |  ____   |   |______
@@ -297,54 +320,51 @@ vigil: dhcp
 login:
 ```
 
-The `[GIC] OK: GICv3 initialized` line is the most important indicator that the new driver works on real silicon — it means the GIC-600 distributor and redistributor came up correctly, system registers are configured, and interrupts will flow.
+Note that the GIC line reads **`GICv2 initialized`**, not GICv3. BCM2712 uses ARM **GIC-400**, which is a GICv2 implementation — despite Pi 5 being a Cortex-A76-class chip. Earlier versions of this guide incorrectly claimed GICv3; that was wrong, and the runtime dispatcher in `kernel/arch/arm64/gic.c` picks GIC-400 on Pi 5 based on the compatible string in the DTB.
 
-If you reach the `login:` prompt, **everything works**. Try `root` + `forevervigilant` for login credentials. (The password comes from `tests/tests/login_flow_test.rs` — not a secret, just a reminder.) See §12 for known userland limitations.
+If you reach the `login:` prompt, **everything works**. See §12 for known userland limitations.
 
 ### Partial success: firmware talks, kernel doesn't
 
 ```
-Raspberry Pi Bootloader
-Boot mode: SD (...)
+[firmware banner from EEPROM]
 ...
-[some firmware output]
 [then nothing]
 ```
 
-Means the Pi firmware loaded, found `config.txt`, loaded `kernel8.img`, and jumped to it — but our kernel isn't printing anything. Most likely cause: the PL011 MMIO probe in `uart_pl011.c` isn't finding the UART at 0xFE201000. Possible fixes:
+Means the EEPROM bootloader loaded `config.txt`, loaded `kernel_2712.img`, jumped into it — but our kernel isn't printing anything. Most likely causes:
 
-1. Verify the Pi firmware output shows `uart_2ndstage=1` succeeded. If you see NO output at all, the cable or wiring is wrong — the firmware's own UART output is using the same pins and we'd see it.
-2. If the firmware banner appears but the kernel banner doesn't, the kernel is running but PL011 probe failed. Edit `kernel/arch/arm64/uart_pl011.c` and hardcode `s_uart_base = (volatile uint32_t *)(0xFE201000UL + KERN_VA_OFFSET);` as the first line of `uart_init()`. Rebuild and reflash only `kernel8.img`.
+1. **PL011 MMIO probe mismatch.** `uart_pl011.c` is looking for the UART at a physical address that doesn't match `0x107D001000`. Verify via `make sym` and the DTB parser output.
+2. **Stale `kernel_address`.** If the firmware loaded the kernel at `0x80000` but our linker pinned it at `0x40200000`, the Image header's self-relocation may not fix it up in time. Check the config.txt you actually flashed.
+3. **MMU early bring-up hanging.** If you see `[BOOT] aegis arm64 (pre-MMU)` but nothing after, MMU enable in `boot.S` is looping. That's an Agent D area — report the last line you see.
 
 ### Complete silence
 
-No output at all, not even the Pi firmware banner. The Pi power LED lights up (so power is fine) but nothing appears on the serial terminal.
+No output at all. The Pi power LED lights up (so power is fine) but nothing appears on the serial terminal.
 
-**Most likely: cable wiring issue.** Go back to §3 and verify:
+**Most likely: debug cable issue.**
 
-1. Black → Pin 6 (GND)
-2. White → Pin 8 (GPIO 14 TX)
-3. Green → Pin 10 (GPIO 15 RX)
-4. Red → **not connected to anything**
+1. Is the Debug Probe (or your JST-SH adapter) actually plugged into the **UART** header between the micro-HDMI ports? Not the 40-pin GPIO header, not the debug header for SWD.
+2. Is `enable_uart=1` present in `config.txt`? Without it the EEPROM bootloader leaves the PL011 clock gated and the UART produces nothing.
+3. Is your terminal at 115200 baud, not 9600 / 38400 / 57600?
+4. If you built your own JST-SH adapter: are TX and RX crossed over (Pi TX → adapter RX, Pi RX → adapter TX)? Straight-through wiring produces silence.
 
-The most common mistake is swapping TX/RX (straight-through instead of crossover). Also check the terminal baud rate is 115200, not 9600 or 38400.
-
-**If wiring is definitely correct:** try the Pi's ACT LED (the green one next to the power LED). On boot it should blink briefly. If it doesn't blink at all, the firmware isn't loading — check that `start4.elf`, `fixup4.dat`, and `config.txt` are all in the SD card root (not in a subdirectory). If the ACT LED blinks a pattern (e.g., 4 long + 4 short), that's a firmware error code — [Pi Foundation docs](https://www.raspberrypi.com/documentation/computers/configuration.html#led-warning-flash-codes) explain the patterns.
+**If the cable is definitely correct:** check the Pi's ACT LED (the green one next to the power LED). On boot it should blink briefly. If it doesn't blink at all, the EEPROM is refusing to load — check that the SD card is FAT32, that `kernel_2712.img` and `config.txt` are in the root (not a subdirectory), and that the DTB file is named exactly `bcm2712-rpi-5-b.dtb`. If the ACT LED blinks a pattern (e.g., 4 long + 4 short), that's an EEPROM error code — [Pi Foundation docs](https://www.raspberrypi.com/documentation/computers/configuration.html#led-warning-flash-codes) explain the patterns.
 
 ### Kernel crashes partway through
 
 If you see some `[XXXX] OK` lines but then a panic or hang:
 
 - **Stops after `[SERIAL] OK`, before `[PMM] OK`:** DTB parsing is failing. The kernel can't find memory regions. Capture the exact last line and report back.
-- **Stops after `[KVA] OK`, before `[GIC] OK`:** GICv3 driver is hanging, probably in `gicr_wake` (spinning on the redistributor's `ChildrenAsleep` bit). The register write/read sequence may need adjustment for real silicon vs QEMU's emulation. Capture the exact last line.
-- **Stops after `[GIC] OK`, before `[TIMER] OK`:** timer PPI routing through the redistributor isn't working. Capture the exact last line.
+- **Stops after `[KVA] OK`, before `[GIC] OK`:** GIC-400 driver is hanging. Capture the exact last line.
+- **Stops after `[GIC] OK`, before `[TIMER] OK`:** timer PPI routing isn't working. Capture the exact last line.
 - **`[PANIC]` followed by `ELR=...`, `ESR=...`:** a synchronous exception. **Paste the entire panic block back** and it's directly resolvable — ELR resolves to a source line via `addr2line`.
 
 ---
 
-## 9. Iterating on a failed boot
+## 10. Iterating on a failed boot
 
-If the kernel fails, you don't need to rebuild the entire SD card. Only `kernel8.img` changes between builds. Workflow:
+If the kernel fails, you don't need to rebuild the entire SD card. Only `kernel_2712.img` changes between builds. Workflow:
 
 ```bash
 # 1. Edit kernel source (fix the bug)
@@ -354,8 +374,8 @@ vim kernel/arch/arm64/uart_pl011.c
 make -C kernel/arch/arm64 image
 
 # 3. Copy just the new kernel to the SD card
-cp kernel/arch/arm64/build/aegis.img /Volumes/AEGISBOOT/kernel8.img
-# or on Linux: sudo cp build/pi5-image/kernel8.img /mnt/sd/kernel8.img
+cp kernel/arch/arm64/build/aegis.img /Volumes/AEGISBOOT/kernel_2712.img
+# or on Linux: sudo cp build/pi5-image/kernel_2712.img /mnt/sd/kernel_2712.img
 
 # 4. Eject, reinsert into Pi, power cycle
 ```
@@ -364,22 +384,56 @@ A full cycle (edit → build → copy → reboot → read serial) is 30-60 secon
 
 ---
 
-## 10. Reporting failures for remote debugging
+## 11. What works and what doesn't on Pi 5
+
+### Works (or expected to work, pending hardware verification)
+
+- ARM64 kernel boot from Linux arm64 Image format
+- BCM2712 internal PL011 debug UART (`0x107D001000`) for console
+- ARM generic timer at 100 Hz
+- GIC-400 interrupt controller (GICv2)
+- Memory discovery from DTB (up to 16 GB)
+- Kernel scheduler, VFS, initrd, capability subsystem (Rust)
+- Vigil init system + service supervision
+- Interactive login prompt
+
+### Does not work yet (all RP1-dependent)
+
+Pi 5 moves almost every I/O peripheral behind the RP1 south bridge on a PCIe x4 link. Until Aegis has a PCIe root complex driver and an RP1 driver, none of the following function:
+
+- **GPIO 14/15 UART** — RP1 owns the 40-pin header. BCM2712 internal UART (the JST-SH one) works, the 40-pin UART does not.
+- **USB** — USB 2.0 and USB 3.0 on Pi 5 are RP1-attached.
+- **Ethernet** — the gigabit MAC is inside RP1.
+- **Wi-Fi / Bluetooth** — attached via a separate PCIe link, same general story.
+- **GPIO as I/O pins** — RP1 owns all 40 pins.
+
+Non-RP1 items that also don't work yet:
+
+- **HDMI / display** — no display driver, no DRM stack. Serial-only first boot.
+- **SD card as read/write storage** — only used as boot media; we don't have an SD host controller driver.
+- **Multi-core** — kernel runs single-core only on ARM64. Pi 5's 3 extra Cortex-A76 cores sit idle.
+- **Interactive shell after login** — userland path under active rebuild; you'll reach `login:` but credentials may not validate yet depending on the rebuild state.
+
+What does work is useful: you can verify the kernel runs on real silicon, measure boot performance, and test UART + GIC-400 + timer driver correctness. That's the foundation for everything else.
+
+---
+
+## 12. Reporting failures for remote debugging
 
 If you can copy text out of your serial terminal: paste the entire boot trace from the first line back to me, and I can usually point at the bug in one round-trip.
 
 Most useful details:
 
-1. **Everything from the start of output through the last line before the hang or panic.** Don't trim — sometimes a subtle earlier line is the real clue.
-2. **The Pi firmware version line** (e.g., `Raspberry Pi Bootloader ... 2025-XX-XX`). Firmware versions sometimes change boot behavior.
-3. **Which Pi 5 model** — 4 GB or 8 GB. Memory map differs.
-4. **Your cable model** (Adafruit 954, Waveshare, etc.) — different chips have slightly different timing characteristics.
+1. **Everything from the start of output through the last line before the hang or panic.** Don't trim — sometimes a subtle earlier line is the real clue. `[BOOT] aegis arm64 (pre-MMU)` is the earliest print point.
+2. **The Pi EEPROM version** (printed by the EEPROM bootloader itself when `enable_uart=1` is set). EEPROM versions sometimes change boot behavior, especially around D-stepping overlays.
+3. **Which Pi 5 model and revision** — 4 GB / 8 GB / 16 GB, and whether it's board revision 1.0 (C-stepping) or 1.1 (D-stepping). The sticker on the board or `/proc/cpuinfo` on a Linux reference image will tell you.
+4. **Your debug cable** (Raspberry Pi Debug Probe, Adafruit #5054, DIY JST-SH adapter) — different cables have slightly different USB CDC descriptors and timing characteristics.
 
-If your terminal can't copy text (e.g., you're in `screen` in a VM and the clipboard is weird): take a phone photo of the screen. Legible is enough.
+If your terminal can't copy text (e.g., you're in `screen` inside a VM and the clipboard is weird): take a phone photo of the screen. Legible is enough.
 
 ---
 
-## 11. Reflashing the firmware from scratch
+## 13. Reflashing from scratch
 
 If the `build/pi5-image/` directory is missing or outdated and `tools/build-pi5-image.sh` fails:
 
@@ -389,82 +443,60 @@ rm -rf references/pi-firmware/ build/pi5-image/
 bash tools/build-pi5-image.sh
 ```
 
-This re-downloads from GitHub. Requires internet.
+This re-downloads the DTB and overlay from GitHub. Requires internet.
 
-If GitHub is blocked or you're offline, the firmware files can also be extracted from any Raspberry Pi OS image — mount the boot partition and copy `bootcode.bin`, `start4.elf`, `fixup4.dat`, `bcm2712-rpi-5-b.dtb` into `references/pi-firmware/` manually, then re-run the script.
-
----
-
-## 12. What works and what doesn't on Pi 5
-
-### Works (or expected to work, pending hardware verification)
-
-- ARM64 kernel boot from Linux arm64 Image format
-- PL011 debug UART at GPIO 14/15 for console
-- ARM generic timer at 100 Hz
-- GIC-600 interrupt controller (new GICv3 driver)
-- Memory discovery from DTB (up to 8 GB)
-- Kernel scheduler, VFS, initrd, capability subsystem (Rust)
-- Vigil init system + service supervision
-- Interactive login prompt
-
-### Does not work yet
-
-- **USB** — Pi 5's USB is behind the RP1 south bridge, which needs a PCIe host controller driver + RP1 driver. Far future (ARM64.md §17.6 deferred).
-- **Ethernet** — same RP1 dependency. No network on Pi 5 until RP1 is done.
-- **Wi-Fi / Bluetooth** — Pi 5's wireless is on a PCIe attached chip too. Deferred.
-- **HDMI / display** — no display driver. Serial-only.
-- **GPIO as I/O pins** — RP1 also owns GPIO on Pi 5. You can use the debug UART on GPIO 14/15 because that's routed through the legacy peripheral base (`0xFE201000`), but other GPIO pins need RP1.
-- **SD card as read/write storage** — only used as boot media; we don't have an SD host controller driver.
-- **Multi-core** — kernel runs single-core only on ARM64. Pi 5's 3 extra cores sit idle.
-- **Interactive shell after login** — as of commit `f180295` the kernel and `execve` path work, but a userland crypt/termios issue prevents password acceptance. You'll reach `login:` but credentials won't validate. See ARM64.md §14-15 for the current state.
-
-What works is useful: you can verify the kernel runs on real silicon, measure boot performance, and test GICv3 + UART driver correctness. That's the foundation for everything else.
+If GitHub is blocked or you're offline, `bcm2712-rpi-5-b.dtb` and `overlays/bcm2712d0.dtbo` can be extracted from any recent Raspberry Pi OS image — mount the boot partition and copy those two files into `references/pi-firmware/` (preserving the `overlays/` subdirectory), then re-run the script.
 
 ---
 
-## 13. Hardware references
+## 14. Hardware references
 
-- Pi 5 hardware overview — [raspberrypi.com/documentation/computers/raspberry-pi-5.html](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html)
+- Raspberry Pi Debug Probe — [raspberrypi.com/products/debug-probe](https://www.raspberrypi.com/products/debug-probe/)
+- Pi 5 hardware overview — [raspberrypi.com/documentation/computers/raspberry-pi-5.html](https://www.raspberrypi.com/documentation/computers/raspberry-pi-5.html)
+- Pi 5 boot flow & EEPROM bootloader — [raspberrypi.com/documentation/computers/raspberry-pi-5.html](https://www.raspberrypi.com/documentation/computers/raspberry-pi-5.html)
 - config.txt reference — [raspberrypi.com/documentation/computers/config_txt.html](https://www.raspberrypi.com/documentation/computers/config_txt.html)
 - Pi firmware repository — [github.com/raspberrypi/firmware](https://github.com/raspberrypi/firmware)
-- Pi 5 DTS source — [github.com/raspberrypi/linux/blob/rpi-6.12.y/arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-b.dts](https://github.com/raspberrypi/linux)
+- Circle bare-metal library (definitive Pi 5 bare-metal reference) — [github.com/rsta2/circle](https://github.com/rsta2/circle)
 - BCM2712 peripherals datasheet — [datasheets.raspberrypi.com/bcm2712/bcm2712-peripherals.pdf](https://datasheets.raspberrypi.com/bcm2712/bcm2712-peripherals.pdf)
-- ARM GICv3 architecture spec — [developer.arm.com/documentation/ihi0069](https://developer.arm.com/documentation/ihi0069/latest)
-- GIC-600 TRM — [developer.arm.com/documentation/101206](https://developer.arm.com/documentation/101206/latest)
+- RP1 peripherals datasheet (draft) — [datasheets.raspberrypi.com/rp1/rp1-peripherals.pdf](https://datasheets.raspberrypi.com/rp1/rp1-peripherals.pdf)
+- Pi 5 DTS source — [github.com/raspberrypi/linux/blob/rpi-6.12.y/arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-b.dts](https://github.com/raspberrypi/linux)
+- ARM GICv2 architecture spec (applies to GIC-400) — [developer.arm.com/documentation/ihi0048](https://developer.arm.com/documentation/ihi0048/latest)
 - Pi ACT LED flash codes — [raspberrypi.com/documentation/computers/configuration.html](https://www.raspberrypi.com/documentation/computers/configuration.html#led-warning-flash-codes)
 
 ---
 
-## 14. Quick-reference card
+## 15. Quick-reference card
 
 ```
-Cable:     Adafruit #954 (CP2102, 3.3V logic)
-           $9.95 at adafruit.com/product/954
+Cable:     Raspberry Pi Debug Probe ($12, first-party)
+           https://www.raspberrypi.com/products/debug-probe/
+           Plugs into the JST-SH "UART" header between the two
+           micro-HDMI ports. NOT the 40-pin GPIO header —
+           GPIO 14/15 is behind RP1 and does not work yet.
 
-Wiring:    Black  → Pin 6  (GND)
-           White  → Pin 8  (GPIO 14 TXD)
-           Green  → Pin 10 (GPIO 15 RXD)
-           Red    → NOT CONNECTED
-
-Terminal:  screen /dev/tty.usbserial-* 115200      (macOS)
-           screen /dev/ttyUSB0 115200              (Linux)
+Terminal:  screen /dev/tty.usbmodem* 115200      (macOS, Debug Probe)
+           screen /dev/ttyACM0 115200            (Linux, Debug Probe)
            Exit: Ctrl-A, K, y
 
 Build:     make -C kernel/arch/arm64 image
            bash tools/build-pi5-image.sh
 
+SD layout: /bcm2712-rpi-5-b.dtb
+           /config.txt
+           /kernel_2712.img
+           /overlays/bcm2712d0.dtbo   (optional, for rev 1.1 boards)
+
 Flash:     diskutil eraseDisk FAT32 AEGISBOOT MBRFormat /dev/diskN
-           cp build/pi5-image/* /Volumes/AEGISBOOT/
+           cp -rv build/pi5-image/* /Volumes/AEGISBOOT/
            diskutil eject /dev/diskN
 
-Boot:      Insert SD, wire serial, USB-TTL into laptop, power Pi.
+Boot:      Insert SD, plug Debug Probe into JST-SH UART header,
+           plug Debug Probe USB into laptop, power Pi via USB-C.
            Expect output within 1 second.
 
-Iterate:   Only kernel8.img changes between rebuilds. Copy just that
-           file to the SD card to save time.
+Iterate:   Only kernel_2712.img changes between rebuilds. Copy just
+           that file to the SD card to save time.
 
-Success:   [GIC] OK: GICv3 initialized → [SCHED] OK → login:
-
-Login:     root / forevervigilant  (from login_flow_test.rs)
+Success:   [BOOT] aegis arm64 (pre-MMU) → [GIC] OK: GICv2 initialized
+           → [SCHED] OK → login:
 ```
