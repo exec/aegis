@@ -63,10 +63,20 @@ void panic_halt(const char *msg);
 
 /* panic_bluescreen — take over the framebuffer and display a panic screen.
  * Draws a blue background with Terminus font showing exception details.
- * Halts the CPU with cli; hlt. Never returns.
- * Safe to call from ISR context with IRQs disabled. */
+ * Halts the CPU (arch_disable_irq + arch_halt). Never returns.
+ * Safe to call from ISR context with IRQs disabled.
+ *
+ * Arch isolation note (2026-04-12): the parameter list uses x86-64
+ * register names (rip/cr2/rsp/rbp/rax/rbx) because the only callers
+ * are the x86-64 IDT dispatcher in kernel/arch/x86_64/idt.c. Gated
+ * behind __x86_64__ so ARM64 builds neither see the declaration nor
+ * link against the definition. When ARM64 grows its own bluescreen
+ * path, add a parallel arm64-specific function or refactor to a
+ * neutral `struct isr_frame *`. */
+#ifdef __x86_64__
 void panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
                       uint64_t cr2, uint64_t rsp, uint64_t rbp,
                       uint64_t rax, uint64_t rbx);
+#endif
 
 #endif /* FB_H */

@@ -1,3 +1,18 @@
+/*
+ * kernel/mm/vmm.c — x86-64 virtual memory manager.
+ *
+ * Arch isolation note (2026-04-12): This file hardcodes the x86-64
+ * 4-level paging layout (PML4/PDPT/PD/PT, higher-half base
+ * 0xFFFFFFFF80000000, pml4[511]/pdpt_hi[510]) and is x86-64 only.
+ * It is NOT built by kernel/arch/arm64/Makefile — the ARM64 port has
+ * its own VMM at kernel/arch/arm64/vmm_arm64.c that mirrors the same
+ * public interface (vmm.h). Keep the public signatures in vmm.h
+ * arch-neutral; anything x86-specific stays inside this file.
+ */
+#ifndef __x86_64__
+#error "kernel/mm/vmm.c is x86-64 only; arm64 uses kernel/arch/arm64/vmm_arm64.c"
+#endif
+
 #include "vmm.h"
 #include "arch.h"     /* arch_vmm_load_pml4, arch_vmm_invlpg */
 #include "arch_vmm.h" /* arch_pte_from_flags, ARCH_PTE_ADDR */

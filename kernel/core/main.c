@@ -1,3 +1,18 @@
+/*
+ * kernel/core/main.c — x86-64 kernel entry point.
+ *
+ * Arch isolation note (2026-04-12): This file is the x86-64 kernel
+ * main. It pulls in x86-only subsystems (ACPI, LAPIC, IOAPIC, PCIe,
+ * NVMe, xHCI, i8042) and is NOT built by the ARM64 Makefile
+ * (kernel/arch/arm64/Makefile). The ARM64 port has its own entry
+ * point at kernel/arch/arm64/main.c. Do not add arch-agnostic
+ * initialization here — put it in a shared helper that both entries
+ * can call, or guard it with #ifdef __x86_64__.
+ */
+#ifndef __x86_64__
+#error "kernel/core/main.c is x86-64 only; arm64 uses kernel/arch/arm64/main.c"
+#endif
+
 #include "arch.h"
 #include "printk.h"
 #include "cap.h"

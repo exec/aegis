@@ -48,6 +48,10 @@ _panic_draw_string(uint32_t *px_x, uint32_t px_y, const char *s, uint32_t fg)
     }
 }
 
+#ifdef __x86_64__
+/* _panic_draw_hex is only consumed by panic_bluescreen which is
+ * x86-64-only. Keep the helper under the same guard to avoid
+ * -Wunused-function when ARM64 includes this file via fb.c. */
 static void
 _panic_draw_hex(uint32_t *px_x, uint32_t px_y, uint64_t val, uint32_t fg)
 {
@@ -63,6 +67,7 @@ _panic_draw_hex(uint32_t *px_x, uint32_t px_y, uint64_t val, uint32_t fg)
     buf[18] = '\0';
     _panic_draw_string(px_x, px_y, buf, fg);
 }
+#endif /* __x86_64__ */
 
 /* Blit an RGBA logo onto the framebuffer with alpha blending.
  * Pixel format: 0xAARRGGBB. bg = background color for blending. */
@@ -96,6 +101,11 @@ _blit_logo_rgba(const uint32_t *data, uint32_t logo_w, uint32_t logo_h,
     }
 }
 
+/* panic_bluescreen is x86-64 only — the parameter list mirrors the
+ * x86-64 cpu_state_t fields that kernel/arch/x86_64/idt.c passes in.
+ * ARM64 will grow its own bluescreen path when the port needs one.
+ * See fb.h for the declaration guard. */
+#ifdef __x86_64__
 void
 panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
                  uint64_t cr2, uint64_t rsp, uint64_t rbp,
@@ -201,6 +211,7 @@ halt:
     for (;;)
         arch_halt();
 }
+#endif /* __x86_64__ */
 
 /* ── panic_halt — simple text BSOD for kernel assertion failures ──────── */
 
