@@ -59,10 +59,11 @@ If Superpowers is not installed, stop and tell the user.
 ### Directory Layout
 
 ```
-kernel/arch/x86_64/   <- ALL x86-specific code. Nowhere else.
-kernel/core/          <- Architecture-agnostic logic only. Must port to ARM64 tomorrow.
-kernel/mm/            <- Memory management (arch-agnostic)
-kernel/cap/           <- Capability subsystem (Rust)
+kernel/arch/x86_64/   <- x86-64-specific code (bulk — boot, IDT/GDT/TSS, LAPIC, IOAPIC, ...)
+kernel/arch/arm64/    <- ARM64-specific code (boot, GIC, PL011, exception vectors, ...)
+kernel/core/          <- Cross-arch logic. Arch-specific branches allowed via #ifdef dispatch.
+kernel/mm/            <- Memory management (cross-arch with #ifdef dispatch where unavoidable)
+kernel/cap/           <- Capability subsystem (Rust, no_std, portable)
 kernel/fs/            <- VFS, filesystem drivers (ext2, initrd, ramfs, procfs, pipe, memfd)
 kernel/tty/           <- Terminal line discipline + PTY pairs
 kernel/drivers/       <- Hardware drivers (NVMe, xHCI, virtio-net, fb, etc.)
@@ -76,7 +77,13 @@ tools/                <- Build helpers, QEMU wrappers
 docs/                 <- Architecture docs, audit findings, capability model spec
 ```
 
-No x86 register names, port I/O, or MMIO addresses outside `kernel/arch/x86_64/`.
+**Arch isolation rule (revised 2026-04-12):** Bulk arch-specific code lives in `kernel/arch/<arch>/`. Cross-arch files (`kernel/syscall/`, `kernel/signal/`, `kernel/proc/`, etc.) may use `#ifdef __x86_64__` / `#ifdef __aarch64__` inline dispatch where the code is inherently arch-specific (saved register structs, frame accessors, TLS register reads, syscall translation tables, ELF machine recognition). Keeping related arch branches colocated is more readable than scattering them across parallel arch-specific files.
+
+**Still not allowed in cross-arch files:**
+- Hardcoded x86 register names/MMIO addresses without an `#ifdef` guard (e.g., `inb(0x64)` unconditionally in `main.c`)
+- x86 function signatures leaking into shared headers (e.g., `panic_bluescreen(rip, cr2, rsp, ...)` — use a neutral `isr_frame *`)
+- Unconditional use of x86-only constants like `0xFFFFFFFF80000000` — wrap in `KERN_VA_BASE` macro defined per-arch
+- Direct `#include "arch/x86_64/*.h"` from cross-arch files — go through a stable arch interface header
 
 ### The C/Rust Boundary
 

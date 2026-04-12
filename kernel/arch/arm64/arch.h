@@ -44,6 +44,9 @@ const aegis_mem_region_t  *arch_mm_get_reserved_regions(void);
 /* No ACPI RSDP on QEMU virt — always 0. */
 static inline uint64_t arch_get_rsdp_phys(void) { return 0; }
 
+/* Kernel command line — not parsed from DTB yet. */
+static inline const char *arch_get_cmdline(void) { return ""; }
+
 /* No framebuffer at this stage. */
 typedef struct {
     uint64_t addr;

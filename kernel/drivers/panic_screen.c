@@ -197,8 +197,9 @@ panic_bluescreen(uint64_t vector, uint64_t rip, uint64_t error_code,
     _panic_draw_string(&x, y, "This information is also on the serial console.", PANIC_DIM);
 
 halt:
+    arch_disable_irq();
     for (;;)
-        __asm__ volatile("cli; hlt");
+        arch_halt();
 }
 
 /* ── panic_halt — simple text BSOD for kernel assertion failures ──────── */
@@ -255,8 +256,9 @@ panic_halt(const char *msg)
     _panic_draw_string(&x, y, "This information is also on the serial console.", PANIC_DIM);
 
 phalt:
+    arch_disable_irq();
     for (;;)
-        __asm__ volatile("cli; hlt");
+        arch_halt();
 }
 
 /* ── Boot Splash ───────────────────────────────────────────────────────── */

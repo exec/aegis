@@ -63,7 +63,7 @@ static volatile uint64_t *s_window_pte;
 
 /* ── Window allocator ──────────────────────────────────────────────── */
 
-static void *
+void *
 vmm_window_map(uint64_t phys)
 {
     *s_window_pte = phys | PTE_VALID | PTE_PAGE | PTE_AF |
@@ -72,7 +72,7 @@ vmm_window_map(uint64_t phys)
     return (void *)VMM_WINDOW_VA;
 }
 
-static void
+void
 vmm_window_unmap(void)
 {
     *s_window_pte = 0;

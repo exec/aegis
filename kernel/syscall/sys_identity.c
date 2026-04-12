@@ -287,16 +287,27 @@ sys_reboot(uint64_t cmd)
         return (uint64_t)-(int64_t)ENOCAP;
 
     if (cmd == 0) {
-        /* Power off via ACPI */
+        /* Power off */
+#ifdef __x86_64__
         acpi_do_poweroff();
-        /* Should not return */
-        for (;;) __asm__ volatile("cli; hlt");
+#else
+        arch_debug_exit(0);    /* QEMU virt: write to power device */
+#endif
+        arch_disable_irq();
+        for (;;) arch_halt();
     } else if (cmd == 1) {
-        /* Reboot via keyboard controller reset (8042 pulse) */
+        /* Reboot */
         ext2_sync();
         printk("[AEGIS] Rebooting...\n");
+#ifdef __x86_64__
+        /* 8042 keyboard-controller pulse reset */
         __asm__ volatile ("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));
-        for (;;) __asm__ volatile("cli; hlt");
+#else
+        /* ARM64: PSCI SYSTEM_RESET would go here; for now fall through to halt */
+        arch_debug_exit(1);
+#endif
+        arch_disable_irq();
+        for (;;) arch_halt();
     }
     return (uint64_t)-(int64_t)22;  /* EINVAL */
 }

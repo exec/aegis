@@ -15,15 +15,17 @@ REPO    = ../../..
 CFLAGS  = -ffreestanding -nostdlib -nostdinc \
           -isystem $(shell $(CC) -print-file-name=include) \
           -Wall -Wextra -Werror -O2 -g \
+          -Wno-error=array-bounds \
           -mgeneral-regs-only \
+          -mno-outline-atomics \
           -I. \
           -I$(REPO)/kernel/core \
           -I$(REPO)/kernel/mm \
           -I$(REPO)/kernel/sched \
           -I$(REPO)/kernel/proc \
           -I$(REPO)/kernel/syscall \
-          -I$(REPO)/kernel/elf \
           -I$(REPO)/kernel/fs \
+          -I$(REPO)/kernel/tty \
           -I$(REPO)/kernel/signal \
           -I$(REPO)/kernel/drivers \
           -I$(REPO)/kernel/net \
@@ -70,17 +72,36 @@ ARCH_OBJS = $(BUILD)/boot.o \
 
 # Shared kernel sources (arch-agnostic)
 SHARED_OBJS = $(BUILD)/printk.o \
+              $(BUILD)/random.o \
+              $(BUILD)/cap_policy.o \
               $(BUILD)/pmm.o \
               $(BUILD)/vmm_arm64.o \
+              $(BUILD)/vma.o \
               $(BUILD)/kva.o \
               $(BUILD)/sched.o \
+              $(BUILD)/waitq.o \
+              $(BUILD)/signal.o \
+              $(BUILD)/tty.o \
+              $(BUILD)/pty.o \
               $(BUILD)/syscall.o \
               $(BUILD)/sys_io.o \
               $(BUILD)/sys_memory.o \
               $(BUILD)/sys_process.o \
+              $(BUILD)/sys_exec.o \
+              $(BUILD)/sys_identity.o \
+              $(BUILD)/sys_cap.o \
+              $(BUILD)/sys_time.o \
               $(BUILD)/sys_file.o \
+              $(BUILD)/sys_dir.o \
+              $(BUILD)/sys_meta.o \
               $(BUILD)/sys_signal.o \
               $(BUILD)/sys_socket.o \
+              $(BUILD)/sys_random.o \
+              $(BUILD)/sys_disk.o \
+              $(BUILD)/futex.o \
+              $(BUILD)/proc.o \
+              $(BUILD)/elf.o \
+              $(BUILD)/fd_table.o \
               $(BUILD)/vfs.o \
               $(BUILD)/initrd.o \
               $(BUILD)/console.o \
@@ -91,24 +112,27 @@ SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/ext2.o \
               $(BUILD)/ext2_cache.o \
               $(BUILD)/ext2_dir.o \
+              $(BUILD)/ext2_vfs.o \
               $(BUILD)/ramfs.o \
-              $(BUILD)/signal.o \
-              $(BUILD)/proc.o \
-              $(BUILD)/elf.o \
+              $(BUILD)/procfs.o \
+              $(BUILD)/memfd.o \
+              $(BUILD)/poll_test.o \
               $(BUILD)/netdev.o \
               $(BUILD)/eth.o \
               $(BUILD)/ip.o \
               $(BUILD)/udp.o \
               $(BUILD)/tcp.o \
               $(BUILD)/socket.o \
+              $(BUILD)/unix_socket.o \
               $(BUILD)/epoll.o \
               $(BUILD)/nvme.o \
               $(BUILD)/xhci.o \
               $(BUILD)/usb_hid.o \
+              $(BUILD)/usb_mouse.o \
               $(BUILD)/virtio_net.o \
-              $(BUILD)/fb.o \
-              $(BUILD)/random.o \
-              $(BUILD)/sys_random.o
+              $(BUILD)/rtl8169.o \
+              $(BUILD)/ramdisk.o \
+              $(BUILD)/fb.o
 
 OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
 
@@ -165,6 +189,15 @@ $(BUILD)/printk.o: $(REPO)/kernel/core/printk.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/pmm.o: $(REPO)/kernel/mm/pmm.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/vma.o: $(REPO)/kernel/mm/vma.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/tty.o: $(REPO)/kernel/tty/tty.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fd_table.o: $(REPO)/kernel/fs/fd_table.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/vmm_arm64.o: vmm_arm64.c | $(BUILD)
@@ -236,7 +269,7 @@ $(BUILD)/signal.o: $(REPO)/kernel/signal/signal.c | $(BUILD)
 $(BUILD)/proc.o: $(REPO)/kernel/proc/proc.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/elf.o: $(REPO)/kernel/elf/elf.c | $(BUILD)
+$(BUILD)/elf.o: $(REPO)/kernel/proc/elf.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/netdev.o: $(REPO)/kernel/net/netdev.c | $(BUILD)
@@ -281,8 +314,50 @@ $(BUILD)/random.o: $(REPO)/kernel/core/random.c | $(BUILD)
 $(BUILD)/sys_random.o: $(REPO)/kernel/syscall/sys_random.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Additional shared sources
+$(BUILD)/cap_policy.o: $(REPO)/kernel/cap/cap_policy.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/waitq.o: $(REPO)/kernel/sched/waitq.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/pty.o: $(REPO)/kernel/tty/pty.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_exec.o: $(REPO)/kernel/syscall/sys_exec.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_identity.o: $(REPO)/kernel/syscall/sys_identity.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_cap.o: $(REPO)/kernel/syscall/sys_cap.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_time.o: $(REPO)/kernel/syscall/sys_time.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_dir.o: $(REPO)/kernel/syscall/sys_dir.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_meta.o: $(REPO)/kernel/syscall/sys_meta.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sys_disk.o: $(REPO)/kernel/syscall/sys_disk.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/futex.o: $(REPO)/kernel/syscall/futex.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/ext2_vfs.o: $(REPO)/kernel/fs/ext2_vfs.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/procfs.o: $(REPO)/kernel/fs/procfs.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/memfd.o: $(REPO)/kernel/fs/memfd.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/poll_test.o: $(REPO)/kernel/fs/poll_test.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/unix_socket.o: $(REPO)/kernel/net/unix_socket.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/usb_mouse.o: $(REPO)/kernel/drivers/usb_mouse.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/rtl8169.o: $(REPO)/kernel/drivers/rtl8169.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/ramdisk.o: $(REPO)/kernel/drivers/ramdisk.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+LIBGCC := $(shell $(CC) -print-libgcc-file-name)
+
 $(ELF): $(OBJS) linker.ld
-	$(LD) -T linker.ld -nostdlib -o $@ $(OBJS)
+	$(LD) -T linker.ld -nostdlib -o $@ $(OBJS) $(LIBGCC)
 
 $(BUILD):
 	mkdir -p $(BUILD)

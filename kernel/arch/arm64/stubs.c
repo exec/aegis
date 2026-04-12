@@ -120,6 +120,10 @@ char kbd_read_interruptible(int *interrupted) {
     return uart_rx_read();
 }
 int kbd_poll(char *out) { return uart_rx_poll(out); }
+int kbd_has_data(void) {
+    /* Non-destructive check not yet implemented for PL011 RX. Always 0. */
+    return 0;
+}
 static uint32_t s_tty_pgrp = 0;
 void     kbd_set_tty_pgrp(uint32_t pgid) { s_tty_pgrp = pgid; }
 uint32_t kbd_get_tty_pgrp(void) { return s_tty_pgrp; }
@@ -167,4 +171,10 @@ void fork_child_load_ttbr0(void) {
         arch_set_fs_base(fs);
 }
 
-/* proc_spawn_init is provided by the real proc.c (shared source). */
+/* proc_spawn_init is provided by the real proc.c (shared source).
+ * On ARM64, proc.c uses init_elf[] + init_elf_len from init_arm64_bin.c
+ * instead of the x86 objcopy blob symbols. */
+
+/* ── Poll waiter (x86: defined in pit.c tick handler) ───────────────── */
+struct aegis_task_t;
+struct aegis_task_t *g_poll_waiter = (struct aegis_task_t *)0;

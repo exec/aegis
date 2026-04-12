@@ -37,8 +37,13 @@ _Static_assert(offsetof(aegis_process_t, task) == 0,
 
 /*
  */
+#ifdef __aarch64__
+extern const unsigned char init_elf[];
+extern const unsigned int init_elf_len;
+#else
 extern const unsigned char _binary_init_bin_start[];
 extern const unsigned char _binary_init_bin_end[];
+#endif
 
 
 /* 16KB kernel stack for the user process (4 pages, matching sched task stacks).
@@ -410,7 +415,11 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 void
 proc_spawn_init(void)
 {
+#ifdef __aarch64__
+    proc_spawn((const uint8_t *)init_elf, (size_t)init_elf_len);
+#else
     proc_spawn((const uint8_t *)_binary_init_bin_start, (size_t)(_binary_init_bin_end - _binary_init_bin_start));
+#endif
 }
 
 /* arch_get_current_pml4 — return current user process PML4 phys addr.
