@@ -765,3 +765,136 @@ probably by linking at the original 0x40000000 LMA and teaching
 boot.S to compute a runtime PA slide for the Image case. See the
 in-progress history in this session for the slide approach (blocked
 on `vmm_init()` building a non-slid TTBR1 replacement).
+
+---
+
+## 17. Raspberry Pi 5 support plan
+
+Research target: **BCM2712 / Cortex-A76 / GIC-600 (GICv3)**. Single-binary strategy — one `aegis.img` boots QEMU virt GICv2 + GICv3, Pi 4 (GICv2), and Pi 5 (GICv3). GIC version detected at runtime from the DTB `compatible` string.
+
+### 17.1 What already works on Pi 5 without changes
+
+Surprisingly large amount of Pi 5 readiness is already in place:
+
+| Element | Pi 4 | Pi 5 | Current state |
+|---------|------|------|---------------|
+| Boot entry state (EL2, x0=DTB) | same | same | `boot.S` EL2→EL1 drop already works |
+| Linux arm64 Image header | accepts | accepts | `tools/gen-arm64-image.py` unchanged |
+| Kernel load address | 0x40200000 | 0x40200000 | `linker.ld` unchanged |
+| 1 GB TTBR1 peripheral mapping | covers 0xFE000000 | covers 0xFE000000 | `mmu_early.c` unchanged |
+| UART0 PL011 MMIO base (debug UART) | 0xFE201000 | 0xFE201000 | needs runtime probe (§17.3) |
+| Generic timer (ARM PPI 30, CNTFRQ_EL0) | 54 MHz | 54 MHz | unchanged |
+| PSCI for SMP bring-up | yes | yes | SMP is phase B3, deferred |
+
+### 17.2 The biggest change: GIC-600 (GICv3) vs GIC-400 (GICv2)
+
+GICv3 replaces the GICv2 CPU interface MMIO with system registers. The distributor is still MMIO but its register offsets shift, and there's a new per-CPU redistributor block that must be woken before interrupts work.
+
+**Key GICv3 system registers:**
+
+| Register | Purpose |
+|----------|---------|
+| `ICC_SRE_EL1` | Enable system-register access (must be set before anything else) |
+| `ICC_PMR_EL1` | Priority mask |
+| `ICC_IGRPEN1_EL1` | Group 1 IRQ enable |
+| `ICC_IAR1_EL1` | Acknowledge IRQ (read returns INTID in bits [23:0]) |
+| `ICC_EOIR1_EL1` | End-of-interrupt |
+| `ICC_BPR1_EL1` | Binary point |
+
+**Init sequence:**
+
+1. Disable distributor: `GICD_CTLR = 0`
+2. For each redistributor at `GICD_BASE + 0x100000 + (cpu * 0x20000)`:
+   - Wait for `GICR_WAKER.ProcessorSleep == 0`
+   - Configure PPIs (priorities, group 1)
+3. Discover layout via `GICD_TYPER` (redistributor stride, #CPUs, #SPIs)
+4. Enable distributor: `GICD_CTLR |= ENABLE_GROUP1`
+5. Per-CPU: `msr ICC_SRE_EL1, 3` + `isb` + `msr ICC_PMR_EL1, 0xFF` + `msr ICC_IGRPEN1_EL1, 1`
+
+**EOI difference:**
+
+| Path | GICv2 | GICv3 |
+|------|-------|-------|
+| Ack | Read `GICC_IAR` (MMIO) | `mrs x, ICC_IAR1_EL1` |
+| EOI | Write `GICC_EOIR` (MMIO) | `msr ICC_EOIR1_EL1, x` |
+
+### 17.3 DTB-driven configuration
+
+Runtime detection replaces hardcoding so one binary works on all targets.
+
+**GIC version detection** — parse `/intc` node's `compatible` string:
+
+| Value | Version |
+|-------|---------|
+| `arm,cortex-a15-gic` | GICv2 |
+| `arm,gic-400` | GICv2 (Pi 4) |
+| `arm,gic-600` | GICv3 (Pi 5) |
+
+**UART base detection** — parse `/chosen/stdout-path`, follow the phandle to the UART node, extract `reg` for the MMIO base. Alternative: hardcode two addresses (QEMU `0x09000000`, Pi `0xFE201000`) and probe each at boot for a PL011 ID register match.
+
+**Reserved memory** — parse `/reserved-memory` children and add them to `arch_mm.c`'s reserved-regions list. On Pi 5 this covers RP1 mailbox regions the PMM must avoid.
+
+### 17.4 File-by-file implementation plan
+
+| File | Change | LOC |
+|------|--------|-----|
+| `kernel/arch/arm64/gic.c` | Rename existing functions to `gic_v2_*`, add dispatcher that picks v2 vs v3 based on DTB | +40 |
+| `kernel/arch/arm64/gic_v3.c` **(new)** | GICv3 distributor + redistributor init + system-register ack/eoi/enable | +250 |
+| `kernel/arch/arm64/arch_mm.c` | Add GIC version detection, `/reserved-memory` parsing, optional UART base extraction | +80 |
+| `kernel/arch/arm64/uart_pl011.c` | Runtime probe: try QEMU address, fall back to Pi address (or read from DTB) | +20 |
+| `kernel/arch/arm64/Makefile` | `-mcpu=cortex-a72` → `-march=armv8.2-a` (compatible with both A72 and A76) | 1 line |
+| `tools/mkpi.sh` | Add `PI_VERSION=5` path writing `bcm2712-rpi-5-b.dtb` (already present, verify) | minor |
+
+**No changes to:** `boot.S`, `vectors.S`, `proc_enter.S`, `ctx_switch.S`, `mmu_early.c`, `arch_vmm.c`, `vmm_arm64.c`, `linker.ld`, `stubs.c`, `arch.h`.
+
+### 17.5 Single-binary strategy — why
+
+**Recommendation: one `aegis.img` for all ARM64 targets.**
+
+| Argument | Weight |
+|----------|--------|
+| User convenience (no `aegis-pi4.img` vs `aegis-pi5.img`) | high |
+| Matches mainline Linux approach | high |
+| DTB-driven config is clean and small (~130 LOC total for GIC+UART detection) | high |
+| Binary size impact: negligible (~2 KB) | — |
+| CI matrix simplicity | high |
+
+Build with `-march=armv8.2-a` (not `-mcpu=cortex-a72`) — compatible with Cortex-A72 (ARMv8.0-A) through Cortex-A76 (ARMv8.2-A) and later. No LSE hardware usage (keep `-mno-outline-atomics`) so the same code runs on all cores without runtime feature detection.
+
+Result: one `build/aegis.img` boots on:
+- `qemu-system-aarch64 -machine virt -cpu cortex-a72 -kernel aegis.img` (GICv2)
+- `qemu-system-aarch64 -machine virt,gic-version=3 -cpu cortex-a76 -kernel aegis.img` (GICv3)
+- Pi 4 with `kernel8.img` + `bcm2711-rpi-4-b.dtb`
+- Pi 5 with `kernel8.img` + `bcm2712-rpi-5-b.dtb`
+
+### 17.6 RP1 south bridge — deferred
+
+Pi 5's RP1 chip is a PCIe-attached south bridge that houses USB, Ethernet, GPIO, and some UARTs. Drivers for RP1 peripherals are **out of scope** for initial Pi 5 support because:
+
+- The primary debug UART (`uart0` on GPIO 14/15) is still on the legacy BCM peripheral base (`0xFE201000`), not behind RP1. First boot works without any RP1 code.
+- USB, Ethernet, and full GPIO require a new PCIe host controller driver + RP1 device driver + individual peripheral drivers. Estimated 20-30h, far future.
+
+Phase B4+ work item: RP1 PCIe + USB XHCI + Ethernet + GPIO. Tracked but not blocking Pi 5 boot.
+
+### 17.7 Phase breakdown + time estimate
+
+| Phase | Goal | Effort |
+|-------|------|--------|
+| **B1a: GIC-600 driver** | `gic_v3.c` + dispatcher + DTB detection; `[SERIAL] OK` on Pi 5 via QEMU virt GICv3 emulation | 8-10h |
+| **B1b: Generic timer on GICv3** | Timer PPI routing via redistributor; `[TIMER] OK` | 2-3h |
+| **B1c: Full boot to scheduler** | `[SCHED] OK` on Pi 5 QEMU virt + on real Pi 5 hardware | 4-5h |
+| **B2: Vigil userspace** | Reuses phase A4 blobs unchanged; first real shell on Pi 5 | 0h additional |
+| **B3: SMP via PSCI** | `CPU_ON` to wake secondaries; TLB shootdown; ~400 LOC of SMP plumbing | 15-20h |
+| **B4: RP1 + USB + Ethernet** | PCIe host controller, RP1 driver, USB stack on Pi 5 | 20-30h |
+
+**Minimum Pi 5 boot-to-shell: 14-18h.** No userland changes needed — the same `aegis.img` built by `make -C kernel/arch/arm64 image` with the new GIC dispatcher will run vigil identically on Pi 4 and Pi 5.
+
+### 17.8 Sources
+
+- GIC-600 datasheet — https://developer.arm.com/documentation/101206/latest
+- GICv3 architecture spec — https://developer.arm.com/documentation/ihi0069/latest
+- BCM2712 peripherals reference — https://datasheets.raspberrypi.com/bcm2712/bcm2712-peripherals.pdf
+- Pi 5 firmware + DTB — https://github.com/raspberrypi/firmware/tree/master/boot
+- Pi 5 DTS — `arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-b.dts` in https://github.com/raspberrypi/linux
+- Pi 5 config.txt reference — https://www.raspberrypi.com/documentation/computers/config_txt.html
+- RP1 peripherals — https://datasheets.raspberrypi.com/rp1/rp1-peripherals.pdf
