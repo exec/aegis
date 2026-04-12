@@ -64,6 +64,7 @@ jobs:
             grub-common \
             xorriso \
             mtools \
+            dosfstools \
             musl-tools \
             gdisk \
             e2fsprogs \
