@@ -11,6 +11,16 @@ pub fn disk() -> PathBuf {
     PathBuf::from(val)
 }
 
+/// Path to the ARM64 kernel ELF, overridable via `AEGIS_ARM64_ELF`.
+///
+/// Name is `arm64_elf` (rather than just `elf`) so it's unambiguous
+/// when we later have multiple kernel image formats.
+pub fn arm64_elf() -> PathBuf {
+    let val = std::env::var("AEGIS_ARM64_ELF")
+        .unwrap_or_else(|_| "kernel/arch/arm64/build/aegis-arm64.elf".into());
+    PathBuf::from(val)
+}
+
 pub fn aegis_pc() -> QemuOpts {
     QemuOpts {
         machine: "pc".into(),
@@ -144,6 +154,40 @@ pub fn aegis_q35_gui_installer(disk_path: &std::path::Path) -> QemuOpts {
     }
 }
 
+/// ARM64 `virt` machine preset — no ISO, kernel ELF boot via `-kernel`.
+///
+/// Used by the ARM64 boot oracle. This preset is intentionally
+/// minimal: PL011 UART on stdio, 2 GiB RAM, cortex-a72 CPU, no
+/// display, no devices. No `isa-debug-exit` — that device is x86
+/// specific and the ARM64 kernel currently has no way to signal
+/// exit, so the harness relies on `AEGIS_BOOT_TIMEOUT` to stop the
+/// VM once serial capture is complete.
+///
+/// The caller must set `VORTEX_QEMU_BINARY=qemu-system-aarch64`
+/// before constructing the harness, since Vortex reads that env
+/// var once when `QemuBackend::new()` runs.
+pub fn aegis_arm64_virt() -> QemuOpts {
+    QemuOpts {
+        machine: "virt".into(),
+        display: "none".into(),
+        devices: vec![],
+        drives: vec![],
+        // Do NOT add `-serial stdio` here — Vortex's QemuBackend
+        // injects that automatically when `serial_capture = true`, and
+        // QEMU rejects duplicate `-serial stdio` with "cannot use
+        // stdio by multiple character devices". Same for `-m`, which
+        // Vortex emits from `VmSpec::memory` (set to 2048 MiB in the
+        // harness).
+        extra_args: vec![
+            "-nodefaults".into(),
+            "-cpu".into(), "cortex-a72".into(),
+            "-no-reboot".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: false,
+    }
+}
+
 /// q35 preset for post-installer boot: NVMe drive only, no ISO, OVMF UEFI firmware.
 ///
 /// Used for Boot 2 of the installer test to verify the installed
@@ -256,5 +300,51 @@ mod tests {
         let args = opts.extra_args.join(" ");
         assert!(args.contains("isa-debug-exit"), "missing isa-debug-exit in: {args}");
         assert!(args.contains("0xf4"), "missing iobase in: {args}");
+    }
+
+    #[test]
+    fn arm64_virt_preset_machine_and_serial() {
+        let opts = aegis_arm64_virt();
+        assert_eq!(opts.machine, "virt");
+        assert_eq!(opts.display, "none");
+        assert!(opts.serial_capture);
+        assert!(!opts.monitor_socket);
+    }
+
+    #[test]
+    fn arm64_virt_preset_has_cortex_a72_and_no_reboot() {
+        let opts = aegis_arm64_virt();
+        let args = opts.extra_args.join(" ");
+        assert!(args.contains("-cpu cortex-a72"), "missing cortex-a72 in: {args}");
+        assert!(args.contains("-no-reboot"), "missing -no-reboot in: {args}");
+        assert!(args.contains("-nodefaults"), "missing -nodefaults in: {args}");
+    }
+
+    #[test]
+    fn arm64_virt_preset_no_duplicate_serial_or_memory() {
+        // Vortex auto-injects `-serial stdio` and `-m <memory>`, so
+        // neither must appear in the preset's extra_args or QEMU will
+        // reject duplicate char device / memory size.
+        let opts = aegis_arm64_virt();
+        let args = opts.extra_args.join(" ");
+        assert!(!args.contains("-serial"),
+                "preset must not set -serial (Vortex injects it): {args}");
+        assert!(!args.contains("-m "),
+                "preset must not set -m (Vortex injects from memory): {args}");
+    }
+
+    #[test]
+    fn arm64_virt_preset_no_isa_debug_exit() {
+        // isa-debug-exit is x86-specific; must not appear in the ARM64 preset.
+        let opts = aegis_arm64_virt();
+        let args = opts.extra_args.join(" ");
+        assert!(!args.contains("isa-debug-exit"));
+    }
+
+    #[test]
+    fn arm64_virt_preset_no_devices_or_drives() {
+        let opts = aegis_arm64_virt();
+        assert!(opts.devices.is_empty());
+        assert!(opts.drives.is_empty());
     }
 }

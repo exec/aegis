@@ -40,8 +40,20 @@ fn boot_timeout() -> Duration {
 }
 
 fn make_vm(opts: QemuOpts, iso: &Path) -> VmInstance {
+    make_vm_from_boot_source(
+        "aegis-test",
+        opts,
+        BootSource::Cdrom { iso: iso.to_path_buf() },
+    )
+}
+
+fn make_vm_from_boot_source(
+    id: &str,
+    opts: QemuOpts,
+    boot_source: BootSource,
+) -> VmInstance {
     VmInstance {
-        id: "aegis-test".into(),
+        id: id.into(),
         spec: VmSpec {
             image: String::new(),
             memory: 2048,
@@ -54,7 +66,7 @@ fn make_vm(opts: QemuOpts, iso: &Path) -> VmInstance {
             network_config: None,
             resource_limits: ResourceLimits::default(),
             backend: Some("qemu".into()),
-            boot_source: Some(BootSource::Cdrom { iso: iso.to_path_buf() }),
+            boot_source: Some(boot_source),
             qemu_opts: Some(opts),
             exit_mappings: vec![
                 ExitMapping { raw: 33, meaning: ExitMeaning::Pass },
@@ -75,6 +87,42 @@ impl AegisHarness {
     /// AEGIS_BOOT_TIMEOUT (default 30s) elapses. QEMU is killed on timeout.
     pub async fn boot(opts: QemuOpts, iso: &Path) -> Result<ConsoleOutput, HarnessError> {
         let vm = make_vm(opts, iso);
+        Self::run_until_deadline(vm).await
+    }
+
+    /// Boot QEMU with a raw kernel ELF via `-kernel` instead of an ISO.
+    ///
+    /// Used by the ARM64 boot oracle, which has no bootable ISO image —
+    /// QEMU loads the ELF directly via `BootSource::Kernel`. The caller
+    /// must set `VORTEX_QEMU_BINARY=qemu-system-aarch64` before invoking
+    /// this method, since Vortex reads that env var once when
+    /// `QemuBackend::new()` runs inside `make_vm_from_boot_source`.
+    ///
+    /// Capture + timeout semantics are identical to `boot()`: collect
+    /// serial output until QEMU exits or `AEGIS_BOOT_TIMEOUT` elapses,
+    /// killing the process on timeout. The ARM64 kernel currently has
+    /// no way to signal "test done" from inside the VM, so callers must
+    /// set `AEGIS_BOOT_TIMEOUT` low enough that the test doesn't stall.
+    pub async fn boot_kernel(
+        opts: QemuOpts,
+        kernel: &Path,
+    ) -> Result<ConsoleOutput, HarnessError> {
+        let vm = make_vm_from_boot_source(
+            "aegis-arm64-test",
+            opts,
+            BootSource::Kernel {
+                kernel: kernel.to_path_buf(),
+                initrd: None,
+                cmdline: None,
+            },
+        );
+        Self::run_until_deadline(vm).await
+    }
+
+    /// Spawn QEMU, drain the serial channel until the deadline, reap.
+    ///
+    /// Shared implementation between `boot()` and `boot_kernel()`.
+    async fn run_until_deadline(vm: VmInstance) -> Result<ConsoleOutput, HarnessError> {
         let backend = QemuBackend::new();
         let mut proc = backend
             .spawn(&vm)

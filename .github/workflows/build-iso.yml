@@ -217,3 +217,102 @@ jobs:
             ```
             sha256sum -c aegis-${{ github.ref_name }}-x86_64.iso.sha256
             ```
+
+  build-arm64:
+    name: Build ARM64 kernel + boot oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: debian:trixie    # Same base as build-iso: Trixie ships
+                              # gcc 14.2 for both x86 and aarch64.
+    defaults:
+      run:
+        working-directory: aegis
+
+    steps:
+      - name: Install git + ca-certificates (for checkout actions)
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git ca-certificates curl sudo
+
+      - name: Checkout aegis
+        uses: actions/checkout@v4
+        with:
+          path: aegis
+
+      - name: Checkout vortex (sibling test harness dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: exec/vortex
+          path: vortex
+
+      - name: Install ARM64 build dependencies
+        working-directory: /
+        run: |
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            libssl-dev \
+            pkg-config \
+            file \
+            qemu-system-arm \
+            rustup
+
+      - name: Create aarch64-elf cross-toolchain symlinks
+        working-directory: /
+        run: |
+          # kernel/arch/arm64/Makefile expects aarch64-elf-<tool>;
+          # Debian ships aarch64-linux-gnu-<tool>. Symlink them — the
+          # toolchains are equivalent for our freestanding kernel
+          # build (-ffreestanding -nostdlib), same pattern as x86.
+          for tool in gcc ld ar as nm objcopy objdump strip; do
+            ln -sf /usr/bin/aarch64-linux-gnu-$tool \
+                   /usr/local/bin/aarch64-elf-$tool
+          done
+          aarch64-elf-gcc --version
+
+      - name: Install Rust stable via rustup
+        run: |
+          rustup default stable
+          rustup show
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-arm64-${{ hashFiles('aegis/**/Cargo.lock') }}
+          restore-keys: cargo-arm64-
+
+      - name: Verify toolchain
+        run: |
+          aarch64-elf-gcc --version | head -1
+          qemu-system-aarch64 --version | head -1
+          rustup show active-toolchain
+
+      - name: Build ARM64 kernel
+        run: |
+          make -C kernel/arch/arm64
+          ls -lh kernel/arch/arm64/build/aegis-arm64.elf
+          file kernel/arch/arm64/build/aegis-arm64.elf
+
+      - name: Run ARM64 boot oracle
+        run: |
+          VORTEX_QEMU_BINARY=qemu-system-aarch64 \
+          AEGIS_ARM64_ELF=$PWD/kernel/arch/arm64/build/aegis-arm64.elf \
+          AEGIS_BOOT_TIMEOUT=30 \
+            cargo test --manifest-path tests/Cargo.toml \
+            --test boot_oracle_arm64 -- --nocapture
+
+      - name: Upload ARM64 ELF artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-arm64-elf
+          path: aegis/kernel/arch/arm64/build/aegis-arm64.elf
+          retention-days: 14
