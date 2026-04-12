@@ -164,6 +164,7 @@ static const initrd_entry_t s_files[] = {
     { "/bin/login",   _binary_login_bin_start, _binary_login_bin_end },
     { "/bin/vigil",   _binary_vigil_bin_start, _binary_vigil_bin_end },
     { "/bin/sh",      _binary_shell_bin_start, _binary_shell_bin_end },
+    { "/bin/stsh",    _binary_shell_bin_start, _binary_shell_bin_end },
     { "/bin/echo",    _binary_echo_bin_start,  _binary_echo_bin_end  },
     { "/bin/cat",     _binary_cat_bin_start,   _binary_cat_bin_end   },
     { "/bin/ls",      _binary_ls_bin_start,    _binary_ls_bin_end    },
