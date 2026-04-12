@@ -1,0 +1,187 @@
+name: Build ISO
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-iso:
+    name: Build x86-64 ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write    # required for creating releases on tag push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-x86-64-linux-gnu \
+            nasm \
+            grub-pc-bin \
+            grub-efi-amd64-bin \
+            grub-common \
+            xorriso \
+            mtools \
+            musl-tools \
+            gdisk \
+            e2fsprogs \
+            libssl-dev \
+            pkg-config \
+            curl \
+            file \
+            qemu-system-x86
+
+      - name: Create x86_64-elf cross-toolchain symlinks
+        run: |
+          # The Makefile expects x86_64-elf-<tool>; Debian/Ubuntu ship
+          # x86_64-linux-gnu-<tool>. Symlink them — the toolchains are
+          # equivalent for our freestanding kernel build (-ffreestanding
+          # -nostdlib), as documented in CLAUDE.md.
+          for tool in gcc ld ar as nm objcopy objdump strip; do
+            sudo ln -sf /usr/bin/x86_64-linux-gnu-$tool \
+                       /usr/local/bin/x86_64-elf-$tool
+          done
+          x86_64-elf-gcc --version
+
+      - name: Install Rust stable (for rune + tests)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install Rust nightly (for kernel/cap)
+        run: |
+          rustup toolchain install nightly --component rust-src
+          rustup +nightly target add x86_64-unknown-none
+          rustup show
+
+      - name: Cache musl tarball
+        uses: actions/cache@v4
+        with:
+          path: references/musl-1.2.5.tar.gz
+          key: musl-1.2.5-tarball
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-
+
+      - name: Cache kernel/cap Rust build
+        uses: actions/cache@v4
+        with:
+          path: kernel/cap/target
+          key: cap-target-${{ hashFiles('kernel/cap/**/*.rs', 'kernel/cap/Cargo.toml') }}
+
+      - name: Cache rune build
+        uses: actions/cache@v4
+        with:
+          path: references/rune/target
+          key: rune-target-${{ hashFiles('tools/build-rune.sh') }}
+
+      - name: Verify toolchain
+        run: |
+          x86_64-elf-gcc --version | head -1
+          nasm --version
+          grub-mkrescue --version
+          xorriso -version 2>&1 | head -1
+          rustup show active-toolchain
+
+      - name: Build ISO
+        run: |
+          make iso
+          ls -lh build/aegis.iso
+          file build/aegis.iso
+
+      - name: Run boot oracle + poll test
+        run: |
+          AEGIS_ISO=$PWD/build/aegis.iso \
+            cargo test --manifest-path tests/Cargo.toml \
+            --test boot_oracle --test poll_test -- --nocapture
+
+      - name: Rename ISO for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          cp build/aegis.iso "build/aegis-${VERSION}-x86_64.iso"
+          sha256sum "build/aegis-${VERSION}-x86_64.iso" \
+            > "build/aegis-${VERSION}-x86_64.iso.sha256"
+          cat "build/aegis-${VERSION}-x86_64.iso.sha256"
+
+      - name: Upload ISO artifact (CI runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-iso
+          path: build/aegis.iso
+          retention-days: 14
+          compression-level: 0    # ISO is already compressed
+
+      - name: Upload release artifacts (tag pushes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-release-${{ github.ref_name }}
+          path: |
+            build/aegis-*-x86_64.iso
+            build/aegis-*-x86_64.iso.sha256
+          retention-days: 90
+          compression-level: 0
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            build/aegis-*-x86_64.iso
+            build/aegis-*-x86_64.iso.sha256
+          body: |
+            ## Aegis ${{ github.ref_name }}
+
+            **v1 software — first public release, not production-hardened.**
+            The C kernel likely contains real, exploitable vulnerabilities.
+            Do not deploy on untrusted networks or with real secrets.
+
+            ### Boot in QEMU
+
+            ```
+            qemu-system-x86_64 -cdrom aegis-${{ github.ref_name }}-x86_64.iso \
+              -m 2G -vga std -serial stdio
+            ```
+
+            ### Flash to USB (Linux)
+
+            ```
+            sudo dd if=aegis-${{ github.ref_name }}-x86_64.iso of=/dev/sdX \
+              bs=4M status=progress conv=fsync
+            ```
+
+            See [aegis.byexec.com](https://aegis.byexec.com) for documentation.
+
+            Verify the download:
+            ```
+            sha256sum -c aegis-${{ github.ref_name }}-x86_64.iso.sha256
+            ```
