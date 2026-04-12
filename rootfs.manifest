@@ -43,6 +43,7 @@ user/bin/ln/ln.elf              /bin/ln
 user/bin/chmod/chmod.elf        /bin/chmod
 user/bin/chown/chown.elf        /bin/chown
 user/bin/readlink/readlink.elf  /bin/readlink
+user/bin/polltest/polltest.elf  /bin/polltest
 
 # Network / services
 user/bin/httpd/httpd.elf        /bin/httpd

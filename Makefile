@@ -183,7 +183,7 @@ build-musl: $(MUSL_BUILT)
 SIMPLE_USER_PROGS = \
     ls cat echo pwd uname clear true false wc grep sort \
     mkdir touch rm cp mv whoami ln chmod chown readlink \
-    shutdown reboot login stsh httpd nettest
+    shutdown reboot login stsh httpd nettest polltest
 
 # Generate rules: user/bin/foo/foo.elf depends on musl, built via sub-make
 define SIMPLE_USER_RULE
