@@ -45,6 +45,7 @@ CFLAGS  = -ffreestanding -nostdlib -nostdinc \
           -isystem $(shell $(CC) -print-file-name=include) \
           -Wall -Wextra -Werror -O2 -g \
           -Wno-error=array-bounds \
+          -march=armv8-a \
           -mgeneral-regs-only \
           -mno-outline-atomics \
           -I. \
@@ -74,6 +75,7 @@ ARCH_OBJS = $(BUILD)/boot.o \
             $(BUILD)/arch_vmm.o \
             $(BUILD)/mmu_early.o \
             $(BUILD)/gic.o \
+            $(BUILD)/gic_v3.o \
             $(BUILD)/irq.o \
             $(BUILD)/stubs.o \
             $(BUILD)/ctx_switch.o \
@@ -216,6 +218,9 @@ $(BUILD)/vectors.o: vectors.S | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 $(BUILD)/gic.o: gic.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/gic_v3.o: gic_v3.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/irq.o: irq.c | $(BUILD)

@@ -74,10 +74,15 @@ vga_write_string(const char *s)
 /* fb_available and fb_write_string are provided by the real fb.c
  * (compiled as a shared source). fb.c handles the fb_available=0 case. */
 
-/* arch_init — on ARM64, UART is ready from reset. Nothing to do. */
+/* From uart_pl011.c — probes QEMU vs Pi PL011 base at boot. */
+void uart_init(void);
+
+/* arch_init — runs before anything prints. Resolve the PL011 MMIO
+ * base (QEMU virt vs Pi) so subsequent printks work on either board. */
 void
 arch_init(void)
 {
+    uart_init();
 }
 
 /* arch_debug_exit — use QEMU semihosting to exit.
