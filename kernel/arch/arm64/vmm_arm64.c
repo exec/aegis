@@ -457,6 +457,122 @@ int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4) {
     #undef PA_TO_KVA
     return 0;
 }
+/* vmm_phys_of_user_raw — like vmm_phys_of_user but returns the physical
+ * address backing a leaf PTE even when the VALID bit has been cleared
+ * (PROT_NONE pages). Used by sys_munmap to free frames of PROT_NONE pages
+ * without leaking them.
+ *
+ * ARM64 semantics: we represent PROT_NONE by clearing bit 0 (VALID) on an
+ * L3 page descriptor while keeping the output address in bits [47:12]
+ * intact (see vmm_set_user_prot). The MMU ignores the entire entry when
+ * VALID is clear, so this is safe. Here we walk down and return the leaf
+ * PA for any non-zero L3 entry regardless of VALID.
+ *
+ * Walk is done via TTBR1 high VA (PA + KERN_VA_OFFSET), matching the
+ * pattern used by vmm_phys_of_user. Intermediate levels (L0/L1/L2) must
+ * still be VALID since a cleared intermediate descriptor means the entire
+ * sub-tree is gone. */
+uint64_t
+vmm_phys_of_user_raw(uint64_t pml4_phys, uint64_t virt)
+{
+    uint64_t l0_idx = (virt >> 39) & 0x1FF;
+    uint64_t l1_idx = (virt >> 30) & 0x1FF;
+    uint64_t l2_idx = (virt >> 21) & 0x1FF;
+    uint64_t l3_idx = (virt >> 12) & 0x1FF;
+
+    uint64_t *l0 = (uint64_t *)(uintptr_t)(pml4_phys + KERN_VA_OFFSET);
+    uint64_t e = l0[l0_idx];
+    if (!(e & PTE_VALID)) return 0;
+
+    uint64_t *l1 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l1[l1_idx];
+    if (!(e & PTE_VALID)) return 0;
+    /* L1 block descriptor (1GB block): return PA + offset. PROT_NONE is
+     * not tracked on block mappings, so VALID must be set here. */
+    if (!(e & PTE_TABLE)) return PTE_ADDR(e) | (virt & 0x3FFFFFFFUL);
+
+    uint64_t *l2 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l2[l2_idx];
+    if (!(e & PTE_VALID)) return 0;
+    /* L2 block descriptor (2MB block): return PA + offset. */
+    if (!(e & PTE_TABLE)) return PTE_ADDR(e) | (virt & 0x1FFFFFUL);
+
+    uint64_t *l3 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l3[l3_idx];
+    /* Raw: return PA for any non-zero leaf, even if VALID is clear. */
+    return e ? (PTE_ADDR(e) | (virt & 0xFFFUL)) : 0;
+}
+
+/* vmm_set_user_prot — change the permissions of a single user L3 page.
+ *
+ * Walks pml4_phys (TTBR0 root) down to the L3 leaf and rewrites it to
+ * match `flags` (VMM_FLAG_*). The output address is preserved.
+ *
+ *   flags == 0                → PROT_NONE: clear VALID bit, keep PA so
+ *                               vmm_phys_of_user_raw can still find it.
+ *   flags & VMM_FLAG_PRESENT  → build a fresh L3 descriptor via
+ *                               flags_to_pte() (the same helper used by
+ *                               vmm_map_user_page), OR the PA, and store.
+ *
+ * Matches x86 semantics: returns 0 on success, -1 if the walk hits an
+ * unmapped intermediate or an L3 slot that was never populated. Linux
+ * mprotect silently skips unmapped pages, and the caller in sys_mprotect
+ * iterates page-by-page without checking our return value — so either
+ * behavior is tolerated, but we match x86's -1 for consistency.
+ *
+ * TLB invalidation: ARM64 requires an explicit DSB + TLBI + DSB + ISB
+ * sequence; arch_vmm_invlpg() handles that. */
+int
+vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags)
+{
+    uint64_t l0_idx = (virt >> 39) & 0x1FF;
+    uint64_t l1_idx = (virt >> 30) & 0x1FF;
+    uint64_t l2_idx = (virt >> 21) & 0x1FF;
+    uint64_t l3_idx = (virt >> 12) & 0x1FF;
+
+    uint64_t *l0 = (uint64_t *)(uintptr_t)(pml4_phys + KERN_VA_OFFSET);
+    uint64_t e = l0[l0_idx];
+    if (!(e & PTE_VALID)) return -1;
+
+    uint64_t *l1 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l1[l1_idx];
+    if (!(e & PTE_VALID) || !(e & PTE_TABLE)) return -1;
+
+    uint64_t *l2 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    e = l2[l2_idx];
+    if (!(e & PTE_VALID) || !(e & PTE_TABLE)) return -1;
+
+    uint64_t *l3 = (uint64_t *)(uintptr_t)(PTE_ADDR(e) + KERN_VA_OFFSET);
+    uint64_t old = l3[l3_idx];
+
+    /* PROT_NONE on a never-mapped page is a no-op (matches x86). */
+    if (!(old & PTE_VALID) && old == 0 && flags == 0)
+        return 0;
+
+    /* Any non-PROT_NONE prot change on a never-populated slot is an
+     * error; the caller has no physical frame to re-permission. */
+    if (old == 0 && flags != 0)
+        return -1;
+
+    uint64_t phys = PTE_ADDR(old);
+
+    if (flags == 0) {
+        /* PROT_NONE: drop VALID but keep the output address in the high
+         * bits so vmm_phys_of_user_raw / sys_munmap can still find and
+         * free the backing frame. */
+        l3[l3_idx] = phys;
+    } else {
+        /* Rebuild the L3 descriptor from abstract flags. flags_to_pte()
+         * forces PRESENT via caller-side OR; mirror vmm_map_user_page. */
+        l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
+    }
+
+    /* Publish the new descriptor to the MMU before invalidating the TLB. */
+    __asm__ volatile("dsb ishst" ::: "memory");
+    arch_vmm_invlpg(virt);
+    return 0;
+}
+
 void vmm_free_user_pages(uint64_t pml4_phys) { (void)pml4_phys; }
 int vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
                          const void *src, uint64_t len) {
