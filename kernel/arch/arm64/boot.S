@@ -75,6 +75,130 @@ _start:
 _kernel_entry:
     mov     x19, x0             /* save DTB pointer */
 
+    /* ── Early liveness signal (pre-MMU, pre-C, pre-EL-drop) ──────────
+     * Goal: write "[BOOT] aegis arm64 (pre-MMU)\r\n" to whichever PL011
+     * UART is actually mapped on this platform — QEMU virt at 0x09000000
+     * or Pi 5 at 0xFE201000 — BEFORE any C runs, any MMU setup happens,
+     * and any probe logic executes. On Pi 5 this is the FIRST kernel-
+     * originated serial output the user sees on a serial cable, and its
+     * presence proves the kernel entry, EL drop, and UART access path
+     * all work independently of the C init sequence.
+     *
+     * Detection problem: at this point the MMU is off and no exception
+     * vectors are installed. A load OR store to unmapped device memory
+     * (e.g. probing 0xFE201000 on QEMU virt) raises a synchronous
+     * external abort and recursively traps until the watchdog kills us.
+     * We can't safely "try both addresses".
+     *
+     * Solution: install a tiny single-purpose exception vector that
+     * advances ELR by 4 (skipping the faulting instruction) and ERETs.
+     * With this vector in place we can safely probe by reading PL011
+     * PeriphID0 (offset 0xFE0 = 0x11) at each candidate base; the
+     * mapped one returns 0x11, the unmapped one faults and returns
+     * w-register garbage that we sentinel out by pre-loading w3 with
+     * 0xFF before each probe. We then write the message to the
+     * surviving address with a polled FR-wait loop (proper PL011 etiquette).
+     *
+     * Vector handling depends on current EL: Pi 5 firmware enters at
+     * EL2; QEMU virt cortex-a72 enters at EL1. We dispatch on CurrentEL
+     * and write VBAR_EL2 or VBAR_EL1 accordingly. The vector is restored
+     * to 0 (or left, since it's about to be overwritten by the proper
+     * exception_vectors install in main.c) before continuing.
+     */
+
+    /* Install the skip-and-return exception vector at the appropriate EL. */
+    adr     x0, .Learly_vectors
+    mrs     x1, CurrentEL
+    lsr     x1, x1, #2
+    cmp     x1, #2
+    b.ne    1f
+    msr     vbar_el2, x0
+    b       2f
+1:  msr     vbar_el1, x0
+2:  isb
+
+    /* Probe 1: QEMU virt PL011 (0x09000000). Pre-load w3 with sentinel
+     * 0xFF; if the load faults, our vector skips it and w3 keeps 0xFF. */
+    ldr     x0, =0x09000000
+    mov     w3, #0xFF
+    ldr     w3, [x0, #0xFE0]        /* PeriphID0 — 0x11 if mapped */
+    and     w3, w3, #0xFF
+    cmp     w3, #0x11
+    b.ne    .Learly_try_pi
+    /* QEMU UART is live — emit the message there. */
+    bl      .Learly_emit
+    b       .Learly_done
+
+.Learly_try_pi:
+    /* Probe 2: Pi 5 UART0 (0xFE201000). */
+    ldr     x0, =0xFE201000
+    mov     w3, #0xFF
+    ldr     w3, [x0, #0xFE0]
+    and     w3, w3, #0xFF
+    cmp     w3, #0x11
+    b.ne    .Learly_done            /* neither base is a PL011 — silently skip */
+    bl      .Learly_emit
+
+.Learly_done:
+    mov     x0, x19                 /* restore DTB ptr for the EL drop / kernel_main */
+    b       .Learly_after_msg
+
+    /* .Learly_emit: write the asciz string at .Learly_msg to the PL011
+     * whose base is in x0. Polls FR (offset 0x18) bit 5 (TXFF) before
+     * each byte, then writes DR (offset 0). Clobbers x1, w2, w3. */
+.Learly_emit:
+    adr     x1, .Learly_msg
+.Le_loop:
+    ldrb    w2, [x1], #1
+    cbz     w2, .Le_done
+.Le_wait:
+    ldr     w3, [x0, #0x18]
+    tbnz    w3, #5, .Le_wait        /* TXFF set → busy */
+    str     w2, [x0]                /* DR */
+    b       .Le_loop
+.Le_done:
+    ret
+
+.Learly_msg:
+    .asciz "[BOOT] aegis arm64 (pre-MMU)\r\n"
+    .balign 2048
+
+    /* Tiny "skip and return" exception vector table.
+     * 16 entries × 128 bytes = 2KB, must be 2KB-aligned (the .balign
+     * 2048 above ensures this). Every entry advances ELR by 4 and
+     * ERETs, which is exactly what we want for probing unmapped MMIO:
+     * the offending load/store is skipped and execution resumes after
+     * the probe instruction with the destination register unchanged
+     * (so our pre-loaded sentinel survives).
+     *
+     * We don't know whether the trap arrives via the EL1 or EL2 entry,
+     * so every slot uses the same code. We don't know whether ELR_EL1
+     * or ELR_EL2 is the live one — so we read CurrentEL inside the
+     * stub and dispatch. (At pre-MMU boot we never serve interrupts;
+     * only synchronous-abort entries actually fire.)
+     */
+    .balign 2048
+.Learly_vectors:
+.rept 16
+    /* Save x0/x1 on the stack? No — no stack yet. Use scratch x16/x17
+     * (intra-procedure scratch, IPC corruptible) instead. */
+    mrs     x16, CurrentEL
+    lsr     x16, x16, #2
+    cmp     x16, #2
+    b.ne    11f
+    mrs     x17, elr_el2
+    add     x17, x17, #4
+    msr     elr_el2, x17
+    eret
+11: mrs     x17, elr_el1
+    add     x17, x17, #4
+    msr     elr_el1, x17
+    eret
+    .balign 128
+.endr
+
+.Learly_after_msg:
+
     /*
      * Drop from EL2 to EL1 if firmware handed us EL2 (Pi 4/5 default).
      * QEMU virt with cortex-a72 starts at EL1 so this falls through.
