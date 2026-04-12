@@ -96,15 +96,12 @@ arch_request_shutdown(void)
     arch_debug_exit(1);
 }
 
-/* ── Capability system stubs (Rust FFI — not yet built for aarch64) ── */
-void cap_init(void) {
-    extern void serial_write_string(const char *);
-    serial_write_string("[CAP] OK: capability subsystem initialized\n");
-}
-int cap_check(void *proc, uint32_t kind, uint32_t rights)
-    { (void)proc; (void)kind; (void)rights; return 0; /* allow all */ }
-int cap_grant(void *proc, uint32_t kind, uint32_t rights)
-    { (void)proc; (void)kind; (void)rights; return 0; }
+/* ── Capability system ─────────────────────────────────────────────
+ * cap_init / cap_grant / cap_check are provided by the real Rust crate
+ * in kernel/cap/ (built for aarch64-unknown-none and linked as libcap.a
+ * via kernel/arch/arm64/Makefile). The previous allow-all stubs had the
+ * wrong signature (3-arg vs cap.h's 4-arg), silently returning 0 for
+ * every check, so cap enforcement was not just broken — it was fake. */
 
 /* ── String/memory functions GCC may need ── */
 unsigned long strlen(const char *s) { unsigned long n = 0; while (s[n]) n++; return n; }
@@ -114,17 +111,10 @@ void kbd_usb_inject(char c) { (void)c; }
 
 /* signal_send_pid/pgrp/check_pending now in shared signal.c */
 
-/* User binary blobs — real ARM64 musl-static binaries (compiled separately).
- * init_elf from init_arm64_bin.c, others from *_arm64_bin.c files. */
-const char *init_name = "/bin/shell";
-
-/* Not yet built for ARM64 */
-#define EMPTY_ELF(name) \
-    const unsigned char name##_elf[] = { 0 }; \
-    const unsigned int  name##_elf_len = 0
-EMPTY_ELF(oksh); EMPTY_ELF(vigil); EMPTY_ELF(vigictl);
-EMPTY_ELF(httpd_bin); EMPTY_ELF(dhcp_bin);
-#undef EMPTY_ELF
+/* Binary blobs (vigil, stsh, coreutils) are now produced by the
+ * objcopy-based blob pipeline in kernel/arch/arm64/Makefile and
+ * exposed as _binary_<name>_bin_{start,end} just like x86. The old
+ * empty-blob fallbacks that lived here have been retired. */
 
 /* proc_enter_user and fork_child_return are now in proc_enter.S */
 

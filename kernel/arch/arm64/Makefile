@@ -8,9 +8,38 @@
 
 CC      = aarch64-elf-gcc
 LD      = aarch64-elf-ld
+OBJCOPY = aarch64-elf-objcopy
 
 # Root of the Aegis repo (two levels up from kernel/arch/arm64/)
 REPO    = ../../..
+
+# ── Userland blobs (embedded via objcopy, same pattern as x86) ────────
+# Phase A4 of ARM64.md. The user blobs are pre-built into
+# $(REPO)/build/blobs-arm64/*.bin by `tools/build-arm64-userland.sh`
+# (which drives an aarch64-musl sysroot built from musl-1.2.5 and the
+# aarch64-elf-gcc bare-metal cross compiler). This Makefile then uses
+# objcopy -I binary -O elf64-littleaarch64 -B aarch64 to turn each .bin
+# into a .o that exports _binary_<name>_bin_start/_end/_size — exactly
+# the same symbols the x86 top-level Makefile produces for its blobs.
+# That means kernel/fs/initrd.c and kernel/proc/proc.c can reference
+# these symbols without any #ifdef dispatch; the initrd table and
+# proc_spawn_init are arch-agnostic.
+#
+# Escape hatch: set ARM64_SKIP_USERLAND=1 to build the kernel with an
+# empty blob (1 byte of zero) for every name. That keeps the symbols
+# defined so linking succeeds, but initrd_open returns ENOENT for each
+# /bin/* path, matching the old "userland not yet built" behaviour.
+# Use this only for kernel-only bisects / CI runs that don't need
+# userland — the default is to embed real blobs.
+ARM64_SKIP_USERLAND ?= 0
+
+BLOB_NAMES   = login vigil shell echo cat ls init
+BLOB_SRC_DIR = $(REPO)/build/blobs-arm64
+BLOB_OBJS    = $(patsubst %,$(BUILD)/blobs/%.o,$(BLOB_NAMES))
+
+# Rust capability library (built from kernel/cap/ for aarch64-unknown-none)
+CAP_LIB = $(REPO)/kernel/cap/target/aarch64-unknown-none/release/libcap.a
+CARGO   = cargo +nightly
 
 CFLAGS  = -ffreestanding -nostdlib -nostdinc \
           -isystem $(shell $(CC) -print-file-name=include) \
@@ -114,11 +143,61 @@ SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/ramdisk.o \
               $(BUILD)/fb.o
 
-OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
+OBJS = $(ARCH_OBJS) $(SHARED_OBJS) $(BLOB_OBJS)
 
-.PHONY: all run test clean
+.PHONY: all run test clean blobs
+
+# Keep generated .bin files around across builds. Without .PRECIOUS
+# (or .SECONDARY) Make treats them as intermediates and deletes them
+# after a successful build, which would force a ~2 minute rebuild of
+# the musl sysroot on every incremental build.
+.PRECIOUS: $(BLOB_SRC_DIR)/%.bin $(BUILD)/blobs/%.bin
 
 all: $(ELF)
+
+blobs: $(BLOB_OBJS)
+
+# ── Blob recipes ──────────────────────────────────────────────────────
+# objcopy each pre-built .bin into an ELF object. --rename-section
+# mirrors the x86 recipe (turn .data into .rodata, readonly + alloc).
+# The input format is "binary" (raw bytes); the output format is a
+# standard little-endian aarch64 ELF, which ld slots in next to the
+# real kernel objects.
+#
+# CRITICAL: objcopy -I binary derives the symbol names from the input
+# FILE PATH, substituting non-alphanumeric characters with underscores.
+# So `objcopy -I binary ../../../build/blobs-arm64/vigil.bin …` would
+# produce `_binary_________build_blobs_arm64_vigil_bin_start` — NOT the
+# `_binary_vigil_bin_start` the kernel expects. Match the x86 pipeline
+# by copying each blob into $(BUILD)/blobs/<name>.bin first, then
+# `cd`ing into that directory before running objcopy so the path is
+# just `<name>.bin` and the symbols come out clean.
+$(BUILD)/blobs/%.o: $(BLOB_SRC_DIR)/%.bin | $(BUILD)/blobs
+	@cp $< $(BUILD)/blobs/$*.bin
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  $*.bin $*.o
+
+$(BUILD)/blobs: | $(BUILD)
+	mkdir -p $@
+
+# Source rule: drive tools/build-arm64-userland.sh to produce the blob.
+# This runs in a sub-shell; if the script aborts the Makefile fails.
+# When ARM64_SKIP_USERLAND=1 the rule instead writes a zero-byte blob
+# so objcopy still produces a well-formed .o. Even an empty blob is
+# enough — the _binary_<name>_bin_start/_end symbols are defined with
+# start == end, and initrd_open returns ENOENT for that path.
+ifeq ($(ARM64_SKIP_USERLAND),1)
+$(BLOB_SRC_DIR)/%.bin:
+	@mkdir -p $(BLOB_SRC_DIR)
+	@echo "[arm64] ARM64_SKIP_USERLAND=1: emitting empty $@ stub"
+	@printf '\0' > $@
+else
+$(BLOB_SRC_DIR)/%.bin:
+	@mkdir -p $(BLOB_SRC_DIR)
+	bash $(REPO)/tools/build-arm64-userland.sh $*
+endif
+
 
 # ARM64 arch sources
 $(BUILD)/boot.o: boot.S | $(BUILD)
@@ -329,8 +408,16 @@ $(BUILD)/ramdisk.o: $(REPO)/kernel/drivers/ramdisk.c | $(BUILD)
 
 LIBGCC := $(shell $(CC) -print-libgcc-file-name)
 
-$(ELF): $(OBJS) linker.ld
-	$(LD) -T linker.ld -nostdlib -o $@ $(OBJS) $(LIBGCC)
+# Rust capability library — built via cargo for aarch64-unknown-none.
+# Order in the link line: $(CAP_LIB) before $(LIBGCC) so libgcc's atomic
+# helpers satisfy any remaining references emitted by the Rust codegen.
+$(CAP_LIB): $(REPO)/kernel/cap/src/lib.rs $(REPO)/kernel/cap/Cargo.toml
+	$(CARGO) build --release \
+	    --target aarch64-unknown-none \
+	    --manifest-path $(REPO)/kernel/cap/Cargo.toml
+
+$(ELF): $(OBJS) $(CAP_LIB) linker.ld
+	$(LD) -T linker.ld -nostdlib -o $@ $(OBJS) $(CAP_LIB) $(LIBGCC)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -340,6 +427,29 @@ run: $(ELF)
 	  -machine virt -cpu cortex-a72 \
 	  -m 128M -nographic \
 	  -kernel $(ELF)
+
+# ── Linux arm64 Image format ──────────────────────────────────────────
+# Produces build/aegis.img — a flat binary with the 64-byte arm64 boot
+# header, suitable for both QEMU virt's `-kernel` Image loader and
+# Raspberry Pi firmware (start4.elf / start5.elf). The header lives
+# inline in boot.S's .text.boot section (see that file for details),
+# so gen-arm64-image.py only has to flatten the ELF with objcopy and
+# stamp the image_size field. See README.arm64.md for the Pi flow.
+IMG = $(BUILD)/aegis.img
+
+.PHONY: image run-image
+
+image: $(IMG)
+
+$(IMG): $(ELF) $(REPO)/tools/gen-arm64-image.py
+	python3 $(REPO)/tools/gen-arm64-image.py $(ELF) $(IMG)
+
+# Convenience: boot the Image format directly (the path the Pi will use).
+run-image: $(IMG)
+	qemu-system-aarch64 \
+	  -machine virt -cpu cortex-a72 \
+	  -m 2G -nographic \
+	  -kernel $(IMG)
 
 test: $(ELF)
 	@echo "--- arm64 boot test ---"
