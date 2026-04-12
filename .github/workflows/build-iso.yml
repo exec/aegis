@@ -44,6 +44,8 @@ jobs:
             pkg-config \
             curl \
             file \
+            python3 \
+            python3-pil \
             qemu-system-x86
 
       - name: Create x86_64-elf cross-toolchain symlinks
