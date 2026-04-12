@@ -37,10 +37,7 @@ _Static_assert(offsetof(aegis_process_t, task) == 0,
 
 /*
  */
-#ifdef __aarch64__
-extern const unsigned char init_elf[];
-extern const unsigned int init_elf_len;
-#else
+#ifndef __aarch64__
 extern const unsigned char _binary_init_bin_start[];
 extern const unsigned char _binary_init_bin_end[];
 #endif
@@ -416,7 +413,12 @@ void
 proc_spawn_init(void)
 {
 #ifdef __aarch64__
-    proc_spawn((const uint8_t *)init_elf, (size_t)init_elf_len);
+    /* ARM64 userland is not yet built from current master sources. The
+     * previous port embedded pre-rebase byte-array blobs that referenced
+     * syscalls, paths, and /bin/sh that no longer exist. Until a real
+     * aarch64-musl toolchain is wired up (ARM64.md phase A4), there is
+     * nothing to spawn — the scheduler runs idle. */
+    printk("[INIT] ARM64 userland not yet built — running idle only\n");
 #else
     proc_spawn((const uint8_t *)_binary_init_bin_start, (size_t)(_binary_init_bin_end - _binary_init_bin_start));
 #endif

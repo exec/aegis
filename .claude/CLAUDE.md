@@ -498,9 +498,13 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 | P4 | **draw_px optimization** | Faster GUI rendering | Small |
 | WQ | **Wait queue abstraction** (`waitq_t`) | Cleaner blocking I/O | Medium |
 
-### ARM64 Port Status
+### ARM64 Port Status (2026-04-12)
 
-**Build: BROKEN.** xhci.c GCC 15 array-bounds fail. 8 .o files missing from Makefile. `smp_percpu_init_bsp()` not called. Minimum fix ~2 hours. Remaining: TTBR0/TTBR1, PAN, vmm_free_user_pages, Rust cap cross-compile.
+**Build: WORKING.** `make -C kernel/arch/arm64` produces `build/aegis-arm64.elf` (1.1MB). Boots on `qemu-system-aarch64 -machine virt -cpu cortex-a72 -m 2G -kernel build/aegis-arm64.elf -nographic` through to `[SCHED] OK: scheduler started, 1 tasks` and idles. See `ARM64.md` at the repo root for the full port plan and §14-§15 for the setup/first-boot/purge history.
+
+**Userland: NONE.** All pre-rebase user blobs have been purged. `proc_spawn_init()` is a no-op on aarch64 until a real aarch64-musl toolchain is wired up (phase A4). Never embed generated blob `.c` files in `kernel/arch/arm64/` — they are `.gitignore`'d, and if they reappear they lie about correctness (a 685-commit-old `/bin/sh` blob ran successfully under current syscall dispatch and masked every ARM64 regression).
+
+**Remaining:** aarch64-musl userland (A4), Linux arm64 Image boot header (A5, for Pi), Rust `kernel/cap/` cross-compile (~1h Makefile), PAN, TLB shootdown for SMP, `vmm_free_user_pages`. Boot oracle via Vortex (A5) pending.
 
 ### Lock Ordering (Canonical)
 

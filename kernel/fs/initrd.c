@@ -125,52 +125,12 @@ static const unsigned int s_cap_installer_size  = sizeof(s_cap_installer)  - 1;
  *     _binary_<name>_bin_{start,end}
  * for each user/bin/<name>.bin blob (see top-level Makefile).
  *
- * aarch64 convention: each binary is embedded as a C array in
- *     kernel/arch/arm64/<name>_arm64_bin.c
- * which defines
- *     const unsigned char <name>_elf[];
- *     const unsigned int  <name>_elf_len;
- *
- * We pick the right set at compile time via __aarch64__ and build a
- * parallel `_start`/`_end` pointer pair for each entry so the rest of
- * this file can iterate a single uniform table regardless of arch.
- *
- * Note on /bin/vigil: arm64 does not currently build a separate `vigil`
- * user binary. `init_elf` is the arm64 PID 1 init and plays vigil's role
- * (see kernel/proc/proc.c where proc_spawn_init() feeds init_elf to the
- * ELF loader under __aarch64__). Until vigil is cross-built for arm64,
- * /bin/vigil in the initrd points at the same init_elf blob. */
-#ifdef __aarch64__
-extern const unsigned char init_elf[];
-extern const unsigned int  init_elf_len;
-extern const unsigned char login_elf[];
-extern const unsigned int  login_elf_len;
-extern const unsigned char shell_elf[];
-extern const unsigned int  shell_elf_len;
-extern const unsigned char echo_elf[];
-extern const unsigned int  echo_elf_len;
-extern const unsigned char cat_elf[];
-extern const unsigned int  cat_elf_len;
-extern const unsigned char ls_elf[];
-extern const unsigned int  ls_elf_len;
-
-/* On arm64 the blob `end` pointers are NOT compile-time constants
- * (`*_elf_len` is a runtime-initialized extern `const unsigned int`).
- * Initialize `end` to NULL and patch at initrd_register() time via
- * s_arm64_blob_fixups[] below. /bin/vigil aliases init_elf. */
-#define LOGIN_START  (login_elf)
-#define LOGIN_END    ((const unsigned char *)0)
-#define VIGIL_START  (init_elf)
-#define VIGIL_END    ((const unsigned char *)0)
-#define SHELL_START  (shell_elf)
-#define SHELL_END    ((const unsigned char *)0)
-#define ECHO_START   (echo_elf)
-#define ECHO_END     ((const unsigned char *)0)
-#define CAT_START    (cat_elf)
-#define CAT_END      ((const unsigned char *)0)
-#define LS_START     (ls_elf)
-#define LS_END       ((const unsigned char *)0)
-#else
+ * On aarch64 these symbols are not provided — ARM64 userland is not yet
+ * built from current master sources (ARM64.md phase A4). The user-binary
+ * entries below are #ifdef'd out of the initrd table, so initrd_open
+ * of /bin/stsh etc. simply returns ENOENT until we have a real aarch64
+ * musl toolchain. */
+#ifndef __aarch64__
 extern const unsigned char _binary_login_bin_start[];
 extern const unsigned char _binary_login_bin_end[];
 extern const unsigned char _binary_vigil_bin_start[];
@@ -183,19 +143,6 @@ extern const unsigned char _binary_cat_bin_start[];
 extern const unsigned char _binary_cat_bin_end[];
 extern const unsigned char _binary_ls_bin_start[];
 extern const unsigned char _binary_ls_bin_end[];
-
-#define LOGIN_START  _binary_login_bin_start
-#define LOGIN_END    _binary_login_bin_end
-#define VIGIL_START  _binary_vigil_bin_start
-#define VIGIL_END    _binary_vigil_bin_end
-#define SHELL_START  _binary_shell_bin_start
-#define SHELL_END    _binary_shell_bin_end
-#define ECHO_START   _binary_echo_bin_start
-#define ECHO_END     _binary_echo_bin_end
-#define CAT_START    _binary_cat_bin_start
-#define CAT_END      _binary_cat_bin_end
-#define LS_START     _binary_ls_bin_start
-#define LS_END       _binary_ls_bin_end
 #endif
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
@@ -208,26 +155,18 @@ typedef struct {
     const unsigned char *end;    /* blob end (_binary_<prog>_end or start + strlen) */
 } initrd_entry_t;
 
-/* On aarch64 the blob end pointers are not compile-time constants
- * (`login_elf_len` is an extern `const unsigned int`, not a #define or
- * sizeof), so this table cannot be `const` on arm64 — the blob `end`
- * fields are patched in at initrd_register() time. On x86 the end
- * pointers are linker-provided array symbols, so the table can stay
- * fully static-initialized. */
-#ifdef __aarch64__
-static initrd_entry_t s_files[] = {
-#else
 static const initrd_entry_t s_files[] = {
-#endif
     { "/etc/motd",       (const unsigned char *)s_motd,       (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
     { "/etc/banner",     (const unsigned char *)s_banner,     (const unsigned char *)s_banner + sizeof(s_banner) - 1 },
     { "/etc/banner.net", (const unsigned char *)s_banner_net, (const unsigned char *)s_banner_net + sizeof(s_banner_net) - 1 },
-    { "/bin/login",   LOGIN_START, LOGIN_END },
-    { "/bin/vigil",   VIGIL_START, VIGIL_END },
-    { "/bin/sh",      SHELL_START, SHELL_END },
-    { "/bin/echo",    ECHO_START,  ECHO_END  },
-    { "/bin/cat",     CAT_START,   CAT_END   },
-    { "/bin/ls",      LS_START,    LS_END    },
+#ifndef __aarch64__
+    { "/bin/login",   _binary_login_bin_start, _binary_login_bin_end },
+    { "/bin/vigil",   _binary_vigil_bin_start, _binary_vigil_bin_end },
+    { "/bin/sh",      _binary_shell_bin_start, _binary_shell_bin_end },
+    { "/bin/echo",    _binary_echo_bin_start,  _binary_echo_bin_end  },
+    { "/bin/cat",     _binary_cat_bin_start,   _binary_cat_bin_end   },
+    { "/bin/ls",      _binary_ls_bin_start,    _binary_ls_bin_end    },
+#endif
     { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
     { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
     { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },
@@ -254,8 +193,6 @@ static const initrd_entry_t s_files[] = {
     { (const char *)0, (const unsigned char *)0, (const unsigned char *)0 }  /* sentinel */
 };
 
-
-static const uint32_t s_nfiles = 32;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -552,27 +489,13 @@ static vfs_file_t s_mouse_file = {
 void
 initrd_register(void)
 {
-#ifdef __aarch64__
-    /* Patch blob `end` pointers that could not be statically initialized
-     * (see comment above s_files[]). Walk s_files and fix up each entry
-     * whose `start` matches one of the arm64 blob arrays. */
-    uint32_t i;
-    for (i = 0; s_files[i].name != (const char *)0; i++) {
-        if (s_files[i].start == login_elf)
-            s_files[i].end = login_elf + login_elf_len;
-        else if (s_files[i].start == init_elf)
-            s_files[i].end = init_elf + init_elf_len;
-        else if (s_files[i].start == shell_elf)
-            s_files[i].end = shell_elf + shell_elf_len;
-        else if (s_files[i].start == echo_elf)
-            s_files[i].end = echo_elf + echo_elf_len;
-        else if (s_files[i].start == cat_elf)
-            s_files[i].end = cat_elf + cat_elf_len;
-        else if (s_files[i].start == ls_elf)
-            s_files[i].end = ls_elf + ls_elf_len;
-    }
-#endif
-    printk("[INITRD] OK: %u files registered\n", s_nfiles);
+    /* Count up to the sentinel so the reported count tracks the actual
+     * number of entries even when #ifdef slices drop the user-binary
+     * section (on arm64 until phase A4). */
+    uint32_t n = 0;
+    while (s_files[n].name != (const char *)0)
+        n++;
+    printk("[INITRD] OK: %u files registered\n", n);
 }
 
 int
