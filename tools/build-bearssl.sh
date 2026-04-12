@@ -2,9 +2,24 @@
 # tools/build-bearssl.sh — compile BearSSL 0.6 with musl-gcc
 set -e
 
-BEARSSL_SRC="$(git rev-parse --show-toplevel)/references/bearssl-0.6"
-STAGING="$(git rev-parse --show-toplevel)/build/bearssl-install"
-OBJDIR="$(git rev-parse --show-toplevel)/build/bearssl-objs"
+REPO="$(git rev-parse --show-toplevel)"
+BEARSSL_VER="0.6"
+BEARSSL_URL="https://bearssl.org/bearssl-${BEARSSL_VER}.tar.gz"
+BEARSSL_TAR="$REPO/references/bearssl-${BEARSSL_VER}.tar.gz"
+BEARSSL_SRC="$REPO/references/bearssl-${BEARSSL_VER}"
+STAGING="$REPO/build/bearssl-install"
+OBJDIR="$REPO/build/bearssl-objs"
+
+# Download if absent — CI builds start with an empty references/ dir.
+if [ ! -d "$BEARSSL_SRC" ]; then
+    mkdir -p "$REPO/references"
+    if [ ! -f "$BEARSSL_TAR" ]; then
+        echo "[bearssl] Downloading BearSSL ${BEARSSL_VER}..."
+        curl -L -o "$BEARSSL_TAR" "$BEARSSL_URL"
+    fi
+    echo "[bearssl] Extracting..."
+    tar -xzf "$BEARSSL_TAR" -C "$REPO/references/"
+fi
 
 mkdir -p "$STAGING/include" "$STAGING/lib" "$STAGING/lib64" "$OBJDIR"
 rm -f "$OBJDIR"/*.o
