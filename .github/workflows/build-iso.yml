@@ -21,9 +21,21 @@ jobs:
     permissions:
       contents: write    # required for creating releases on tag push
 
+    defaults:
+      run:
+        working-directory: aegis
+
     steps:
-      - name: Checkout
+      - name: Checkout aegis
         uses: actions/checkout@v4
+        with:
+          path: aegis
+
+      - name: Checkout vortex (sibling test harness dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: exec/vortex
+          path: vortex
 
       - name: Install build dependencies
         run: |
@@ -76,8 +88,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            references/musl-1.2.5.tar.gz
-            references/bearssl-0.6.tar.gz
+            aegis/references/musl-1.2.5.tar.gz
+            aegis/references/bearssl-0.6.tar.gz
           key: vendored-tarballs-musl-1.2.5-bearssl-0.6
 
       - name: Cache Cargo registry
@@ -86,20 +98,20 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ hashFiles('aegis/**/Cargo.lock') }}
           restore-keys: cargo-
 
       - name: Cache kernel/cap Rust build
         uses: actions/cache@v4
         with:
-          path: kernel/cap/target
-          key: cap-target-${{ hashFiles('kernel/cap/**/*.rs', 'kernel/cap/Cargo.toml') }}
+          path: aegis/kernel/cap/target
+          key: cap-target-${{ hashFiles('aegis/kernel/cap/**/*.rs', 'aegis/kernel/cap/Cargo.toml') }}
 
       - name: Cache rune build
         uses: actions/cache@v4
         with:
-          path: references/rune/target
-          key: rune-target-${{ hashFiles('tools/build-rune.sh') }}
+          path: aegis/references/rune/target
+          key: rune-target-${{ hashFiles('aegis/tools/build-rune.sh') }}
 
       - name: Verify toolchain
         run: |
@@ -136,7 +148,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aegis-iso
-          path: build/aegis.iso
+          path: aegis/build/aegis.iso
           retention-days: 14
           compression-level: 0    # ISO is already compressed
 
@@ -146,8 +158,8 @@ jobs:
         with:
           name: aegis-release-${{ github.ref_name }}
           path: |
-            build/aegis-*-x86_64.iso
-            build/aegis-*-x86_64.iso.sha256
+            aegis/build/aegis-*-x86_64.iso
+            aegis/build/aegis-*-x86_64.iso.sha256
           retention-days: 90
           compression-level: 0
 
@@ -160,8 +172,8 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
-            build/aegis-*-x86_64.iso
-            build/aegis-*-x86_64.iso.sha256
+            aegis/build/aegis-*-x86_64.iso
+            aegis/build/aegis-*-x86_64.iso.sha256
           body: |
             ## Aegis ${{ github.ref_name }}
 
