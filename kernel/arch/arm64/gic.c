@@ -20,7 +20,7 @@
  *     dist 0x10_7FFF_9000, cpu 0x10_7FFF_A000
  *
  * Pi 5 lives above 4 GiB, so reaching it requires the block-4 device
- * mapping in mmu_early.c (kern_l1[4] → 0x100000000). All addresses
+ * mapping that boot.S populates (kern_l1[4] → 0x100000000). All addresses
  * reach this file as PAs via gic_set_version() from the DTB walker
  * in arch_mm.c; the walker does the per-node ranges translation so
  * Pi 5's SoC-local 0x7FFF_9000 ends up as the absolute PA here.

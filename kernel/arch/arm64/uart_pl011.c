@@ -18,8 +18,8 @@
  *                     4 legacy peripheral window and does not exist
  *                     on BCM2712.
  *
- * The QEMU base is in the first 1 GiB device block mapped by
- * mmu_early.c (kern_l1[0]); the Pi 5 base sits inside kern_l1[4]'s
+ * The QEMU base is in the first 1 GiB device block that boot.S
+ * populates (kern_l1[0]); the Pi 5 base sits inside kern_l1[4]'s
  * device block at 0x1_0000_0000..0x1_4000_0000.
  *
  * PL011 register map (offsets from base):
