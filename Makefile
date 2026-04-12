@@ -244,6 +244,10 @@ build/curl/curl: build/bearssl-install/lib/libbearssl.a
 
 curl_bin: build/curl/curl
 
+# Rune text editor (external Rust build)
+user/bin/rune:
+	bash tools/build-rune.sh
+
 # ── Binary blob embedding (objcopy) ��────────────────────��───────────────────
 # Pattern rule: build/blobs/%.bin → build/blobs/%.o
 $(BUILD)/blobs/%.o: $(BUILD)/blobs/%.bin
