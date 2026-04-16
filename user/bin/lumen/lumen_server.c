@@ -205,18 +205,112 @@ err_reply: {
     }
 }
 
+/* ── Helpers ─────────────────────────────────────────────────────────── */
+
+static proxy_window_t *find_proxy(lumen_client_t *cli, uint32_t id)
+{
+    for (int i = 0; i < cli->nwindows; i++)
+        if (cli->windows[i]->id == id)
+            return cli->windows[i];
+    return NULL;
+}
+
+static int handle_damage(compositor_t *comp, lumen_client_t *cli,
+                           uint32_t window_id)
+{
+    proxy_window_t *pw = find_proxy(cli, window_id);
+    if (!pw) return 0;
+    glyph_window_mark_all_dirty(pw->win);
+    comp->full_redraw = 1;
+    return 1;
+}
+
+static int handle_destroy_window(compositor_t *comp, lumen_client_t *cli,
+                                   uint32_t window_id)
+{
+    for (int i = 0; i < cli->nwindows; i++) {
+        proxy_window_t *pw = cli->windows[i];
+        if (pw->id != window_id) continue;
+
+        comp_remove_window(comp, pw->win);
+        comp->full_redraw = 1;
+
+        size_t bufsz = (size_t)pw->win->client_w * pw->win->client_h
+                       * sizeof(uint32_t);
+        munmap(pw->shared, bufsz);
+        close(pw->memfd);
+        glyph_window_destroy(pw->win);
+        free(pw);
+
+        cli->windows[i] = cli->windows[--cli->nwindows];
+        return 1;
+    }
+    return 0;
+}
+
 /* ── Client read + hangup ───────────────────────────────────────────── */
 
 static int lumen_server_read(compositor_t *comp, lumen_client_t *cli)
 {
-    (void)comp; (void)cli;
-    return 0;
+    lumen_msg_hdr_t hdr;
+    ssize_t n = read(cli->fd, &hdr, sizeof(hdr));
+    if (n == 0) return -1;
+    if (n < 0)  return (errno == EAGAIN) ? 0 : -1;
+    if (n != (ssize_t)sizeof(hdr)) return -1;
+
+    switch (hdr.op) {
+    case LUMEN_OP_CREATE_WINDOW: {
+        lumen_create_window_t req;
+        if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
+        return handle_create_window(comp, cli, &req);
+    }
+    case LUMEN_OP_DAMAGE: {
+        lumen_damage_t req;
+        if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
+        return handle_damage(comp, cli, req.window_id);
+    }
+    case LUMEN_OP_SET_TITLE: {
+        lumen_set_title_t req;
+        if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
+        return 0;
+    }
+    case LUMEN_OP_DESTROY_WINDOW: {
+        lumen_destroy_window_t req;
+        if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
+        return handle_destroy_window(comp, cli, req.window_id);
+    }
+    default: {
+        char tmp[256];
+        uint32_t rem = hdr.len;
+        while (rem > 0) {
+            ssize_t r = read(cli->fd, tmp,
+                             rem < (uint32_t)sizeof(tmp)
+                             ? rem : (uint32_t)sizeof(tmp));
+            if (r <= 0) return -1;
+            rem -= (uint32_t)r;
+        }
+        return 0;
+    }
+    }
 }
 
 static void lumen_server_hangup(compositor_t *comp, lumen_client_t *cli)
 {
-    (void)comp;
+    for (int i = 0; i < cli->nwindows; i++) {
+        proxy_window_t *pw = cli->windows[i];
+        comp_remove_window(comp, pw->win);
+        size_t bufsz = (size_t)pw->win->client_w * pw->win->client_h
+                       * sizeof(uint32_t);
+        munmap(pw->shared, bufsz);
+        close(pw->memfd);
+        glyph_window_destroy(pw->win);
+        free(pw);
+    }
+    if (cli->nwindows > 0)
+        comp->full_redraw = 1;
+
     close(cli->fd);
+
     for (int i = 0; i < s_ncli; i++) {
         if (s_clients[i] == cli) {
             s_clients[i] = s_clients[--s_ncli];
