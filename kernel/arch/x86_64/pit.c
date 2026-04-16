@@ -7,6 +7,7 @@
 #include "netdev.h"
 #include "tcp.h"
 #include "ip.h"
+#include "../../sched/waitq.h"
 
 #define PIT_CHANNEL0 0x40
 #define PIT_CMD      0x43
@@ -37,7 +38,6 @@ void sched_tick(void);
 
 /* PIT wakes g_timer_waitq each tick so timed pollers re-check their
  * deadline. Replaces the old single-slot g_poll_waiter (deleted). */
-#include "../../sched/waitq.h"
 
 void
 pit_init(void)

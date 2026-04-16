@@ -199,8 +199,7 @@ void fork_child_load_ttbr0(void) {
  * On ARM64, proc.c uses init_elf[] + init_elf_len from init_arm64_bin.c
  * instead of the x86 objcopy blob symbols. */
 
-/* ── Timer waitq (x86: defined in waitq.c, woken by PIT) ──────────────
- * On ARM64 there's no PIT yet; the queue exists so sys_poll /
- * sys_epoll_wait can compile and register, but nothing wakes it. */
-#include "../../sched/waitq.h"
-waitq_t g_timer_waitq = WAITQ_INIT;
+/* g_timer_waitq is defined in kernel/sched/waitq.c (cross-arch).
+ * On ARM64 there is no PIT yet, so nothing wakes it — sys_poll/
+ * sys_epoll_wait fall through to fd-readiness wakes once Tasks
+ * 4-10 wire those up. */

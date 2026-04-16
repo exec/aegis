@@ -903,17 +903,9 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
         }
         if (ready > 0 || timeout_ticks == 0) return (uint64_t)ready;
         if (deadline && (uint32_t)arch_get_ticks() >= deadline) return 0;
-        /* Yield via sched_block + immediate wakeup on next PIT tick.
-         * When we block, the scheduler runs other tasks (or the idle task,
-         * which HLTs — giving QEMU's SLIRP event loop time to process
-         * external NAT connections).  The PIT ISR runs netdev_poll_all()
-         * before sched_tick(), so incoming data is processed.  We use a
-         * global poll-waiter pointer so the PIT handler can wake us
-         * after network processing is complete. */
-        {
-            /* TEMP: bridged via g_timer_waitq until Task 5 lands per-fd queues. */
-            waitq_wait(&g_timer_waitq);
-        }
+        /* Block on g_timer_waitq — PIT wakes it each tick so we re-check
+         * deadline + fd readiness on the next iteration. */
+        waitq_wait(&g_timer_waitq);
     }
 }
 

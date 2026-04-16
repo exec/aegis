@@ -4,6 +4,7 @@
 #include "spinlock.h"
 #include <stddef.h>
 
+/* PIT-tick-driven timer waitq; see waitq.h for usage. */
 waitq_t g_timer_waitq = WAITQ_INIT;
 
 void
