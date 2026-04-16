@@ -430,6 +430,16 @@ static vfs_file_t s_urandom_file = {
 /* ── /dev/mouse VFS device ──────────────────────────────────────────────── */
 
 #include "usb_mouse.h"
+#include "../sched/waitq.h"
+
+extern waitq_t g_mouse_waiters;
+
+static struct waitq *
+mouse_get_waitq_fn(void *priv)
+{
+    (void)priv;
+    return &g_mouse_waiters;
+}
 
 static int
 mouse_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
@@ -472,13 +482,14 @@ mouse_stat_fn(void *priv, k_stat_t *st)
 }
 
 static const vfs_ops_t s_mouse_ops = {
-    .read    = mouse_read_fn,
-    .write   = (void *)0,
-    .close   = mouse_close_fn,
-    .readdir = (void *)0,
-    .dup     = (void *)0,
-    .stat    = mouse_stat_fn,
-    .poll    = (void *)0,
+    .read      = mouse_read_fn,
+    .write     = (void *)0,
+    .close     = mouse_close_fn,
+    .readdir   = (void *)0,
+    .dup       = (void *)0,
+    .stat      = mouse_stat_fn,
+    .poll      = (void *)0,
+    .get_waitq = mouse_get_waitq_fn,
 };
 
 static vfs_file_t s_mouse_file = {

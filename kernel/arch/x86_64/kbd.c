@@ -7,6 +7,9 @@
 #include "tty.h"
 #include "sched.h"
 #include "spinlock.h"
+#include "../../sched/waitq.h"
+
+extern waitq_t g_console_waiters;
 
 #define KBD_DATA 0x60
 
@@ -71,6 +74,10 @@ buf_push(char c)
         s_kbd_waiter = 0;
     }
     spin_unlock_irqrestore(&kbd_lock, fl);
+    /* Wake any pollers on /dev/tty or /dev/console waiting for input.
+     * waitq_wake_all is documented ISR-safe. Done outside kbd_lock to
+     * avoid holding nested locks across the wake. */
+    waitq_wake_all(&g_console_waiters);
 }
 
 void

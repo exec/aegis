@@ -7,7 +7,17 @@
 #include "fb.h"
 #include "uaccess.h"
 #include "syscall_util.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
+
+extern waitq_t g_console_waiters;
+
+static struct waitq *
+kbd_get_waitq_fn(void *priv)
+{
+	(void)priv;
+	return &g_console_waiters;
+}
 
 /* ── Console tty singleton ──────────────────────────────────────── */
 
@@ -118,13 +128,14 @@ kbd_vfs_poll_fn(void *priv)
 }
 
 static const vfs_ops_t s_kbd_ops = {
-	.read    = kbd_vfs_read_fn,
-	.write   = kbd_vfs_write_fn,
-	.close   = kbd_vfs_close_fn,
-	.readdir = (void *)0,
-	.dup     = (void *)0,
-	.stat    = kbd_stat_fn,
-	.poll    = kbd_vfs_poll_fn,
+	.read      = kbd_vfs_read_fn,
+	.write     = kbd_vfs_write_fn,
+	.close     = kbd_vfs_close_fn,
+	.readdir   = (void *)0,
+	.dup       = (void *)0,
+	.stat      = kbd_stat_fn,
+	.poll      = kbd_vfs_poll_fn,
+	.get_waitq = kbd_get_waitq_fn,
 };
 
 static vfs_file_t s_kbd_file = {

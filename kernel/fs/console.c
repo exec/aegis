@@ -4,9 +4,23 @@
 #include "arch.h"
 #include "printk.h"
 #include "fb.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 #define CONSOLE_BUF 256
+
+/* Shared input wait queue. Woken by the kbd ISR after each byte is
+ * pushed into the input ring. The kbd VFS shares this same queue
+ * (extern in kbd_vfs.c) — there's only one keyboard source on the
+ * machine, so all readers wake together. */
+waitq_t g_console_waiters = WAITQ_INIT;
+
+static struct waitq *
+console_get_waitq_fn(void *priv)
+{
+    (void)priv;
+    return &g_console_waiters;
+}
 
 /*
  * console_write_fn — write user output to serial + VGA + FB directly.
@@ -82,13 +96,14 @@ console_poll_fn(void *priv)
 }
 
 static const vfs_ops_t s_console_ops = {
-    .read    = console_read_fn,
-    .write   = console_write_fn,
-    .close   = console_close_fn,
-    .readdir = (void *)0,
-    .dup     = (void *)0,
-    .stat    = console_stat_fn,
-    .poll    = console_poll_fn,
+    .read      = console_read_fn,
+    .write     = console_write_fn,
+    .close     = console_close_fn,
+    .readdir   = (void *)0,
+    .dup       = (void *)0,
+    .stat      = console_stat_fn,
+    .poll      = console_poll_fn,
+    .get_waitq = console_get_waitq_fn,
 };
 
 static vfs_file_t s_console_file = {

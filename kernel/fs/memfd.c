@@ -128,6 +128,10 @@ static int memfd_vfs_stat(void *priv, k_stat_t *st)
     return 0;
 }
 
+/* memfd is always ready: the existing .poll callback returns
+ * POLLIN | POLLOUT immediately for every open. There's no producer
+ * to wake, so get_waitq stays NULL and sys_poll falls through to
+ * its permissive default. */
 const vfs_ops_t g_memfd_ops = {
     .read    = memfd_vfs_read,
     .write   = memfd_vfs_write,

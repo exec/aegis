@@ -10,6 +10,7 @@
 #include "sched.h"
 #include "spinlock.h"
 #include "arch.h"
+#include "../sched/waitq.h"
 #include <stddef.h>
 
 #define MOUSE_BUF_SIZE 128
@@ -23,6 +24,11 @@ static spinlock_t mouse_lock = SPINLOCK_INIT;
 /* s_waiter — task blocked in mouse_read_blocking(), or NULL.
  * Set before sched_block(); cleared on wake. */
 static aegis_task_t *s_waiter = NULL;
+
+/* g_mouse_waiters — non-static so the /dev/mouse VFS ops in initrd.c can
+ * extern it for get_waitq. Woken from buf_push() in HID dispatch context
+ * (PIT ISR → xhci_poll → usb_hid_process_report → buf_push). */
+waitq_t g_mouse_waiters = WAITQ_INIT;
 
 static void
 buf_push(const mouse_event_t *evt)
@@ -39,6 +45,9 @@ buf_push(const mouse_event_t *evt)
         s_waiter = NULL;
     }
     spin_unlock_irqrestore(&mouse_lock, fl);
+    /* Wake any pollers on /dev/mouse. waitq_wake_all is documented
+     * ISR-safe; called outside mouse_lock to avoid nested locks. */
+    waitq_wake_all(&g_mouse_waiters);
 }
 
 void
