@@ -145,6 +145,13 @@ static int unix_vfs_stat(void *priv, k_stat_t *st)
     return 0;
 }
 
+static struct waitq *
+unix_vfs_get_waitq(void *priv)
+{
+    uint32_t id = (uint32_t)(uintptr_t)priv;
+    return unix_sock_get_waitq(id);
+}
+
 static uint16_t unix_vfs_poll(void *priv)
 {
     uint32_t id = (uint32_t)(uintptr_t)priv;
@@ -183,13 +190,14 @@ static uint16_t unix_vfs_poll(void *priv)
 }
 
 const vfs_ops_t g_unix_sock_ops = {
-    .read    = unix_vfs_read,
-    .write   = unix_vfs_write,
-    .close   = unix_vfs_close,
-    .readdir = (void *)0,
-    .dup     = unix_vfs_dup,
-    .stat    = unix_vfs_stat,
-    .poll    = unix_vfs_poll,
+    .read       = unix_vfs_read,
+    .write      = unix_vfs_write,
+    .close      = unix_vfs_close,
+    .readdir    = (void *)0,
+    .dup        = unix_vfs_dup,
+    .stat       = unix_vfs_stat,
+    .poll       = unix_vfs_poll,
+    .get_waitq  = unix_vfs_get_waitq,
 };
 
 /* ── Alloc / Get / Free ────────────────────────────────────────────────── */
@@ -209,6 +217,7 @@ int unix_sock_alloc(void)
             s_unix[i].state    = UNIX_CREATED;
             s_unix[i].peer_id  = UNIX_NONE;
             s_unix[i].refcount = 1;
+            waitq_init(&s_unix[i].poll_waiters);
             spin_unlock_irqrestore(&unix_lock, fl);
             return i;
         }
@@ -247,6 +256,8 @@ void unix_sock_free(uint32_t id)
             sched_wake(s_unix[peer].waiter_task);
             s_unix[peer].waiter_task = (void *)0;
         }
+        /* Wake peer's pollers — they'll see POLLHUP next iteration. */
+        waitq_wake_all(&s_unix[peer].poll_waiters);
     }
 
     /* Close any staged fds that were never received */
@@ -378,6 +389,7 @@ int unix_sock_connect(uint32_t id, const char *path)
             s_unix[i].state    = UNIX_CONNECTED;
             s_unix[i].peer_id  = id;  /* points to client */
             s_unix[i].refcount = 1;
+            waitq_init(&s_unix[i].poll_waiters);
             server_id = i;
             break;
         }
@@ -424,11 +436,13 @@ int unix_sock_connect(uint32_t id, const char *path)
     listener->accept_queue[listener->accept_head & 7] = (uint32_t)server_id;
     listener->accept_head++;
 
-    /* Wake listener if blocked in accept */
+    /* Wake listener if blocked in accept, plus any sys_poll registered
+     * on the listener (POLLIN signals a pending accept). */
     if (listener->waiter_task) {
         sched_wake(listener->waiter_task);
         listener->waiter_task = (void *)0;
     }
+    waitq_wake_all(&listener->poll_waiters);
 
     spin_unlock_irqrestore(&unix_lock, fl);
     return 0;
@@ -580,11 +594,15 @@ int unix_sock_write(uint32_t id, const void *buf, uint32_t len)
             }
             written += chunk;
 
-            /* Wake peer if blocked on read */
+            /* Wake peer if blocked on read, plus any sys_poll/epoll_wait
+             * registered on the peer's poll_waiters. */
             unix_sock_t *p = unix_sock_get(peer);
-            if (p && p->waiter_task) {
-                sched_wake(p->waiter_task);
-                p->waiter_task = (void *)0;
+            if (p) {
+                if (p->waiter_task) {
+                    sched_wake(p->waiter_task);
+                    p->waiter_task = (void *)0;
+                }
+                waitq_wake_all(&p->poll_waiters);
             }
         }
 
@@ -708,4 +726,11 @@ uint32_t unix_sock_id_from_fd(int fd, void *proc_ptr)
     if (fd < 0 || fd >= PROC_MAX_FDS) return UNIX_NONE;
     if (proc->fd_table->fds[fd].ops != &g_unix_sock_ops) return UNIX_NONE;
     return (uint32_t)(uintptr_t)proc->fd_table->fds[fd].priv;
+}
+
+waitq_t *
+unix_sock_get_waitq(uint32_t id)
+{
+    if (id >= UNIX_SOCK_MAX || !s_unix[id].in_use) return (waitq_t *)0;
+    return &s_unix[id].poll_waiters;
 }

@@ -5,6 +5,7 @@
 #include "vfs.h"
 #include "sched.h"
 #include "spinlock.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 #define AF_UNIX          1
@@ -70,6 +71,11 @@ typedef struct {
 
     /* Refcount for dup/fork */
     uint32_t       refcount;
+
+    /* Wake queue for sys_poll / sys_epoll_wait waiters on this fd.
+     * Producers (this socket's ring writer, peer's connect, peer's free)
+     * call waitq_wake_all(&poll_waiters) to notify pollers. */
+    waitq_t        poll_waiters;
 } unix_sock_t;
 
 /* VFS ops for AF_UNIX socket fds */
@@ -119,5 +125,8 @@ int unix_sock_open_fd(uint32_t sock_id, void *proc);
 
 /* Get unix_sock_id from an fd. Returns UNIX_NONE if not a unix socket. */
 uint32_t unix_sock_id_from_fd(int fd, void *proc);
+
+/* Get the wait queue for an AF_UNIX socket. Used by sys_poll. */
+waitq_t *unix_sock_get_waitq(uint32_t id);
 
 #endif /* UNIX_SOCKET_H */
