@@ -6,6 +6,7 @@
 #include "vfs.h"
 #include "sched.h"
 #include "proc.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 #define SOCK_TABLE_SIZE  64
@@ -62,6 +63,10 @@ typedef struct {
     /* SO_RCVTIMEO / SO_SNDTIMEO: timeout in PIT ticks (0 = no timeout) */
     uint32_t      rcvtimeo_ticks;
     uint32_t      sndtimeo_ticks;
+    /* Wake queue for sys_poll / sys_epoll_wait waiters on this fd.
+     * Producers (TCP rx, accept enqueue, UDP rx, TCP state→CLOSE_WAIT/
+     * CLOSED/TIME_WAIT) call waitq_wake_all(&poll_waiters) to notify. */
+    waitq_t       poll_waiters;
 } sock_t;
 
 /* sock_alloc: find a free slot, mark it in-use, set type. Returns sock_id >= 0 or -1. */
@@ -85,6 +90,10 @@ int sock_open_fd(uint32_t sock_id, aegis_process_t *proc);
 
 /* sock_id_from_fd: look up the sock_id from an fd. Returns SOCK_NONE on error. */
 uint32_t sock_id_from_fd(int fd, aegis_process_t *proc);
+
+/* sock_get_waitq: return the embedded poll_waiters for sock_id, or NULL.
+ * Used by fd_waitq.c to dispatch sys_poll / sys_epoll_wait waiters. */
+waitq_t *sock_get_waitq(uint32_t sock_id);
 
 /* k_sockaddr_in: musl struct sockaddr_in layout */
 typedef struct {

@@ -143,6 +143,11 @@ udp_out:
     if (wake_sid != SOCK_NONE) {
         sock_wake(wake_sid);
         epoll_notify(wake_sid, EPOLLIN);
+        /* Wake any sys_poll / sys_epoll_wait waiter on this socket. */
+        {
+            sock_t *s_wake = sock_get(wake_sid);
+            if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
+        }
     }
 }
 

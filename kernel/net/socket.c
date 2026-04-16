@@ -143,6 +143,7 @@ int sock_alloc(uint8_t type)
             s_socks[i].type        = type;
             s_socks[i].tcp_conn_id = SOCK_NONE;
             s_socks[i].epoll_id    = SOCK_NONE;
+            waitq_init(&s_socks[i].poll_waiters);
             spin_unlock_irqrestore(&sock_lock, fl);
             return (int)i;
         }
@@ -227,11 +228,14 @@ uint32_t sock_id_from_fd(int fd, aegis_process_t *proc)
     return (uint32_t)(uintptr_t)proc->fd_table->fds[fd].priv;
 }
 
-/* TEMP: stub returning NULL until Task 6 embeds a waitq in sock_t.
- * fd_waitq.c forward-declares this so the kernel links cleanly. */
-struct waitq *
+/* sock_get_waitq: return the embedded poll_waiters waitq for sock_id, or
+ * NULL if the slot is free/invalid. fd_waitq dispatches sys_poll and
+ * sys_epoll_wait waiters here. Producers in tcp.c / udp.c / socket.c
+ * call waitq_wake_all(&s->poll_waiters) on rx, accept enqueue, and
+ * TCP state→CLOSE_WAIT/CLOSED/TIME_WAIT. */
+waitq_t *
 sock_get_waitq(uint32_t id)
 {
-    (void)id;
-    return NULL;
+    sock_t *s = sock_get(id);
+    return s ? &s->poll_waiters : NULL;
 }

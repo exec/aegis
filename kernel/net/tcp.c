@@ -370,12 +370,26 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
         if (flags & TCP_ACK) {
             conn->state       = TCP_TIME_WAIT;
             conn->timewait_at = (uint32_t)arch_get_ticks() + TCP_TIMEWAIT_TICKS;
+            /* Wake any sys_poll / sys_epoll_wait watcher (POLLHUP). */
+            if (conn->sock_id != SOCK_NONE &&
+                wake_count < TCP_RX_WAKE_MAX) {
+                wake_ids[wake_count] = conn->sock_id;
+                wake_epoll_events[wake_count] = EPOLLHUP;
+                wake_count++;
+            }
         }
         break;
 
     case TCP_LAST_ACK:
         if (flags & TCP_ACK) {
             conn->state = TCP_CLOSED;
+            /* Wake any sys_poll / sys_epoll_wait watcher (POLLHUP). */
+            if (conn->sock_id != SOCK_NONE &&
+                wake_count < TCP_RX_WAKE_MAX) {
+                wake_ids[wake_count] = conn->sock_id;
+                wake_epoll_events[wake_count] = EPOLLHUP;
+                wake_count++;
+            }
         }
         break;
 
@@ -413,6 +427,14 @@ out:
             sock_wake(wake_ids[w]);
             if (wake_epoll_events[w] != 0)
                 epoll_notify(wake_ids[w], wake_epoll_events[w]);
+            /* Wake any sys_poll / sys_epoll_wait waiters registered on
+             * this socket via the embedded poll_waiters waitq. Covers
+             * TCP rx, accept enqueue, connect-complete, RST, and FIN
+             * (CLOSE_WAIT) — all events that change pollable state. */
+            {
+                sock_t *s_wake = sock_get(wake_ids[w]);
+                if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
+            }
         }
     }
     #undef TCP_RX_WAKE_MAX
@@ -422,14 +444,25 @@ void tcp_tick(void)
 {
     irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     uint32_t now = (uint32_t)arch_get_ticks();
+    /* Deferred poll_waiters wakes — collected under tcp_lock, fired after
+     * release to avoid the tcp_lock → sock_lock ordering inversion. */
+    #define TCP_TICK_WAKE_MAX 4
+    uint32_t tick_wake_ids[TCP_TICK_WAKE_MAX];
+    uint32_t tick_wake_count = 0;
     int i;
     for (i = 0; i < TCP_MAX_CONNS; i++) {
         tcp_conn_t *c = &s_tcp[i];
         if (c->state == TCP_CLOSED) continue;
 
         if (c->state == TCP_TIME_WAIT) {
-            if ((int32_t)(now - c->timewait_at) >= 0)
+            if ((int32_t)(now - c->timewait_at) >= 0) {
                 c->state = TCP_CLOSED;
+                /* Wake any sys_poll / sys_epoll_wait watcher. */
+                if (c->sock_id != SOCK_NONE &&
+                    tick_wake_count < TCP_TICK_WAKE_MAX) {
+                    tick_wake_ids[tick_wake_count++] = c->sock_id;
+                }
+            }
             continue;
         }
 
@@ -445,6 +478,19 @@ void tcp_tick(void)
             if (timeout_sid != (uint32_t)-1) {
                 spin_unlock_irqrestore(&tcp_lock, fl);
                 sock_wake(timeout_sid);
+                /* Wake poll_waiters too — connection died. */
+                {
+                    sock_t *s_wake = sock_get(timeout_sid);
+                    if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
+                }
+                /* Fire any other pending tick wakes too. */
+                {
+                    uint32_t w;
+                    for (w = 0; w < tick_wake_count; w++) {
+                        sock_t *s_wake = sock_get(tick_wake_ids[w]);
+                        if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
+                    }
+                }
                 return;  /* bail — we released the lock */
             }
             continue;
@@ -461,6 +507,16 @@ void tcp_tick(void)
             tcp_send_segment(c->dev, c, TCP_SYN, NULL, 0);
     }
     spin_unlock_irqrestore(&tcp_lock, fl);
+
+    /* Fire deferred poll_waiters wakes outside tcp_lock. */
+    {
+        uint32_t w;
+        for (w = 0; w < tick_wake_count; w++) {
+            sock_t *s_wake = sock_get(tick_wake_ids[w]);
+            if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
+        }
+    }
+    #undef TCP_TICK_WAKE_MAX
 }
 
 /* ── Socket-layer helpers (Phase 26) ─────────────────────────────────────── */
