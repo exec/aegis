@@ -9,6 +9,7 @@
 #include "tty.h"
 #include "kva.h"
 #include "socket.h"
+#include "unix_socket.h"
 #include "pty.h"
 
 /*
@@ -468,6 +469,12 @@ sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
                 sock_t *sk = sock_get(sid2);
                 if (sk)
                     sk->nonblocking = (arg3 & 0x800U) ? 1 : 0;
+            }
+            uint32_t uid2 = unix_sock_id_from_fd((int)arg1, proc);
+            if (uid2 != UNIX_NONE) {
+                unix_sock_t *us = unix_sock_get(uid2);
+                if (us)
+                    us->nonblocking = (arg3 & 0x800U) ? 1 : 0;
             }
         }
         return 0;

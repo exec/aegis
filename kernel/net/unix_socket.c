@@ -145,6 +145,43 @@ static int unix_vfs_stat(void *priv, k_stat_t *st)
     return 0;
 }
 
+static uint16_t unix_vfs_poll(void *priv)
+{
+    uint32_t id = (uint32_t)(uintptr_t)priv;
+    irqflags_t fl = spin_lock_irqsave(&unix_lock);
+    unix_sock_t *us = unix_sock_get(id);
+    if (!us) { spin_unlock_irqrestore(&unix_lock, fl); return 0; }
+
+    uint16_t events = 0;
+
+    switch (us->state) {
+    case UNIX_LISTENING:
+        if (us->accept_head != us->accept_tail)
+            events |= 1;  /* POLLIN: pending connection */
+        break;
+    case UNIX_CONNECTED: {
+        uint32_t peer_id = us->peer_id;
+        unix_sock_t *peer = (peer_id != UNIX_NONE) ? unix_sock_get(peer_id) : (void *)0;
+        if (peer && peer->ring_head != peer->ring_tail)
+            events |= 1;  /* POLLIN: data in peer's tx ring */
+        if (peer && ((uint16_t)(us->ring_head - us->ring_tail) < UNIX_BUF_SIZE))
+            events |= 4;  /* POLLOUT: space in our tx ring */
+        if (!peer || peer->state == UNIX_CLOSED)
+            events |= 16; /* POLLHUP: peer disconnected */
+        break;
+    }
+    case UNIX_CLOSED:
+        events |= 16; /* POLLHUP */
+        break;
+    default:
+        events |= 4;  /* POLLOUT: writable (not yet connected) */
+        break;
+    }
+
+    spin_unlock_irqrestore(&unix_lock, fl);
+    return events;
+}
+
 const vfs_ops_t g_unix_sock_ops = {
     .read    = unix_vfs_read,
     .write   = unix_vfs_write,
@@ -152,7 +189,7 @@ const vfs_ops_t g_unix_sock_ops = {
     .readdir = (void *)0,
     .dup     = unix_vfs_dup,
     .stat    = unix_vfs_stat,
-    .poll    = (void *)0,
+    .poll    = unix_vfs_poll,
 };
 
 /* ── Alloc / Get / Free ────────────────────────────────────────────────── */
