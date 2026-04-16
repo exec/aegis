@@ -13,25 +13,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <signal.h>
-#include <termios.h>
 #include <time.h>
 #include <stdint.h>
 #include <sys/syscall.h>
 
 #include <glyph.h>
+#include <lumen_client.h>
 #include "font.h"
 
 #include "libinstall.h"
 
-#define SYS_FB_MAP  513
 #define SYS_REBOOT  169
-
-typedef struct {
-    uint64_t addr;
-    uint32_t width, height, pitch, bpp;
-} fb_info_t;
 
 /* ── Screen enumeration ─────────────────────────────────────────────── */
 
@@ -48,10 +41,10 @@ typedef enum {
 #define MAX_DISKS 8
 
 typedef struct {
-    /* Framebuffer */
-    fb_info_t  fb_info;
-    uint32_t  *fb;
-    uint32_t  *backbuf;
+    /* Lumen window */
+    int            lfd;   /* socket fd from lumen_connect() */
+    lumen_window_t *lwin;
+    uint32_t  *backbuf;  /* == (uint32_t *)lwin->backbuf */
     int        fb_w, fb_h, pitch_px;
     surface_t  surf;
 
@@ -109,8 +102,7 @@ static void fill_bg(void)
 
 static void blit(void)
 {
-    memcpy(g_st.fb, g_st.backbuf,
-           (size_t)g_st.pitch_px * g_st.fb_h * 4);
+    lumen_window_present(g_st.lwin);
 }
 
 static void draw_text14(int x, int y, const char *s, uint32_t color)
@@ -701,23 +693,21 @@ main(int argc, char **argv)
 {
     (void)argc; (void)argv;
 
-    /* Map framebuffer. */
-    memset(&g_st.fb_info, 0, sizeof(g_st.fb_info));
-    long fb_rc = syscall(SYS_FB_MAP, &g_st.fb_info);
-    if (fb_rc < 0) {
-        dprintf(2, "gui-installer: sys_fb_map FAILED (%ld)\n", fb_rc);
+    /* Connect to Lumen compositor */
+    g_st.lfd = lumen_connect();
+    if (g_st.lfd < 0) {
+        dprintf(2, "gui-installer: lumen_connect failed (%d)\n", g_st.lfd);
         return 1;
     }
-    g_st.fb       = (uint32_t *)(uintptr_t)g_st.fb_info.addr;
-    g_st.fb_w     = (int)g_st.fb_info.width;
-    g_st.fb_h     = (int)g_st.fb_info.height;
-    g_st.pitch_px = (int)(g_st.fb_info.pitch / (g_st.fb_info.bpp / 8));
-
-    g_st.backbuf = malloc((size_t)g_st.pitch_px * g_st.fb_h * 4);
-    if (!g_st.backbuf) {
-        dprintf(2, "gui-installer: backbuffer alloc failed\n");
+    g_st.lwin = lumen_window_create(g_st.lfd, "Install Aegis", 800, 600);
+    if (!g_st.lwin) {
+        dprintf(2, "gui-installer: lumen_window_create failed\n");
         return 1;
     }
+    g_st.backbuf  = (uint32_t *)g_st.lwin->backbuf;
+    g_st.fb_w     = g_st.lwin->w;
+    g_st.fb_h     = g_st.lwin->h;
+    g_st.pitch_px = g_st.lwin->stride;
     g_st.surf = (surface_t){
         .buf   = g_st.backbuf,
         .w     = g_st.fb_w,
@@ -727,15 +717,6 @@ main(int argc, char **argv)
 
     /* Fonts */
     font_init();
-
-    /* Raw keyboard */
-    struct termios t_orig, t_raw;
-    tcgetattr(0, &t_orig);
-    t_raw = t_orig;
-    t_raw.c_lflag &= ~(unsigned)(ECHO | ICANON | ISIG);
-    t_raw.c_cc[VMIN]  = 0;
-    t_raw.c_cc[VTIME] = 0;
-    tcsetattr(0, TCSANOW, &t_raw);
 
     /* SIGTERM → graceful exit */
     struct sigaction sa;
@@ -755,16 +736,21 @@ main(int argc, char **argv)
 
     /* Event loop */
     while (!s_term_requested) {
-        struct timespec ts = { 0, 16000000 }; /* 16 ms */
-        nanosleep(&ts, NULL);
+        lumen_event_t ev;
+        int r = lumen_wait_event(g_st.lfd, &ev, 16);
+        if (r < 0) break;
 
-        char c;
-        while (read(0, &c, 1) == 1)
-            handle_key(c);
+        if (r == 1) {
+            if (ev.type == LUMEN_EV_CLOSE_REQUEST)
+                break;
+            if (ev.type == LUMEN_EV_KEY && ev.key.pressed)
+                handle_key((char)ev.key.keycode);
+        }
 
         render_current_screen();
     }
 
-    tcsetattr(0, TCSANOW, &t_orig);
+    lumen_window_destroy(g_st.lwin);
+    close(g_st.lfd);
     return 0;
 }
