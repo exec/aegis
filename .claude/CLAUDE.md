@@ -486,7 +486,7 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 | ID | Issue | File | Status |
 |----|-------|------|--------|
 | M1 | **sched_wake has no memory barrier** — safe on x86, broken on ARM64. | sched.c:358 | ✅ **FIXED** — `__atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE)`. |
-| M2 | **mmap freelist has no lock for CLONE_VM threads** — safe single-core, corruption on SMP. | sys_memory.c | **TODO** |
+| M2 | **mmap freelist has no lock for CLONE_VM threads** — safe single-core, corruption on SMP. | sys_memory.c | ✅ **FIXED** — `spinlock_t mmap_free_lock` in `proc.h:43`; `mmap_free_insert`/`mmap_free_alloc` both take it with `spin_lock_irqsave`. Fork/clone initialize it. |
 | M3 | **vmm_window_lock > pmm_lock ordering fragile** — undocumented. | vmm.c | Document |
 
 ### Performance Recommendations (Future)
