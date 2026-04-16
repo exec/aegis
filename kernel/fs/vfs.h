@@ -50,6 +50,9 @@ _Static_assert(sizeof(k_stat_t) == 144,
 
 /* ── VFS operations vtable ───────────────────────────────────────────────── */
 
+/* Forward decl — full type in kernel/sched/waitq.h. */
+struct waitq;
+
 /* File operations vtable. Each open file carries a pointer to its driver's ops. */
 typedef struct {
     /* read — copy up to len bytes starting at off into buf (kernel buffer).
@@ -78,6 +81,12 @@ typedef struct {
      * Called from sys_poll / epoll_wait with no locks held.
      * NULL = fd does not support polling (caller assumes POLLIN|POLLOUT). */
     uint16_t (*poll)(void *priv);
+    /* get_waitq — return the wait queue for this fd, or NULL if the fd
+     * type has no events to wait on (e.g. memfd is always ready).
+     * Used by sys_poll / sys_epoll_wait to register on the right queue.
+     * NULL is the default — caller falls back to PIT-tick polling for
+     * fds without a waitq. */
+    struct waitq *(*get_waitq)(void *priv);
 } vfs_ops_t;
 
 /* Open file descriptor. Stored in fd_table_t.fds[].
