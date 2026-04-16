@@ -851,10 +851,24 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
     waitq_entry_t fd_entries[64];
     waitq_t      *fd_queues[64];
     waitq_entry_t timer_entry;
-    timer_entry.task     = sched_current();
-    timer_entry.next     = (void *)0;
-    timer_entry.prev     = (void *)0;
-    timer_entry.on_queue = 0;
+    if (timeout_ms != (uint64_t)-1) {
+        timer_entry.task     = sched_current();
+        timer_entry.next     = (void *)0;
+        timer_entry.prev     = (void *)0;
+        timer_entry.on_queue = 0;
+    }
+
+    /* Cache fd values once at entry — userspace mutating the pollfd
+     * array mid-syscall would otherwise let us poll one fd and register
+     * on a different one (TOCTOU). */
+    int fds_cached[64];
+    for (uint64_t i = 0; i < nfds; i++) {
+        k_pollfd_t pfd;
+        copy_from_user(&pfd,
+            (const void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
+            sizeof(k_pollfd_t));
+        fds_cached[i] = pfd.fd;
+    }
 
     for (;;) {
         int ready = 0;
@@ -918,16 +932,14 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
         if (deadline && arch_get_ticks() >= deadline) return 0;
 
         /* Register on every fd's waitq + g_timer_waitq if we have a
-         * deadline. Then sched_block. On wake, unregister from every
-         * queue (waitq_remove is idempotent — only removes if still
-         * queued; the wake path leaves entries for the woken task to
-         * detach itself). */
+         * deadline. Then sched_block. fd values come from fds_cached
+         * (snapshotted at entry) so a concurrent userspace mutation
+         * cannot make us register on a different fd than we polled.
+         * On wake, unregister from every queue (waitq_remove is
+         * idempotent — only removes if still queued; the wake path
+         * leaves entries for the woken task to detach itself). */
         for (i = 0; i < nfds; i++) {
-            k_pollfd_t pfd;
-            copy_from_user(&pfd,
-                (const void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
-                sizeof(k_pollfd_t));
-            fd_queues[i]           = fd_get_waitq(pfd.fd);
+            fd_queues[i]           = fd_get_waitq(fds_cached[i]);
             fd_entries[i].task     = sched_current();
             fd_entries[i].next     = (void *)0;
             fd_entries[i].prev     = (void *)0;

@@ -9,6 +9,7 @@
 #include "uaccess.h"
 #include "spinlock.h"
 #include <stdint.h>
+#include <stddef.h>
 
 static sock_t s_socks[SOCK_TABLE_SIZE];  /* zero-initialized by C runtime */
 static spinlock_t sock_lock = SPINLOCK_INIT;
@@ -232,5 +233,5 @@ struct waitq *
 sock_get_waitq(uint32_t id)
 {
     (void)id;
-    return (struct waitq *)0;
+    return NULL;
 }
