@@ -110,6 +110,7 @@ SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/sys_random.o \
               $(BUILD)/sys_disk.o \
               $(BUILD)/futex.o \
+              $(BUILD)/fd_waitq.o \
               $(BUILD)/proc.o \
               $(BUILD)/elf.o \
               $(BUILD)/fd_table.o \
@@ -285,6 +286,9 @@ $(BUILD)/sys_signal.o: $(REPO)/kernel/syscall/sys_signal.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/sys_socket.o: $(REPO)/kernel/syscall/sys_socket.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fd_waitq.o: $(REPO)/kernel/syscall/fd_waitq.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/vfs.o: $(REPO)/kernel/fs/vfs.c | $(BUILD)

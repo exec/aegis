@@ -113,6 +113,7 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_meta.c kernel/syscall/sys_signal.c \
     kernel/syscall/sys_socket.c kernel/syscall/sys_random.c \
     kernel/syscall/sys_disk.c kernel/syscall/futex.c \
+    kernel/syscall/fd_waitq.c \
     kernel/proc/proc.c kernel/proc/elf.c
 
 BOOT_SRC  = kernel/arch/x86_64/boot.asm

@@ -225,3 +225,12 @@ uint32_t sock_id_from_fd(int fd, aegis_process_t *proc)
     if (proc->fd_table->fds[fd].ops != &s_sock_ops) return SOCK_NONE;
     return (uint32_t)(uintptr_t)proc->fd_table->fds[fd].priv;
 }
+
+/* TEMP: stub returning NULL until Task 6 embeds a waitq in sock_t.
+ * fd_waitq.c forward-declares this so the kernel links cleanly. */
+struct waitq *
+sock_get_waitq(uint32_t id)
+{
+    (void)id;
+    return (struct waitq *)0;
+}

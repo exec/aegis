@@ -13,6 +13,7 @@
 #include "tcp.h"
 #include "ip.h"
 #include "unix_socket.h"
+#include "fd_waitq.h"
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -841,23 +842,34 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
     if (!user_ptr_valid(fds_ptr, nfds * sizeof(k_pollfd_t))) return (uint64_t)-(int64_t)14;
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    uint32_t timeout_ticks = (timeout_ms == (uint64_t)-1) ? 0xFFFFFFFFU :
-                             (timeout_ms == 0) ? 0 :
-                             (uint32_t)(timeout_ms / 10);  /* ms → ticks at 100 Hz */
-    uint32_t deadline = (timeout_ticks > 0 && timeout_ticks != 0xFFFFFFFFU) ?
-                        (uint32_t)arch_get_ticks() + timeout_ticks : 0;
+
+    uint64_t now0 = arch_get_ticks();
+    uint64_t deadline = (timeout_ms == (uint64_t)-1) ? 0
+                       : (timeout_ms == 0)           ? now0
+                                                     : now0 + (timeout_ms / 10);
+
+    waitq_entry_t fd_entries[64];
+    waitq_t      *fd_queues[64];
+    waitq_entry_t timer_entry;
+    timer_entry.task     = sched_current();
+    timer_entry.next     = (void *)0;
+    timer_entry.prev     = (void *)0;
+    timer_entry.on_queue = 0;
 
     for (;;) {
         int ready = 0;
         uint64_t i;
         for (i = 0; i < nfds; i++) {
             k_pollfd_t pfd;
-            copy_from_user(&pfd, (const void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
-                           sizeof(k_pollfd_t));
+            copy_from_user(&pfd,
+                (const void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
+                sizeof(k_pollfd_t));
             pfd.revents = 0;
             uint32_t sid = sock_id_from_fd(pfd.fd, proc);
             if (sid != SOCK_NONE) {
-                /* Socket fd — use existing socket poll logic */
+                /* AF_INET poll logic — preserved verbatim from the
+                 * pre-rewrite version. Task 6 will move this to
+                 * sock_get_waitq. */
                 sock_t *s = sock_get(sid);
                 if (s) {
                     if (s->type == SOCK_TYPE_STREAM && s->state == SOCK_CONNECTED) {
@@ -869,10 +881,12 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
                         if (pfd.events & POLLOUT)
                             pfd.revents |= POLLOUT;
                         /* POLLHUP: TCP connection closed (FIN received or RST) */
-                        if (tc && (tc->state == TCP_CLOSE_WAIT || tc->state == TCP_CLOSED
+                        if (tc && (tc->state == TCP_CLOSE_WAIT
+                                   || tc->state == TCP_CLOSED
                                    || tc->state == TCP_TIME_WAIT))
                             pfd.revents |= POLLHUP;
-                    } else if (s->type == SOCK_TYPE_STREAM && s->state == SOCK_LISTENING) {
+                    } else if (s->type == SOCK_TYPE_STREAM
+                               && s->state == SOCK_LISTENING) {
                         if ((pfd.events & POLLIN) && s->accept_head != s->accept_tail)
                             pfd.revents |= POLLIN;
                     } else if (s->type == SOCK_TYPE_DGRAM) {
@@ -884,7 +898,6 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
                 }
             } else if (pfd.fd >= 0 && (uint32_t)pfd.fd < PROC_MAX_FDS &&
                        proc->fd_table->fds[pfd.fd].ops) {
-                /* VFS fd — use .poll callback */
                 const vfs_ops_t *ops = proc->fd_table->fds[pfd.fd].ops;
                 if (ops->poll) {
                     uint16_t r = ops->poll(proc->fd_table->fds[pfd.fd].priv);
@@ -897,15 +910,39 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
                 pfd.revents = POLLNVAL;
             }
             if (pfd.revents) ready++;
-            /* revents already counted in ready above */
-            copy_to_user((void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
-                         &pfd, sizeof(k_pollfd_t));
+            copy_to_user(
+                (void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
+                &pfd, sizeof(k_pollfd_t));
         }
-        if (ready > 0 || timeout_ticks == 0) return (uint64_t)ready;
-        if (deadline && (uint32_t)arch_get_ticks() >= deadline) return 0;
-        /* Block on g_timer_waitq — PIT wakes it each tick so we re-check
-         * deadline + fd readiness on the next iteration. */
-        waitq_wait(&g_timer_waitq);
+        if (ready > 0 || timeout_ms == 0) return (uint64_t)ready;
+        if (deadline && arch_get_ticks() >= deadline) return 0;
+
+        /* Register on every fd's waitq + g_timer_waitq if we have a
+         * deadline. Then sched_block. On wake, unregister from every
+         * queue (waitq_remove is idempotent — only removes if still
+         * queued; the wake path leaves entries for the woken task to
+         * detach itself). */
+        for (i = 0; i < nfds; i++) {
+            k_pollfd_t pfd;
+            copy_from_user(&pfd,
+                (const void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
+                sizeof(k_pollfd_t));
+            fd_queues[i]           = fd_get_waitq(pfd.fd);
+            fd_entries[i].task     = sched_current();
+            fd_entries[i].next     = (void *)0;
+            fd_entries[i].prev     = (void *)0;
+            fd_entries[i].on_queue = 0;
+            if (fd_queues[i])
+                waitq_add(fd_queues[i], &fd_entries[i]);
+        }
+        if (deadline) waitq_add(&g_timer_waitq, &timer_entry);
+
+        sched_block();
+
+        for (i = 0; i < nfds; i++)
+            if (fd_queues[i])
+                waitq_remove(fd_queues[i], &fd_entries[i]);
+        if (deadline) waitq_remove(&g_timer_waitq, &timer_entry);
     }
 }
 
