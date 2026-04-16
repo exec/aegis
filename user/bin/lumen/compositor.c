@@ -85,6 +85,12 @@ comp_remove_window(compositor_t *c, glyph_window_t *win)
 
     if (c->focused == win)
         c->focused = c->nwindows > 0 ? c->windows[c->nwindows - 1] : NULL;
+    if (c->drag_win == win) {
+        c->drag_win = NULL;
+        c->dragging = 0;
+    }
+    if (c->content_drag_win == win)
+        c->content_drag_win = NULL;
 
     /* Update focused_window flags */
     for (int i = 0; i < c->nwindows; i++)
@@ -591,15 +597,20 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
     if (left && !prev_left) {
         glyph_window_t *win = comp_window_at(c, c->cursor_x, c->cursor_y);
         if (win) {
-            /* Close button */
+            /* Close button.  If the window has an on_close callback (e.g.
+             * a proxy window owned by an external client), invoke it so the
+             * owner can run its own teardown; otherwise destroy directly. */
             if (win->closeable && hit_close_button(win, c->cursor_x, c->cursor_y)) {
-                comp_remove_window(c, win);
+                if (win->on_close)
+                    win->on_close(win);
+                else
+                    comp_remove_window(c, win);
                 c->prev_buttons = buttons;
                 return;
             }
 
-            /* Titlebar drag */
-            if (hit_titlebar(win, c->cursor_x, c->cursor_y)) {
+            /* Titlebar drag — skip for chromeless windows (panels) */
+            if (!win->chromeless && hit_titlebar(win, c->cursor_x, c->cursor_y)) {
                 c->dragging = 1;
                 c->drag_win = win;
                 c->drag_dx = c->cursor_x - win->x;
@@ -619,8 +630,8 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
                 return;
             }
 
-            /* Click on window */
-            if (c->focused != win) {
+            /* Click on window — chromeless panels don't steal focus or raise */
+            if (!win->chromeless && c->focused != win) {
                 if (c->focused) {
                     c->focused->focused_window = 0;
                     glyph_window_mark_all_dirty(c->focused);

@@ -17,6 +17,7 @@ user/bin/vigil/vigil            /bin/vigil
 user/bin/vigictl/vigictl        /bin/vigictl
 user/bin/bastion/bastion.elf    /bin/bastion
 user/bin/lumen/lumen.elf        /bin/lumen
+user/bin/citadel-dock/citadel-dock.elf /bin/citadel-dock
 user/bin/stsh/stsh.elf          /bin/stsh
 user/bin/installer/installer.elf /bin/installer
 user/bin/gui-installer/gui-installer.elf /bin/gui-installer
@@ -57,3 +58,7 @@ tools/cacert.pem                /etc/ssl/certs/ca-certificates.crt
 user/bin/shutdown/shutdown.elf  /bin/shutdown
 user/bin/reboot/reboot.elf      /bin/reboot
 user/bin/rune                   /bin/rune
+
+# Diagnostic — exercises lumen_connect + window_create end-to-end.
+# Used by tests/tests/lumen_connect_probe_test.rs.
+user/bin/lumen-probe/lumen-probe.elf  /bin/lumen-probe

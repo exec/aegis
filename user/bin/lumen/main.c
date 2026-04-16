@@ -14,7 +14,6 @@
 #include <font.h>
 #include "cursor.h"
 #include "compositor.h"
-#include <dock.h>
 #include <taskbar.h>
 #include <theme.h>
 #include "terminal.h"
@@ -266,6 +265,9 @@ spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
     if (!term_win)
         return;
 
+    dprintf(2, "[LUMEN-TERM] spawned, win=%p master_fd=%d\n",
+            (void *)term_win, master_fd);
+
     term_win->x = (fb_w - term_win->surf_w) / 2;
     term_win->y = (fb_h - term_win->surf_h) / 2;
     comp_add_window(comp, term_win);
@@ -279,6 +281,8 @@ spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
 
     /* Store master_fd in the window's tag for polling */
     term_win->tag = master_fd;
+    dprintf(2, "[LUMEN-TERM] focus set: focused=%p tag=%d\n",
+            (void *)comp->focused, comp->focused->tag);
 }
 
 /* ---- Desktop draw callback (top bar only) ---- */
@@ -292,18 +296,62 @@ desktop_draw_cb(surface_t *s, int w, int h)
     topbar_draw(s, w, s_clock_str);
 }
 
-/* ---- Overlay callback (frosted glass dock -- drawn after windows) ---- */
+/* ---- Overlay callback -- drawn after windows (context menu only) ---- */
 
 static void
 overlay_draw_cb(surface_t *s, int w, int h)
 {
-    dock_draw(s, w, h);
+    (void)w; (void)h;
     menu_draw(s);
+}
+
+/* ---- Built-in spawners exposed to citadel-dock via LUMEN_OP_INVOKE ---- */
+
+static void
+spawn_widgets(compositor_t *comp, int fb_w, int fb_h)
+{
+    glyph_window_t *wt = widget_test_create();
+    if (!wt) return;
+    wt->x = (fb_w - wt->surf_w) / 2;
+    wt->y = (fb_h - wt->surf_h) / 2;
+    comp_add_window(comp, wt);
+    comp_raise_window(comp, wt);
+    comp->focused = wt;
+    wt->focused_window = 1;
+    glyph_window_mark_all_dirty(wt);
+}
+
+static void
+invoke_handler(compositor_t *comp, const char *name)
+{
+    if (!name) return;
+    if (strcmp(name, "terminal") == 0) {
+        spawn_terminal(comp, s_fb_w, s_fb_h);
+        dprintf(2, "[LUMEN] window_opened=terminal\n");
+    } else if (strcmp(name, "widgets") == 0) {
+        spawn_widgets(comp, s_fb_w, s_fb_h);
+        dprintf(2, "[LUMEN] window_opened=widgets\n");
+    } else {
+        dprintf(2, "[LUMEN] invoke: unknown name=%s\n", name);
+    }
 }
 
 int
 main(void)
 {
+    /* Refuse to run nested. Lumen sets LUMEN_RUNNING=1 below before
+     * spawning any children, so any descendant that re-execs lumen
+     * (e.g. user types `lumen` in a Lumen terminal) will trip this
+     * guard. Without it the framebuffer gets mapped twice, two cursors
+     * appear, ctrl+c gets swallowed, and various other small horrors
+     * unfold gracefully. */
+    if (getenv("LUMEN_RUNNING")) {
+        const char *msg = "lumen: you're already using lumen, pal\n";
+        write(2, msg, strlen(msg));
+        return 1;
+    }
+    setenv("LUMEN_RUNNING", "1", 1);
+
     /* Note: Caps come from kernel policy at exec time. Bastion (parent)
      * handles cap delegation. Lumen runs with baseline caps only. */
 
@@ -363,10 +411,10 @@ main(void)
     /* Load wallpaper (optional) */
     load_wallpaper(&comp.wallpaper);
 
-    /* Init dock */
-    dock_init(fb_w, fb_h);
+    /* Register INVOKE handler so external dock can spawn built-ins. */
+    lumen_server_set_invoke_handler(invoke_handler);
 
-    /* Desktop draw callback draws top bar; overlay draws frosted glass dock */
+    /* Desktop draw callback draws top bar; overlay draws context menu */
     comp.on_draw_desktop = desktop_draw_cb;
     comp.on_draw_overlay = overlay_draw_cb;
 
@@ -413,7 +461,6 @@ main(void)
 
     /* Signal test harness: fade-in complete, desktop is on screen */
     dprintf(2, "[LUMEN] ready\n");
-    dock_emit_debug_lines();
 
     cursor_show(comp.cursor_x, comp.cursor_y);
 
@@ -501,12 +548,16 @@ main(void)
                 }
 
                 if (!got_eb) {
-                    /* Bare ESC — forward to focused PTY */
-                    int mfd = (comp.focused && comp.focused->tag > 0)
-                              ? comp.focused->tag : -1;
-                    if (mfd >= 0) {
-                        char esc = '\033';
-                        write(mfd, &esc, 1);
+                    /* Bare ESC — dispatch to focused window's on_key */
+                    if (comp.focused && comp.focused->on_key) {
+                        comp.focused->on_key(comp.focused, '\033');
+                    } else {
+                        int mfd = (comp.focused && comp.focused->tag >= 0)
+                                  ? comp.focused->tag : -1;
+                        if (mfd >= 0) {
+                            char esc = '\033';
+                            write(mfd, &esc, 1);
+                        }
                     }
                     activity = 1;
                     goto next_poll;
@@ -579,7 +630,7 @@ main(void)
 
                 /* Ctrl+Shift+V (0x16) or Alt+V ('v') — paste */
                 if ((eb == 0x16 || eb == 'v') && comp.focused &&
-                    comp.focused->tag > 0 && s_clipboard_len > 0) {
+                    comp.focused->tag >= 0 && s_clipboard_len > 0) {
                     write(comp.focused->tag, s_clipboard,
                           (unsigned)s_clipboard_len);
                     activity = 1;
@@ -589,7 +640,7 @@ main(void)
                 /* CSI sequence (ESC [): collect params + final byte,
                  * then write the whole sequence in one shot. */
                 if (eb == '[') {
-                    int mfd = (comp.focused && comp.focused->tag > 0)
+                    int mfd = (comp.focused && comp.focused->tag >= 0)
                               ? comp.focused->tag : -1;
                     if (mfd >= 0) {
                         char seq[16] = { '\033', '[' };
@@ -616,7 +667,7 @@ main(void)
                  * to focused PTY as a single write so crossterm sees it
                  * atomically. */
                 {
-                    int mfd = (comp.focused && comp.focused->tag > 0)
+                    int mfd = (comp.focused && comp.focused->tag >= 0)
                               ? comp.focused->tag : -1;
                     if (mfd >= 0) {
                         char pair[2] = { '\033', eb };
@@ -627,9 +678,14 @@ main(void)
                 goto next_poll;
             }
 
-            /* Normal key -- forward to focused PTY */
-            {
-                int mfd = (comp.focused && comp.focused->tag > 0)
+            /* Normal key -- prefer the window's on_key callback so external
+             * proxy windows (gui-installer etc.) get LUMEN_EV_KEY. Fall back
+             * to a direct PTY write only when the focused window has no
+             * on_key handler (legacy path). */
+            if (comp.focused && comp.focused->on_key) {
+                comp.focused->on_key(comp.focused, kbd_byte);
+            } else {
+                int mfd = (comp.focused && comp.focused->tag >= 0)
                           ? comp.focused->tag : -1;
                 if (mfd >= 0)
                     write(mfd, &kbd_byte, 1);
@@ -661,20 +717,6 @@ next_poll:
                 if (test_y < 0) test_y = 0;
                 if (test_x >= fb_w) test_x = fb_w - 1;
                 if (test_y >= fb_h) test_y = fb_h - 1;
-
-                /* Update dock hover state */
-                int dock_item = dock_hit_test(test_x, test_y);
-                {
-                    /* Redraw dock when hover state changes */
-                    static int prev_dock_hover = -1;
-                    if (dock_item != prev_dock_hover) {
-                        dock_set_hover(dock_item);
-                        int dx, dy, dw, dh;
-                        dock_get_rect(&dx, &dy, &dw, &dh);
-                        comp_add_dirty(&comp, (glyph_rect_t){dx, dy, dw, dh});
-                        prev_dock_hover = dock_item;
-                    }
-                }
 
                 /* Update context menu hover */
                 if (menu_open) {
@@ -734,32 +776,8 @@ next_poll:
                         goto after_mouse;
                     }
 
-                    /* Dock click */
-                    if (dock_item >= 0) {
-                        if (dock_item == DOCK_ITEM_TERMINAL) {
-                            spawn_terminal(&comp, fb_w, fb_h);
-                            dprintf(2, "[LUMEN] window_opened=%s\n",
-                                    dock_item_key(dock_item));
-                        }
-                        else if (dock_item == DOCK_ITEM_WIDGETS) {
-                            glyph_window_t *wt = widget_test_create();
-                            if (wt) {
-                                wt->x = (fb_w - wt->surf_w) / 2;
-                                wt->y = (fb_h - wt->surf_h) / 2;
-                                comp_add_window(&comp, wt);
-                                comp_raise_window(&comp, wt);
-                                comp.focused = wt;
-                                wt->focused_window = 1;
-                                glyph_window_mark_all_dirty(wt);
-                                dprintf(2, "[LUMEN] window_opened=%s\n",
-                                        dock_item_key(dock_item));
-                            }
-                        }
-                        /* Settings and Files are stubs — no window_opened line */
-                        comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
-                        activity = 1;
-                        goto after_mouse;
-                    }
+                    /* Dock clicks are now handled by /bin/citadel-dock
+                     * via the LUMEN_OP_INVOKE protocol opcode. */
                 }
 
                 comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
@@ -775,7 +793,7 @@ after_mouse:
         /* Poll PTY masters for ALL open terminal windows */
         for (int wi = 0; wi < comp.nwindows; wi++) {
             glyph_window_t *win = comp.windows[wi];
-            if (win->tag <= 0)
+            if (win->tag < 0)
                 continue;
             int mfd = win->tag;
             int pty_activity = 0;
@@ -834,7 +852,7 @@ after_mouse:
         if (activity) {
             for (int wi = 0; wi < comp.nwindows; wi++) {
                 glyph_window_t *win = comp.windows[wi];
-                if (win->tag <= 0) continue;
+                if (win->tag < 0) continue;
                 int mfd = win->tag;
                 int late = 0;
                 while ((n = read(mfd, pty_buf, sizeof(pty_buf))) > 0) {

@@ -34,12 +34,25 @@ typedef struct {
 #define LUMEN_OP_DAMAGE          2u
 #define LUMEN_OP_SET_TITLE       3u
 #define LUMEN_OP_DESTROY_WINDOW  4u
+#define LUMEN_OP_CREATE_PANEL    5u  /* chromeless, bottom-anchored, no focus */
+#define LUMEN_OP_INVOKE          6u  /* ask server to run a built-in by name */
 
 typedef struct {
     uint16_t width;
     uint16_t height;
     char     title[64];  /* null-terminated */
 } lumen_create_window_t;
+
+/* Panel: no chrome, no focus, server positions at bottom-center.
+ * Reply uses lumen_window_created_t (same as CREATE_WINDOW) + memfd. */
+typedef struct {
+    uint16_t width;
+    uint16_t height;
+} lumen_create_panel_t;
+
+typedef struct {
+    char name[32];   /* null-terminated, e.g. "terminal", "widgets" */
+} lumen_invoke_t;
 
 typedef struct {
     uint32_t window_id;
@@ -62,6 +75,7 @@ typedef struct {
     uint32_t window_id;
     uint32_t width;      /* actual width Lumen assigned */
     uint32_t height;     /* actual height Lumen assigned */
+    int32_t  x, y;       /* screen position Lumen placed the window at */
 } lumen_window_created_t;
 
 /* ── Server → client event opcodes ─────────────────────────────────── */

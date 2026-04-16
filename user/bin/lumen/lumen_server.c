@@ -39,6 +39,9 @@ struct proxy_window {
 
 static lumen_client_t *s_clients[LUMEN_MAX_CLIENTS];
 static int              s_ncli;
+static lumen_invoke_fn  s_invoke_fn;
+
+void lumen_server_set_invoke_handler(lumen_invoke_fn fn) { s_invoke_fn = fn; }
 
 /* ── Proxy window callbacks ─────────────────────────────────────────── */
 
@@ -49,9 +52,12 @@ static void proxy_on_render(glyph_window_t *win)
     int client_h  = win->client_h;
     int surf_pitch = win->surface.pitch;
 
-    uint32_t *dst = win->surface.buf
-                    + (GLYPH_TITLEBAR_HEIGHT + GLYPH_BORDER_WIDTH) * surf_pitch
-                    + GLYPH_BORDER_WIDTH;
+    /* Chromeless panels: surface IS the client area (no titlebar/border).
+     * Regular windows: blit into the inset client region. */
+    int oy = win->chromeless ? 0 : (GLYPH_TITLEBAR_HEIGHT + GLYPH_BORDER_WIDTH);
+    int ox = win->chromeless ? 0 : GLYPH_BORDER_WIDTH;
+
+    uint32_t *dst = win->surface.buf + oy * surf_pitch + ox;
     const uint32_t *src = pw->shared;
 
     for (int row = 0; row < client_h; row++)
@@ -86,8 +92,11 @@ static void proxy_on_key(glyph_window_t *win, char key)
 static void send_mouse_event(proxy_window_t *pw, int win_x, int win_y,
                               uint8_t buttons, uint8_t evtype)
 {
-    int cx = win_x - GLYPH_BORDER_WIDTH;
-    int cy = win_y - GLYPH_TITLEBAR_HEIGHT - GLYPH_BORDER_WIDTH;
+    /* Chromeless panels: window-local coords ARE client-area coords. */
+    int border = pw->win->chromeless ? 0 : GLYPH_BORDER_WIDTH;
+    int titleh = pw->win->chromeless ? 0 : GLYPH_TITLEBAR_HEIGHT;
+    int cx = win_x - border;
+    int cy = win_y - titleh - border;
     lumen_msg_hdr_t hdr = { LUMEN_EV_MOUSE, sizeof(lumen_mouse_event_t) };
     lumen_mouse_event_t ev;
     memset(&ev, 0, sizeof(ev));
@@ -131,16 +140,43 @@ void lumen_proxy_notify_focus(glyph_window_t *win, int focused)
     write(pw->client->fd, &ev,  sizeof(ev));
 }
 
-/* ── CREATE_WINDOW handler ──────────────────────────────────────────── */
+/* ── CREATE_WINDOW / CREATE_PANEL shared core ─────────────────────────── */
 
-static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
-                                  const lumen_create_window_t *req)
+/* Allocate a chromeless glyph_window whose surface IS the client area.
+ * glyph_window_create always reserves chrome space; for panels we resize
+ * surf_w/h down and reallocate the surface buffer. */
+static glyph_window_t *make_chromeless_window(int w, int h)
+{
+    glyph_window_t *win = glyph_window_create("", w, h);
+    if (!win) return NULL;
+
+    /* Replace the chrome-padded surface with a tight client-sized one. */
+    free(win->surface.buf);
+    win->surf_w = w;
+    win->surf_h = h;
+    win->surface.w     = w;
+    win->surface.h     = h;
+    win->surface.pitch = w;
+    win->surface.buf   = calloc((unsigned)(w * h), sizeof(uint32_t));
+    if (!win->surface.buf) { free(win); return NULL; }
+
+    win->chromeless = 1;
+    win->frosted    = 0;   /* no blur/tint — opaque blit so own pixels show */
+    win->closeable  = 0;
+    win->dirty_rect.w = w;
+    win->dirty_rect.h = h;
+    return win;
+}
+
+/* Build a proxy_window + glyph_window, register with compositor, send the
+ * lumen_window_created_t reply with SCM_RIGHTS memfd. is_panel selects
+ * chromeless geometry + bottom-anchored placement + skips focus capture. */
+static int handle_create_common(compositor_t *comp, lumen_client_t *cli,
+                                int w, int h, const char *title, int is_panel)
 {
     if (cli->nwindows >= LUMEN_MAX_WINDOWS_PER_CLIENT)
         goto err_reply;
 
-    int w = req->width;
-    int h = req->height;
     size_t bufsz = (size_t)w * h * sizeof(uint32_t);
 
     int memfd = memfd_create("lumen_win", 0);
@@ -169,28 +205,54 @@ static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
     pw->memfd  = memfd;
     pw->shared = shared;
 
-    char title[64];
-    memset(title, 0, sizeof(title));
-    strncpy(title, req->title, sizeof(title) - 1);
-
-    pw->win = glyph_window_create(title, w, h);
+    if (is_panel) {
+        pw->win = make_chromeless_window(w, h);
+    } else {
+        char tbuf[64];
+        memset(tbuf, 0, sizeof(tbuf));
+        if (title) strncpy(tbuf, title, sizeof(tbuf) - 1);
+        pw->win = glyph_window_create(tbuf, w, h);
+    }
     if (!pw->win) {
-        dprintf(2, "[LUMEN-SRV] glyph_window_create failed\n");
+        dprintf(2, "[LUMEN-SRV] window alloc failed (panel=%d)\n", is_panel);
         free(pw); munmap(shared, bufsz); close(memfd); goto err_reply;
     }
 
     pw->win->priv          = pw;
     pw->win->on_render     = proxy_on_render;
     pw->win->on_close      = proxy_on_close;
-    pw->win->on_key        = proxy_on_key;
     pw->win->on_mouse_down = proxy_on_mouse_down;
     pw->win->on_mouse_move = proxy_on_mouse_move;
     pw->win->on_mouse_up   = proxy_on_mouse_up;
+    /* Panels never receive keyboard input — leave on_key NULL so the
+     * compositor's key dispatch falls through. */
+    if (!is_panel)
+        pw->win->on_key = proxy_on_key;
 
-    pw->win->x = (comp->fb.w - pw->win->surf_w) / 2;
-    pw->win->y = (comp->fb.h - pw->win->surf_h) / 2;
+    if (is_panel) {
+        /* Bottom-anchored, horizontally centered. Margin matches old dock. */
+        pw->win->x = (comp->fb.w - pw->win->surf_w) / 2;
+        pw->win->y = comp->fb.h - pw->win->surf_h - 10;
+    } else {
+        pw->win->x = (comp->fb.w - pw->win->surf_w) / 2;
+        pw->win->y = (comp->fb.h - pw->win->surf_h) / 2;
+    }
 
     comp_add_window(comp, pw->win);
+    /* Panels must not steal focus (no keyboard, no chrome). */
+    if (is_panel) {
+        pw->win->focused_window = 0;
+        /* comp_add_window set focused = pw->win; restore prior focus. */
+        glyph_window_t *new_focus = NULL;
+        for (int i = comp->nwindows - 2; i >= 0; i--) {
+            if (comp->windows[i]->visible && !comp->windows[i]->chromeless) {
+                new_focus = comp->windows[i];
+                break;
+            }
+        }
+        comp->focused = new_focus;
+        if (new_focus) new_focus->focused_window = 1;
+    }
     glyph_window_mark_all_dirty(pw->win);
     comp->full_redraw = 1;
 
@@ -202,6 +264,8 @@ static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
         .window_id = pw->id,
         .width     = (uint32_t)w,
         .height    = (uint32_t)h,
+        .x         = pw->win->x,
+        .y         = pw->win->y,
     };
     lumen_msg_hdr_t rhdr = { 0, sizeof(reply_data) };
 
@@ -237,6 +301,29 @@ err_reply: {
     }
 }
 
+static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
+                                  const lumen_create_window_t *req)
+{
+    return handle_create_common(comp, cli, req->width, req->height,
+                                req->title, 0);
+}
+
+static int handle_create_panel(compositor_t *comp, lumen_client_t *cli,
+                                 const lumen_create_panel_t *req)
+{
+    return handle_create_common(comp, cli, req->width, req->height, NULL, 1);
+}
+
+static int handle_invoke(compositor_t *comp, const lumen_invoke_t *req)
+{
+    if (!s_invoke_fn) return 0;
+    char name[33];
+    memcpy(name, req->name, 32);
+    name[32] = '\0';
+    s_invoke_fn(comp, name);
+    return 1;
+}
+
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
 static proxy_window_t *find_proxy(lumen_client_t *cli, uint32_t id)
@@ -264,14 +351,17 @@ static int handle_destroy_window(compositor_t *comp, lumen_client_t *cli,
         proxy_window_t *pw = cli->windows[i];
         if (pw->id != window_id) continue;
 
+        /* Snapshot dimensions before comp_remove_window frees pw->win. */
+        size_t bufsz = (size_t)pw->win->client_w * pw->win->client_h
+                       * sizeof(uint32_t);
+
+        /* comp_remove_window calls glyph_window_destroy(pw->win); after this
+         * pw->win is dangling and must not be touched. */
         comp_remove_window(comp, pw->win);
         comp->full_redraw = 1;
 
-        size_t bufsz = (size_t)pw->win->client_w * pw->win->client_h
-                       * sizeof(uint32_t);
         munmap(pw->shared, bufsz);
         close(pw->memfd);
-        glyph_window_destroy(pw->win);
         free(pw);
 
         cli->windows[i] = cli->windows[--cli->nwindows];
@@ -311,6 +401,16 @@ static int lumen_server_read(compositor_t *comp, lumen_client_t *cli)
         if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
         return handle_destroy_window(comp, cli, req.window_id);
     }
+    case LUMEN_OP_CREATE_PANEL: {
+        lumen_create_panel_t req;
+        if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
+        return handle_create_panel(comp, cli, &req);
+    }
+    case LUMEN_OP_INVOKE: {
+        lumen_invoke_t req;
+        if (read(cli->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return -1;
+        return handle_invoke(comp, &req);
+    }
     default: {
         char tmp[256];
         uint32_t rem = hdr.len;
@@ -330,12 +430,14 @@ static void lumen_server_hangup(compositor_t *comp, lumen_client_t *cli)
 {
     for (int i = 0; i < cli->nwindows; i++) {
         proxy_window_t *pw = cli->windows[i];
-        comp_remove_window(comp, pw->win);
+        /* Snapshot dimensions before comp_remove_window frees pw->win. */
         size_t bufsz = (size_t)pw->win->client_w * pw->win->client_h
                        * sizeof(uint32_t);
+        /* comp_remove_window calls glyph_window_destroy(pw->win); after this
+         * pw->win is dangling and must not be touched. */
+        comp_remove_window(comp, pw->win);
         munmap(pw->shared, bufsz);
         close(pw->memfd);
-        glyph_window_destroy(pw->win);
         free(pw);
     }
     if (cli->nwindows > 0)

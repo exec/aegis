@@ -235,6 +235,12 @@ user/bin/installer/installer.elf: user/bin/installer/main.c user/lib/libinstall/
 user/bin/gui-installer/gui-installer.elf: user/bin/gui-installer/main.c user/lib/glyph/libglyph.a user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/gui-installer
 
+user/bin/lumen-probe/lumen-probe.elf: user/bin/lumen-probe/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/lumen-probe
+
+user/bin/citadel-dock/citadel-dock.elf: user/bin/citadel-dock/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/citadel-dock
+
 # BearSSL + curl (external builds)
 build/bearssl-install/lib/libbearssl.a:
 	bash tools/build-bearssl.sh

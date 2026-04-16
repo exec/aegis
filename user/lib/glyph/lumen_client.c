@@ -145,25 +145,10 @@ static int recv_event(int fd, lumen_event_t *ev)
     return 1;
 }
 
-lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
+/* Receive lumen_window_created_t reply + SCM_RIGHTS memfd, mmap, build win.
+ * Used by both lumen_window_create() and lumen_panel_create(). */
+static lumen_window_t *recv_created_reply(int fd, const char *what)
 {
-    lumen_msg_hdr_t hdr = { LUMEN_OP_CREATE_WINDOW,
-                             sizeof(lumen_create_window_t) };
-    lumen_create_window_t req;
-    memset(&req, 0, sizeof(req));
-    req.width  = (uint16_t)w;
-    req.height = (uint16_t)h;
-    strncpy(req.title, title ? title : "", sizeof(req.title) - 1);
-
-    if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr)) {
-        lumen_diag("[LUMEN-CLI] window_create: write hdr errno=%d\n", errno);
-        return NULL;
-    }
-    if (write(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) {
-        lumen_diag("[LUMEN-CLI] window_create: write req errno=%d\n", errno);
-        return NULL;
-    }
-
     lumen_msg_hdr_t rhdr;
     lumen_window_created_t created;
 
@@ -180,11 +165,11 @@ lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
     msg.msg_controllen = sizeof(cmsgbuf);
 
     if (recvmsg(fd, &msg, 0) < 0) {
-        lumen_diag("[LUMEN-CLI] window_create: recvmsg errno=%d\n", errno);
+        lumen_diag("[LUMEN-CLI] %s: recvmsg errno=%d\n", what, errno);
         return NULL;
     }
     if (created.status != 0) {
-        lumen_diag("[LUMEN-CLI] window_create: server status=%u\n", created.status);
+        lumen_diag("[LUMEN-CLI] %s: server status=%u\n", what, created.status);
         return NULL;
     }
 
@@ -194,7 +179,7 @@ lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
         cmsg->cmsg_type == SCM_RIGHTS)
         memcpy(&memfd, CMSG_DATA(cmsg), sizeof(int));
     if (memfd < 0) {
-        lumen_diag("[LUMEN-CLI] window_create: no memfd in cmsg\n");
+        lumen_diag("[LUMEN-CLI] %s: no memfd in cmsg\n", what);
         return NULL;
     }
 
@@ -203,8 +188,8 @@ lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
     void *shared = mmap(NULL, bufsz, PROT_READ | PROT_WRITE,
                         MAP_SHARED, memfd, 0);
     if (shared == MAP_FAILED) {
-        lumen_diag("[LUMEN-CLI] window_create: mmap errno=%d bufsz=%lu\n",
-            errno, (unsigned long)bufsz);
+        lumen_diag("[LUMEN-CLI] %s: mmap errno=%d bufsz=%lu\n",
+            what, errno, (unsigned long)bufsz);
         close(memfd); return NULL;
     }
 
@@ -223,8 +208,65 @@ lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
     win->w       = (int)created.width;
     win->h       = (int)created.height;
     win->stride  = (int)created.width;
+    win->x       = created.x;
+    win->y       = created.y;
 
     return win;
+}
+
+lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
+{
+    lumen_msg_hdr_t hdr = { LUMEN_OP_CREATE_WINDOW,
+                             sizeof(lumen_create_window_t) };
+    lumen_create_window_t req;
+    memset(&req, 0, sizeof(req));
+    req.width  = (uint16_t)w;
+    req.height = (uint16_t)h;
+    strncpy(req.title, title ? title : "", sizeof(req.title) - 1);
+
+    if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr)) {
+        lumen_diag("[LUMEN-CLI] window_create: write hdr errno=%d\n", errno);
+        return NULL;
+    }
+    if (write(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) {
+        lumen_diag("[LUMEN-CLI] window_create: write req errno=%d\n", errno);
+        return NULL;
+    }
+    return recv_created_reply(fd, "window_create");
+}
+
+lumen_window_t *lumen_panel_create(int fd, int w, int h)
+{
+    lumen_msg_hdr_t hdr = { LUMEN_OP_CREATE_PANEL,
+                             sizeof(lumen_create_panel_t) };
+    lumen_create_panel_t req = { (uint16_t)w, (uint16_t)h };
+
+    if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr)) {
+        lumen_diag("[LUMEN-CLI] panel_create: write hdr errno=%d\n", errno);
+        return NULL;
+    }
+    if (write(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) {
+        lumen_diag("[LUMEN-CLI] panel_create: write req errno=%d\n", errno);
+        return NULL;
+    }
+    return recv_created_reply(fd, "panel_create");
+}
+
+int lumen_invoke(int fd, const char *name)
+{
+    lumen_msg_hdr_t hdr = { LUMEN_OP_INVOKE, sizeof(lumen_invoke_t) };
+    lumen_invoke_t req;
+    memset(&req, 0, sizeof(req));
+    if (name) strncpy(req.name, name, sizeof(req.name) - 1);
+    if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr)) {
+        lumen_diag("[LUMEN-CLI] invoke: write hdr errno=%d\n", errno);
+        return -EIO;
+    }
+    if (write(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) {
+        lumen_diag("[LUMEN-CLI] invoke: write req errno=%d\n", errno);
+        return -EIO;
+    }
+    return 0;
 }
 
 void lumen_window_present(lumen_window_t *win)
