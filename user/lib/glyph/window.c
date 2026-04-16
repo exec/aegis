@@ -76,6 +76,7 @@ glyph_window_create(const char *title, int client_w, int client_h)
     win->closeable = 1;
     win->frosted = 1;
     win->has_dirty = 1;
+    win->tag = -1;  /* sentinel: callers set to a valid PTY fd if applicable */
     win->dirty_rect.x = 0;
     win->dirty_rect.y = 0;
     win->dirty_rect.w = win->surf_w;

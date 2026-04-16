@@ -686,6 +686,28 @@ static void handle_key(char c)
     }
 }
 
+/* Mouse click handling. Buttons are drawn at fixed positions
+ * (see draw_screen_*): width 100, height 40, y = fb_h - 120.
+ * The "advance" button is either centered (Welcome, Reboot) at
+ * (cx - 50, y) or on the right (Disk, User, Confirm, Abort) at
+ * (cx + 60, y). Synthesize Enter on a click in either slot —
+ * the per-screen handle_key_* functions interpret Enter as
+ * "advance / confirm". Back-button clicks are ignored for now
+ * (no keyboard back action exists either). */
+static void handle_mouse_click(int x, int y)
+{
+    int cx     = g_st.fb_w / 2;
+    int btn_y  = g_st.fb_h - 120;
+    int btn_h  = 40;
+    int btn_w  = 100;
+    if (y < btn_y || y >= btn_y + btn_h) return;
+    int center_x0 = cx - 50;
+    int right_x0  = cx + 60;
+    if ((x >= center_x0 && x < center_x0 + btn_w) ||
+        (x >= right_x0  && x < right_x0  + btn_w))
+        handle_key('\r');
+}
+
 /* ── Main ───────────────────────────────────────────────────────────── */
 
 int
@@ -745,6 +767,10 @@ main(int argc, char **argv)
                 break;
             if (ev.type == LUMEN_EV_KEY && ev.key.pressed)
                 handle_key((char)ev.key.keycode);
+            if (ev.type == LUMEN_EV_MOUSE &&
+                ev.mouse.evtype == LUMEN_MOUSE_DOWN &&
+                (ev.mouse.buttons & 1))
+                handle_mouse_click(ev.mouse.x, ev.mouse.y);
         }
 
         render_current_screen();
