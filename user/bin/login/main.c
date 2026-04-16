@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
@@ -127,10 +128,12 @@ main(void)
 
         char *argv[] = { login_shell, NULL };
         execve(shell, argv, environ);
-        /* Fallback */
+        /* Fallback — log why the primary shell failed */
+        dprintf(2, "[LOGIN] execve(%s) failed: errno=%d, falling back to /bin/sh\n",
+                shell, errno);
         char *fb_argv[] = { "-sh", NULL };
         execve("/bin/sh", fb_argv, NULL);
-        write(2, "login: execve failed\n", 21);
+        dprintf(2, "[LOGIN] execve(/bin/sh) failed: errno=%d\n", errno);
         return 1;
     }
 
