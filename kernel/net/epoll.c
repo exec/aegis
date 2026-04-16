@@ -7,6 +7,7 @@
 #include "printk.h"
 #include "spinlock.h"
 #include "waitq.h"
+#include "fd_waitq.h"
 #include <stdint.h>
 
 static epoll_fd_t s_epoll[EPOLL_MAX_INSTANCES];
@@ -242,8 +243,40 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
 
         ep->waiter_task = (aegis_task_t *)sched_current();
         spin_unlock_irqrestore(&epoll_lock, efl);
-        /* TEMP: bridged via g_timer_waitq until Task 10 wires epoll waitqs. */
-        waitq_wait(&g_timer_waitq);
+        {
+            /* Register on each watched fd's waitq + g_timer_waitq if a
+             * deadline is set. On wake, unregister from every queue
+             * (waitq_remove is idempotent — safe even if the entry was
+             * never added or already detached). */
+            waitq_entry_t fd_entries[EPOLL_MAX_WATCHES];
+            waitq_t      *fd_queues[EPOLL_MAX_WATCHES];
+            waitq_entry_t timer_entry;
+            int n = 0;
+
+            for (int wi = 0; wi < EPOLL_MAX_WATCHES; wi++) {
+                if (!ep->watches[wi].in_use) continue;
+                fd_queues[n]           = fd_get_waitq((int)ep->watches[wi].fd);
+                fd_entries[n].task     = sched_current();
+                fd_entries[n].next     = (void *)0;
+                fd_entries[n].prev     = (void *)0;
+                fd_entries[n].on_queue = 0;
+                if (fd_queues[n]) waitq_add(fd_queues[n], &fd_entries[n]);
+                n++;
+            }
+            if (has_deadline) {
+                timer_entry.task     = sched_current();
+                timer_entry.next     = (void *)0;
+                timer_entry.prev     = (void *)0;
+                timer_entry.on_queue = 0;
+                waitq_add(&g_timer_waitq, &timer_entry);
+            }
+
+            sched_block();
+
+            for (int i = 0; i < n; i++)
+                if (fd_queues[i]) waitq_remove(fd_queues[i], &fd_entries[i]);
+            if (has_deadline) waitq_remove(&g_timer_waitq, &timer_entry);
+        }
         /* Loop: check ready list again after wake */
     }
 }
