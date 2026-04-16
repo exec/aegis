@@ -349,7 +349,7 @@ int unix_sock_connect(uint32_t id, const char *path)
     uint32_t listener_id = name_lookup(path);
     if (listener_id == UNIX_NONE) {
         spin_unlock_irqrestore(&unix_lock, fl);
-        return -111;  /* ECONNREFUSED */
+        return -111;  /* ECONNREFUSED — silent: callers retry on this */
     }
     unix_sock_t *listener = unix_sock_get(listener_id);
     if (!listener || listener->state != UNIX_LISTENING) {

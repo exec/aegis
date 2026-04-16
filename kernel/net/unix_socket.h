@@ -10,7 +10,15 @@
 #define AF_UNIX          1
 #define UNIX_SOCK_MAX    32
 #define UNIX_PATH_MAX    108
-#define UNIX_BUF_SIZE    4056   /* matches pipe ring size, fits in one kva page */
+/* Must be a power of two — `unix_socket.c` uses `(head - tail) & (UNIX_BUF_SIZE - 1)`
+ * for ring math, which is only valid when the mask is one-bits-only (i.e. size is
+ * a power of two). 4056 (the prior value, matching the pipe ring) silently
+ * corrupted ring_used()/ring_free() because 4055 = 0b1111_1101_0111 — bits 3
+ * and 5 are clear, so any byte count with only those bits set masked to 0
+ * (8 bytes available looked like 0 bytes available — see the lumen handshake
+ * EAGAIN-after-POLLIN race, fixed 2026-04-15). 4096 fits in the same kva page
+ * as the prior allocation (kva_alloc_pages(1) returns 4096 bytes). */
+#define UNIX_BUF_SIZE    4096
 #define UNIX_NONE        0xFFFFFFFFU
 
 /* Staged fd for SCM_RIGHTS passing */
