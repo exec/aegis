@@ -137,6 +137,10 @@ uint64_t sys_getgid(void);
 uint64_t sys_getegid(void);
 uint64_t sys_reboot(uint64_t cmd);
 
+/* ── sys_hostname.c ────────────────────────────────────────────────────── */
+uint64_t sys_sethostname(uint64_t name_uptr, uint64_t len);
+void     hostname_get(char *out, uint32_t n);
+
 /* ── sys_cap.c ─────────────────────────────────────────────────────────── */
 uint64_t sys_auth_session(void);
 uint64_t sys_cap_grant_runtime(uint64_t target_pid, uint64_t kind, uint64_t rights);

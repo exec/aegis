@@ -148,6 +148,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 112: return sys_setsid();
     case 121: return sys_getpgid(arg1);
     case  63: return sys_uname(arg1);
+    case 170: return sys_sethostname(arg1, arg2);
     case 158: return sys_arch_prctl(arg1, arg2);
     case 186: return sys_gettid();
     case 218: return sys_set_tid_address(arg1);

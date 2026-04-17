@@ -215,7 +215,7 @@ sys_uname(uint64_t buf_uptr)
         return (uint64_t)-(int64_t)14; /* EFAULT */
     __builtin_memset(uts, 0, sizeof(uts));
     __builtin_memcpy(uts + 0*65,  "Aegis",   5); /* sysname    */
-    __builtin_memcpy(uts + 1*65,  "aegis",   5); /* nodename   */
+    hostname_get(uts + 1*65, 65);                 /* nodename — live, settable */
     __builtin_memcpy(uts + 2*65,  "1.0.0",   5); /* release    */
     __builtin_memcpy(uts + 3*65,  "#1",      2); /* version    */
 #ifdef __aarch64__

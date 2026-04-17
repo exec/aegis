@@ -108,6 +108,7 @@ USERSPACE_SRCS = \
     kernel/syscall/syscall.c kernel/syscall/sys_io.c \
     kernel/syscall/sys_memory.c kernel/syscall/sys_process.c \
     kernel/syscall/sys_exec.c kernel/syscall/sys_identity.c \
+    kernel/syscall/sys_hostname.c \
     kernel/syscall/sys_cap.c kernel/syscall/sys_time.c \
     kernel/syscall/sys_file.c kernel/syscall/sys_dir.c \
     kernel/syscall/sys_meta.c kernel/syscall/sys_signal.c \
