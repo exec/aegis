@@ -221,3 +221,72 @@ async fn gui_install_and_boot_from_nvme() {
     proc2.kill().await.expect("boot 2 kill");
     eprintln!("PASS: gui_install_and_boot_from_nvme");
 }
+
+/// Back-button regression test.
+///
+/// Advances the GUI installer from Welcome (screen=1) to Disk (screen=2)
+/// then sends Escape (which maps to handle_back()) and asserts the wizard
+/// returns to screen=1.  Catches regressions where the back handler is
+/// removed, the Escape binding is dropped, or the screen-1 marker stops
+/// being emitted.
+///
+/// No second boot — this test only exercises wizard navigation.
+#[tokio::test]
+async fn gui_installer_back_button() {
+    let iso = installer_iso();
+    if !iso.exists() {
+        eprintln!("SKIP: {} not found", iso.display());
+        eprintln!("      build with: make test-iso");
+        return;
+    }
+
+    let disk = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/gui_installer_back_test_disk.img");
+    make_fresh_disk(&disk).expect("create fresh disk");
+
+    let (mut stream, mut proc) =
+        AegisHarness::boot_stream(aegis_q35_gui_installer(&disk), &iso)
+            .await
+            .expect("boot spawn failed");
+
+    wait_for_line(&mut stream, "WARNING: This system",
+                  Duration::from_secs(BOOT_TIMEOUT_SECS))
+        .await
+        .expect("pre-login banner");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    proc.send_keys("root\n").await.expect("sendkey root");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    proc.send_keys(&format!("{}\n", ROOT_PW)).await.expect("sendkey pw");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    proc.send_keys("gui-installer\n").await.expect("launch gui-installer");
+
+    wait_for_line(&mut stream, "[LUMEN] installer ready",
+                  Duration::from_secs(20))
+        .await
+        .expect("installer ready");
+    wait_for_line(&mut stream, "[INSTALLER] screen=1",
+                  Duration::from_secs(5))
+        .await
+        .expect("screen=1 on launch");
+
+    // Advance to screen 2.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    proc.send_keys("\n").await.expect("advance to disk screen");
+    wait_for_line(&mut stream, "[INSTALLER] screen=2",
+                  Duration::from_secs(5))
+        .await
+        .expect("screen=2 after Enter");
+
+    // Press Escape — should trigger handle_back() → screen=1.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    proc.send_keys("\x1b").await.expect("sendkey Escape");
+    wait_for_line(&mut stream, "[INSTALLER] screen=1",
+                  Duration::from_secs(5))
+        .await
+        .expect("screen=1 after Escape (back button regression)");
+
+    proc.kill().await.expect("kill");
+    eprintln!("PASS: gui_installer_back_button");
+}

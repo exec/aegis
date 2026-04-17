@@ -218,6 +218,59 @@ pub fn aegis_q35_installed_ovmf(disk_path: &std::path::Path,
     }
 }
 
+/// q35 installer preset with a 4K-native NVMe drive.
+///
+/// Identical to `aegis_q35_installer` except the NVMe device reports
+/// `physical_block_size=4096` and `logical_block_size=4096`.  Used by
+/// the 4K-block installer regression test.
+pub fn aegis_q35_installer_4k(disk_path: &std::path::Path) -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "none".into(),
+        devices: vec![
+            "nvme,drive=nvme0,serial=aegis0,physical_block_size=4096,logical_block_size=4096".into(),
+        ],
+        drives: vec![
+            format!("file={},if=none,id=nvme0,format=raw", disk_path.display()),
+        ],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+            "-nodefaults".into(),
+            "-vga".into(), "std".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
+
+/// q35 post-installer OVMF boot with a 4K-native NVMe drive.
+///
+/// Paired with `aegis_q35_installer_4k` for the second boot of the
+/// 4K-block installer test.
+pub fn aegis_q35_installed_ovmf_4k(disk_path: &std::path::Path,
+                                    ovmf_path: &std::path::Path) -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "none".into(),
+        devices: vec![
+            "nvme,drive=nvme0,serial=aegis0,physical_block_size=4096,logical_block_size=4096".into(),
+        ],
+        drives: vec![
+            format!("if=pflash,format=raw,readonly=on,file={}", ovmf_path.display()),
+            format!("file={},if=none,id=nvme0,format=raw", disk_path.display()),
+        ],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+            "-nodefaults".into(),
+            "-vga".into(), "std".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

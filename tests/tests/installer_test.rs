@@ -23,8 +23,9 @@
 // Run: AEGIS_INSTALLER_ISO=build/aegis-test.iso cargo test --manifest-path tests/Cargo.toml --test installer_test -- --nocapture
 
 use aegis_tests::{
-    aegis_q35_installed_ovmf, aegis_q35_installer, wait_for_line,
-    AegisHarness,
+    aegis_q35_installed_ovmf, aegis_q35_installed_ovmf_4k,
+    aegis_q35_installer, aegis_q35_installer_4k,
+    wait_for_line, AegisHarness,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -243,4 +244,117 @@ async fn install_and_boot_from_nvme() {
 
     // Success — leave the disk image in place for manual inspection.
     eprintln!("PASS: install_and_boot_from_nvme");
+}
+
+/// Same two-boot install sequence as `install_and_boot_from_nvme` but
+/// with a 4K-native NVMe drive (`physical_block_size=4096`).
+///
+/// Regression test for the 4K-block installer fix: previously the
+/// kernel's gpt_scan issued 8-LBA reads that requested 32 KB from a
+/// 4K-sector controller (PRP2=0), the controller rejected the command,
+/// and the installer failed with "partition rescan failed".
+#[tokio::test]
+async fn install_and_boot_from_nvme_4k() {
+    let iso = installer_iso();
+    if !iso.exists() {
+        eprintln!("SKIP: {} not found", iso.display());
+        eprintln!("      build with: make test-iso");
+        return;
+    }
+    if !ovmf_path().exists() {
+        eprintln!("SKIP: OVMF not found at {}", ovmf_path().display());
+        eprintln!("      install with: apt install ovmf");
+        return;
+    }
+
+    let disk = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/installer_test_disk_4k.img");
+    make_fresh_disk(&disk).expect("create fresh 4K disk");
+    eprintln!("fresh disk: {} ({} MB, 4K-native NVMe)", disk.display(), DISK_SIZE_MB);
+
+    // ── Boot 1: install onto 4K-native NVMe ──────────────────────────
+    eprintln!("==> Boot 1: live ISO + 4K-native NVMe (install phase)");
+    let (mut stream, mut proc) =
+        AegisHarness::boot_stream(aegis_q35_installer_4k(&disk), &iso)
+            .await
+            .expect("boot 1 spawn failed");
+
+    wait_for_line(&mut stream, "WARNING: This system",
+                  Duration::from_secs(BOOT_TIMEOUT_SECS))
+        .await
+        .expect("boot 1: pre-login banner");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    proc.send_keys("root\n").await.expect("sendkey root");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    proc.send_keys(&format!("{}\n", ROOT_PW)).await.expect("sendkey pw");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    proc.send_keys("installer\n").await.expect("sendkey installer");
+    wait_for_line(&mut stream, "=== Aegis Installer ===",
+                  Duration::from_secs(10))
+        .await
+        .expect("boot 1: installer banner");
+
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.send_keys("y\n").await.expect("sendkey y");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.send_keys(&format!("{}\n", ROOT_PW)).await.expect("sendkey root pw");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.send_keys(&format!("{}\n", ROOT_PW)).await.expect("sendkey root pw confirm");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.send_keys(&format!("{}\n", USER_NAME)).await.expect("sendkey username");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.send_keys(&format!("{}\n", USER_PW)).await.expect("sendkey user pw");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.send_keys(&format!("{}\n", USER_PW)).await.expect("sendkey user pw confirm");
+
+    {
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(INSTALL_TIMEOUT_SECS);
+        let mut trace: Vec<String> = Vec::new();
+        let mut found = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, stream.next_line()).await {
+                Ok(Some(line)) => {
+                    let done = line.contains("=== Installation complete! ===");
+                    trace.push(line);
+                    if done { found = true; break; }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        if !found {
+            eprintln!("--- 4K installer trace (last {} lines) ---", trace.len());
+            let skip = trace.len().saturating_sub(40);
+            for l in &trace[skip..] { eprintln!("  {}", l); }
+            eprintln!("--- end ---");
+            panic!("boot 1 (4K): installation did not complete within {}s",
+                   INSTALL_TIMEOUT_SECS);
+        }
+    }
+    eprintln!("    installation complete (4K NVMe)");
+
+    proc.send_keys("exit\n").await.ok();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    proc.kill().await.expect("boot 1 kill");
+    drop(stream);
+
+    // ── Boot 2: OVMF + 4K-native installed NVMe ──────────────────────
+    eprintln!("==> Boot 2: OVMF + 4K-native installed NVMe");
+    let (mut stream2, mut proc2) =
+        AegisHarness::boot_disk_only(
+            aegis_q35_installed_ovmf_4k(&disk, &ovmf_path()),
+        )
+        .await
+        .expect("boot 2 spawn failed");
+
+    wait_for_line(&mut stream2, "[EXT2] OK: mounted nvme0p1",
+                  Duration::from_secs(BOOT_TIMEOUT_SECS))
+        .await
+        .expect("boot 2 (4K): [EXT2] OK: mounted nvme0p1 not seen");
+    eprintln!("    [EXT2] OK: mounted nvme0p1 (4K NVMe)");
+
+    proc2.kill().await.expect("boot 2 kill");
+    eprintln!("PASS: install_and_boot_from_nvme_4k");
 }

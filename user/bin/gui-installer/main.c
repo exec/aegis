@@ -678,6 +678,7 @@ static void handle_key_progress(char c)
 
 static void handle_key(char c)
 {
+    if (c == '\x1b') { handle_back(); return; }
     switch (g_st.screen) {
     case SCREEN_WELCOME:  handle_key_welcome(c);  break;
     case SCREEN_DISK:     handle_key_disk(c);     break;
