@@ -47,6 +47,7 @@ typedef struct {
 
 int parse_command(char *seg, cmd_t *cmd);
 int parse_pipeline(char *line, cmd_t *cmds, int max);
+int parse_pipeline_bg(char *line, cmd_t *cmds, int max, int *bg_out);
 
 /* ── env.c ── */
 
@@ -85,6 +86,7 @@ int  sandbox_builtin(int argc, char **argv, char **envp);
 /* ── exec.c ── */
 
 void run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit);
+void run_pipeline_bg(cmd_t *cmds, int n, char **envp);
 int  try_builtin(cmd_t *cmds, int n, int *last_exit);
 
 #endif /* STSH_H */

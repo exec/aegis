@@ -321,6 +321,19 @@ spawn_widgets(compositor_t *comp, int fb_w, int fb_h)
     glyph_window_mark_all_dirty(wt);
 }
 
+/* Spawn an external Lumen client by absolute path. The child connects
+ * back to /run/lumen.sock via the external window protocol. fd 0/1/2
+ * are inherited from the compositor's stderr (which is /dev/console),
+ * so the child's diag prints reach the serial harness. */
+#define SYS_SPAWN 514
+static long
+spawn_external_client(const char *path)
+{
+    char *argv[] = { (char *)path, NULL };
+    char *envp[] = { "PATH=/bin", "HOME=/root", "USER=root", NULL };
+    return syscall(SYS_SPAWN, path, argv, envp, 2 /* stderr→/dev/console */, 0);
+}
+
 static void
 invoke_handler(compositor_t *comp, const char *name)
 {
@@ -331,6 +344,9 @@ invoke_handler(compositor_t *comp, const char *name)
     } else if (strcmp(name, "widgets") == 0) {
         spawn_widgets(comp, s_fb_w, s_fb_h);
         dprintf(2, "[LUMEN] window_opened=widgets\n");
+    } else if (strcmp(name, "gui-installer") == 0) {
+        long pid = spawn_external_client("/bin/gui-installer");
+        dprintf(2, "[LUMEN] window_opened=gui-installer pid=%ld\n", pid);
     } else {
         dprintf(2, "[LUMEN] invoke: unknown name=%s\n", name);
     }
@@ -606,6 +622,13 @@ main(void)
                     goto next_poll;
                 }
 
+                /* Ctrl+Alt+I (0x09) — launch GUI installer */
+                if (eb == 0x09) {
+                    invoke_handler(&comp, "gui-installer");
+                    activity = 1;
+                    goto next_poll;
+                }
+
                 /* Ctrl+Alt+L (0x0C) — lock screen */
                 if (eb == 0x0C) {
                     s_input_frozen = 1;
@@ -640,24 +663,42 @@ main(void)
                 /* CSI sequence (ESC [): collect params + final byte,
                  * then write the whole sequence in one shot. */
                 if (eb == '[') {
+                    /* Collect the CSI sequence regardless of target so we
+                     * can either pass it through to a PTY or translate the
+                     * common arrow keys into single-byte synthetic codes
+                     * for proxy windows (which only see one byte at a time
+                     * via on_key). Synthetic codes use the high range
+                     * (0xF0-0xFF) so they don't collide with ASCII or
+                     * UTF-8 bytes. gui-installer maps LEFT→back,
+                     * RIGHT→next; new clients can do the same. */
+                    char seq[16] = { '\033', '[' };
+                    int slen = 2;
+                    char cb;
+                    while (slen < 15) {
+                        struct pollfd cpfd = { .fd = 0, .events = POLLIN };
+                        int got = 0;
+                        if (poll(&cpfd, 1, 15) > 0)
+                            got = (read(0, &cb, 1) == 1);
+                        if (!got) break;
+                        seq[slen++] = cb;
+                        if (cb >= 0x40 && cb <= 0x7E)
+                            break;  /* final byte */
+                    }
+
                     int mfd = (comp.focused && comp.focused->tag >= 0)
                               ? comp.focused->tag : -1;
                     if (mfd >= 0) {
-                        char seq[16] = { '\033', '[' };
-                        int slen = 2;
-                        char cb;
-                        /* Collect remaining CSI bytes with poll timeout */
-                        while (slen < 15) {
-                            struct pollfd cpfd = { .fd = 0, .events = POLLIN };
-                            int got = 0;
-                            if (poll(&cpfd, 1, 15) > 0)
-                                got = (read(0, &cb, 1) == 1);
-                            if (!got) break;
-                            seq[slen++] = cb;
-                            if (cb >= 0x40 && cb <= 0x7E)
-                                break;  /* final byte */
-                        }
                         write(mfd, seq, (unsigned)slen);
+                    } else if (comp.focused && comp.focused->on_key &&
+                               slen == 3) {
+                        char synth = 0;
+                        switch (seq[2]) {
+                        case 'A': synth = (char)0xF1; break; /* Up */
+                        case 'B': synth = (char)0xF2; break; /* Down */
+                        case 'C': synth = (char)0xF3; break; /* Right */
+                        case 'D': synth = (char)0xF4; break; /* Left */
+                        }
+                        if (synth) comp.focused->on_key(comp.focused, synth);
                     }
                     activity = 1;
                     goto next_poll;

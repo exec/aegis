@@ -678,9 +678,19 @@ static void handle_key_progress(char c)
 
 static void handle_back(void);
 
+/* Synthetic arrow-key codes from Lumen's CSI translator (lumen/main.c).
+ * The proxy on_key callback delivers one byte per key event, so multi-
+ * byte CSI sequences (ESC [ A/B/C/D) get folded into these high-range
+ * codes that don't collide with ASCII / UTF-8. */
+#define KEY_ARROW_UP    ((char)0xF1)
+#define KEY_ARROW_DOWN  ((char)0xF2)
+#define KEY_ARROW_RIGHT ((char)0xF3)
+#define KEY_ARROW_LEFT  ((char)0xF4)
+
 static void handle_key(char c)
 {
-    if (c == '\x1b') { handle_back(); return; }
+    if (c == '\x1b' || c == KEY_ARROW_LEFT) { handle_back(); return; }
+    if (c == KEY_ARROW_RIGHT) { handle_key('\r'); return; }
     switch (g_st.screen) {
     case SCREEN_WELCOME:  handle_key_welcome(c);  break;
     case SCREEN_DISK:     handle_key_disk(c);     break;
@@ -754,8 +764,15 @@ main(int argc, char **argv)
 {
     (void)argc; (void)argv;
 
-    /* Connect to Lumen compositor */
-    g_st.lfd = lumen_connect();
+    /* Connect to Lumen compositor — retry on ECONNREFUSED because
+     * Aegis AF_UNIX returns ECONNREFUSED until accept() runs at least
+     * once, and gui-installer may race the compositor's main loop. */
+    for (int attempt = 0; attempt < 50; attempt++) {
+        g_st.lfd = lumen_connect();
+        if (g_st.lfd >= 0) break;
+        if (g_st.lfd != -111) break; /* ECONNREFUSED only */
+        usleep(100000); /* 100 ms */
+    }
     if (g_st.lfd < 0) {
         dprintf(2, "gui-installer: lumen_connect failed (%d)\n", g_st.lfd);
         return 1;

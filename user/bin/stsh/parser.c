@@ -77,6 +77,25 @@ parse_command(char *seg, cmd_t *cmd)
 int
 parse_pipeline(char *line, cmd_t *cmds, int max)
 {
+    int bg;
+    return parse_pipeline_bg(line, cmds, max, &bg);
+}
+
+/* Like parse_pipeline but also detects a trailing '&' (background). */
+int
+parse_pipeline_bg(char *line, cmd_t *cmds, int max, int *bg_out)
+{
+    *bg_out = 0;
+
+    /* Strip trailing whitespace and check for trailing '&' */
+    char *end = line + strlen(line);
+    while (end > line && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n'))
+        end--;
+    if (end > line && end[-1] == '&') {
+        *bg_out = 1;
+        *--end = '\0';
+    }
+
     int n     = 0;
     char *p   = line;
     char *seg = line;

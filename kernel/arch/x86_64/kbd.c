@@ -33,9 +33,12 @@ static volatile int s_ctrl = 0;
 /* Alt state */
 static volatile int s_alt = 0;
 
-/* US QWERTY scancode set 1 — unshifted (make codes 0x01–0x39) */
+/* US QWERTY scancode set 1 — unshifted (make codes 0x01–0x39).
+ * Index 0x01 = Escape. Translates to 0x1B so userspace can act on the
+ * Esc key (pre-fix, ESC was 0 here and got silently dropped by the
+ * `if (c)` filter below — meaning Escape didn't work anywhere). */
 static const char s_sc_lower[] = {
-    0,    0,   '1', '2', '3', '4', '5', '6',  /* 0x00–0x07 */
+    0,   '\033', '1', '2', '3', '4', '5', '6',  /* 0x00–0x07 */
     '7', '8', '9', '0', '-', '=',  127,  '\t', /* 0x08–0x0F */
     'q', 'w', 'e', 'r', 't', 'y', 'u', 'i',   /* 0x10–0x17 */
     'o', 'p', '[', ']', '\r',  0,  'a', 's',   /* 0x18–0x1F */
@@ -47,7 +50,7 @@ static const char s_sc_lower[] = {
 
 /* US QWERTY scancode set 1 — shifted */
 static const char s_sc_upper[] = {
-    0,    0,   '!', '@', '#', '$', '%', '^',
+    0,   '\033', '!', '@', '#', '$', '%', '^',
     '&', '*', '(', ')', '_', '+', 127,  '\t',
     'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
     'O', 'P', '{', '}', '\r',  0,  'A', 'S',

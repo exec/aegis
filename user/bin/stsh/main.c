@@ -147,10 +147,15 @@ main(int argc, char **argv, char **envp)
                 strncpy(seg, rest, sizeof(seg) - 1);
                 seg[sizeof(seg) - 1] = '\0';
 
-                int n = parse_pipeline(seg, cmds, MAX_PIPELINE);
+                int bg = 0;
+                int n = parse_pipeline_bg(seg, cmds, MAX_PIPELINE, &bg);
                 if (n > 0) {
-                    if (!try_builtin(cmds, n, &last_exit))
-                        run_pipeline(cmds, n, env_as_array(), &last_exit);
+                    if (!try_builtin(cmds, n, &last_exit)) {
+                        if (bg)
+                            run_pipeline_bg(cmds, n, env_as_array());
+                        else
+                            run_pipeline(cmds, n, env_as_array(), &last_exit);
+                    }
                 }
             }
 

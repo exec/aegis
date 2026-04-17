@@ -36,6 +36,7 @@ pub fn aegis_pc() -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: false,
+        ..Default::default()
     }
 }
 
@@ -64,6 +65,7 @@ pub fn aegis_q35() -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: false,
+        ..Default::default()
     }
 }
 
@@ -94,6 +96,7 @@ pub fn aegis_q35_graphical_mouse() -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: true,
+        ..Default::default()
     }
 }
 
@@ -124,6 +127,7 @@ pub fn aegis_q35_installer(disk_path: &std::path::Path) -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: true,
+        ..Default::default()
     }
 }
 
@@ -151,6 +155,7 @@ pub fn aegis_q35_gui_installer(disk_path: &std::path::Path) -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: true,
+        ..Default::default()
     }
 }
 
@@ -185,6 +190,7 @@ pub fn aegis_arm64_virt() -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: false,
+        ..Default::default()
     }
 }
 
@@ -215,6 +221,7 @@ pub fn aegis_q35_installed_ovmf(disk_path: &std::path::Path,
         ],
         serial_capture: true,
         monitor_socket: true,
+        ..Default::default()
     }
 }
 
@@ -241,6 +248,7 @@ pub fn aegis_q35_installer_4k(disk_path: &std::path::Path) -> QemuOpts {
         ],
         serial_capture: true,
         monitor_socket: true,
+        ..Default::default()
     }
 }
 
@@ -268,6 +276,7 @@ pub fn aegis_q35_installed_ovmf_4k(disk_path: &std::path::Path,
         ],
         serial_capture: true,
         monitor_socket: true,
+        ..Default::default()
     }
 }
 

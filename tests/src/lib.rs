@@ -15,4 +15,4 @@ pub use presets::{
     aegis_q35_installed_ovmf, aegis_q35_installed_ovmf_4k,
     arm64_elf, disk, iso,
 };
-pub use vortex::QemuProcess;
+pub use vortex::{ConsoleStream, QemuProcess};

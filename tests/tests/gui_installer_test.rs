@@ -1,55 +1,55 @@
-// End-to-end GUI installer regression test.
+// End-to-end GUI installer regression tests.
 //
-// Mirrors installer_test.rs but drives the graphical wizard via
-// Tab/Enter keyboard navigation instead of the text installer's
-// CLI prompts.
+// gui-installer is a Lumen external-window-protocol client (Phase 47).
+// It needs a running compositor before it can connect to /run/lumen.sock.
+// We use the graphical ISO so Bastion auto-starts Lumen, sign in via
+// Bastion's login form, then ask Lumen to spawn gui-installer through
+// LUMEN_OP_INVOKE — triggered from the host by sending Ctrl+Alt+I via
+// QEMU's HMP `sendkey`, which Lumen handles in main.c.
 //
-// Boot 1 flow:
-//   1. Live text ISO + empty NVMe
-//   2. Log into stsh as root
-//   3. Launch /bin/gui-installer
-//   4. Wait for [LUMEN] installer ready + [INSTALLER] screen=1
-//   5. Press Enter → [INSTALLER] screen=2 (disk selection)
-//   6. Press Enter → [INSTALLER] screen=3 (user account)
-//   7. Type root pw, Tab, confirm, Tab, username, Tab, user pw, Tab,
-//      user pw confirm, Tab (focus=Next), Enter → [INSTALLER] screen=4
-//   8. Press Enter → [INSTALLER] screen=5
-//   9. Wait for [INSTALLER] done
+// Boot 1 (full install):
+//   1. Graphical ISO + empty NVMe
+//   2. Wait for [BASTION] greeter ready, send root + Tab + pw + Enter
+//   3. Wait for [LUMEN] ready
+//   4. HMP sendkey ctrl-alt-i → Lumen invokes /bin/gui-installer
+//   5. Walk the wizard via Enter/Tab/Escape (markers: [INSTALLER] screen=N)
 //
-// Boot 2 flow: OVMF + installed NVMe, verify [EXT2] OK: mounted nvme0p1.
+// Boot 2 (back button):
+//   1. Same as boot 1 through screen=1
+//   2. Press Enter → screen=2
+//   3. Press Escape → screen=1
 //
-// Uses aegis-test.iso (boot=text) — same as installer_test — because
-// the live graphical ISO boots Bastion which blocks stsh access, and
-// the GUI installer opens its own framebuffer independent of Bastion.
-//
-// Run: AEGIS_INSTALLER_ISO=build/aegis-test.iso cargo test --manifest-path tests/Cargo.toml --test gui_installer_test -- --nocapture
+// Run: AEGIS_ISO=build/aegis.iso cargo test --manifest-path tests/Cargo.toml \
+//        --test gui_installer_test -- --nocapture
 
 use aegis_tests::{
-    aegis_q35_gui_installer, aegis_q35_installed_ovmf, wait_for_line,
-    AegisHarness,
+    aegis_q35_graphical_mouse, aegis_q35_gui_installer,
+    aegis_q35_installed_ovmf, wait_for_line, AegisHarness, QemuProcess,
 };
+use vortex::config::QemuOpts;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
 const DISK_SIZE_MB: u64 = 128;
-const BOOT_TIMEOUT_SECS: u64 = 120;
-const INSTALL_TIMEOUT_SECS: u64 = 180;
+const BOOT_TIMEOUT_SECS: u64 = 240;
+const INSTALL_TIMEOUT_SECS: u64 = 240;
 
 const ROOT_PW: &str = "forevervigilant";
 const USER_NAME: &str = "alice";
 const USER_PW: &str = "alicepass";
 
-/// Text-mode ISO — same rationale as installer_test.
-fn installer_iso() -> PathBuf {
-    let val = std::env::var("AEGIS_INSTALLER_ISO")
-        .unwrap_or_else(|_| "build/aegis-test.iso".into());
+/// Graphical ISO — Bastion auto-starts Lumen.
+fn graphical_iso() -> PathBuf {
+    let val = std::env::var("AEGIS_ISO")
+        .unwrap_or_else(|_| "build/aegis.iso".into());
     PathBuf::from(val)
 }
 
-fn disk_path() -> PathBuf {
+fn disk_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/gui_installer_test_disk.img")
+        .join(format!("target/{}.img", name))
 }
 
 fn ovmf_path() -> PathBuf {
@@ -74,12 +74,74 @@ fn make_fresh_disk(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Send a raw HMP command to QEMU's monitor socket. Used for key chords
+/// (`sendkey ctrl-alt-i`) that aren't single-character keystrokes.
+async fn hmp_command(proc: &QemuProcess, cmd: &str) -> Result<(), String> {
+    let path = proc.monitor_socket_path()
+        .ok_or("monitor socket not available")?;
+    let mut stream = tokio::net::UnixStream::connect(path)
+        .await
+        .map_err(|e| format!("connect monitor: {}", e))?;
+    let line = format!("{}\n", cmd);
+    stream.write_all(line.as_bytes())
+        .await
+        .map_err(|e| format!("write monitor: {}", e))?;
+    Ok(())
+}
+
+/// Bastion login → Lumen ready → invoke gui-installer.
+/// Returns once `[LUMEN] installer ready` has been seen. `opts` is the
+/// QEMU preset to boot — install tests pass a NVMe-backed preset, the
+/// back-button test passes a no-disk preset to keep boot fast.
+async fn boot_to_installer(
+    opts: QemuOpts,
+    iso: &std::path::Path,
+) -> (aegis_tests::ConsoleStream, QemuProcess) {
+    let (mut stream, mut proc) =
+        AegisHarness::boot_stream(opts, iso)
+            .await
+            .expect("QEMU spawn failed");
+
+    wait_for_line(&mut stream, "[BASTION] greeter ready",
+                  Duration::from_secs(BOOT_TIMEOUT_SECS))
+        .await
+        .expect("[BASTION] greeter ready");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    proc.send_keys(&format!("root\t{}\n", ROOT_PW))
+        .await
+        .expect("Bastion login");
+
+    // Lumen startup time varies a lot under TCG (5s warm cache, 30s+
+    // cold). Give it a generous window so cold runs don't flake.
+    wait_for_line(&mut stream, "[LUMEN] ready",
+                  Duration::from_secs(60))
+        .await
+        .expect("[LUMEN] ready");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    hmp_command(&proc, "sendkey ctrl-alt-i")
+        .await
+        .expect("send Ctrl+Alt+I");
+
+    wait_for_line(&mut stream, "[LUMEN] installer ready",
+                  Duration::from_secs(20))
+        .await
+        .expect("[LUMEN] installer ready");
+    wait_for_line(&mut stream, "[INSTALLER] screen=1",
+                  Duration::from_secs(5))
+        .await
+        .expect("[INSTALLER] screen=1");
+
+    (stream, proc)
+}
+
 #[tokio::test]
 async fn gui_install_and_boot_from_nvme() {
-    let iso = installer_iso();
+    let iso = graphical_iso();
     if !iso.exists() {
         eprintln!("SKIP: {} not found", iso.display());
-        eprintln!("      build with: make test-iso");
+        eprintln!("      build with: make iso");
         return;
     }
     if !ovmf_path().exists() {
@@ -87,86 +149,51 @@ async fn gui_install_and_boot_from_nvme() {
         return;
     }
 
-    let disk = disk_path();
+    let disk = disk_path("gui_installer_test_disk");
     make_fresh_disk(&disk).expect("create fresh disk");
     eprintln!("fresh disk: {} ({} MB)", disk.display(), DISK_SIZE_MB);
 
     // ── Boot 1: GUI installer ────────────────────────────────────────
-    eprintln!("==> Boot 1: live text ISO + empty NVMe (GUI install)");
+    eprintln!("==> Boot 1: graphical ISO + empty NVMe (GUI install)");
     let (mut stream, mut proc) =
-        AegisHarness::boot_stream(aegis_q35_gui_installer(&disk), &iso)
-            .await
-            .expect("boot 1 spawn failed");
+        boot_to_installer(aegis_q35_gui_installer(&disk), &iso).await;
 
-    // Pre-login banner (newline-terminated — wait_for_line can match).
-    wait_for_line(&mut stream, "WARNING: This system",
-                  Duration::from_secs(BOOT_TIMEOUT_SECS))
-        .await
-        .expect("boot 1: pre-login banner never appeared");
-    tokio::time::sleep(Duration::from_millis(700)).await;
-
-    // login: root / forevervigilant.
-    proc.send_keys("root\n").await.expect("sendkey root");
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    proc.send_keys(&format!("{}\n", ROOT_PW))
-        .await
-        .expect("sendkey login pw");
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-
-    // Launch the GUI installer from stsh.
-    proc.send_keys("gui-installer\n")
-        .await
-        .expect("sendkey gui-installer");
-
-    // Wait for the wizard to come up.
-    wait_for_line(&mut stream, "[LUMEN] installer ready",
-                  Duration::from_secs(20))
-        .await
-        .expect("boot 1: GUI installer ready");
-    wait_for_line(&mut stream, "[INSTALLER] screen=1",
-                  Duration::from_secs(5))
-        .await
-        .expect("boot 1: screen 1 marker");
-
-    // ── Screen 1 → Screen 2 (Welcome → Disk) ──
+    // Screen 1 → 2 (Welcome → Disk)
     tokio::time::sleep(Duration::from_millis(300)).await;
-    proc.send_keys("\n").await.expect("sendkey welcome-next");
+    proc.send_keys("\n").await.expect("welcome→disk");
     wait_for_line(&mut stream, "[INSTALLER] screen=2",
                   Duration::from_secs(5))
         .await
-        .expect("boot 1: screen 2 marker");
+        .expect("screen=2");
 
-    // ── Screen 2 → Screen 3 (Disk → User) ──
-    // Only one disk (nvme0) is available; Enter confirms.
+    // Screen 2 → 3 (Disk → User)
     tokio::time::sleep(Duration::from_millis(300)).await;
-    proc.send_keys("\n").await.expect("sendkey disk-next");
+    proc.send_keys("\n").await.expect("disk→user");
     wait_for_line(&mut stream, "[INSTALLER] screen=3",
                   Duration::from_secs(5))
         .await
-        .expect("boot 1: screen 3 marker");
+        .expect("screen=3");
 
-    // ── Screen 3 → Screen 4 (User → Confirm) ──
-    // Focus starts at field 0 (root_pw). Each \t advances focus by 1.
-    // After 5 tabs we're on Next (focus=5). Final \n submits.
+    // Screen 3 → 4 (User form → Confirm)
     tokio::time::sleep(Duration::from_millis(300)).await;
     proc.send_keys(&format!("{}\t{}\t{}\t{}\t{}\t\n",
                             ROOT_PW, ROOT_PW,
                             USER_NAME,
                             USER_PW, USER_PW))
         .await
-        .expect("sendkey user form");
+        .expect("user form");
     wait_for_line(&mut stream, "[INSTALLER] screen=4",
                   Duration::from_secs(10))
         .await
-        .expect("boot 1: screen 4 marker");
+        .expect("screen=4");
 
-    // ── Screen 4 → Screen 5 (Confirm → Progress) ──
+    // Screen 4 → 5 (Confirm → Progress)
     tokio::time::sleep(Duration::from_millis(300)).await;
-    proc.send_keys("\n").await.expect("sendkey confirm-install");
+    proc.send_keys("\n").await.expect("confirm→install");
     wait_for_line(&mut stream, "[INSTALLER] screen=5",
                   Duration::from_secs(5))
         .await
-        .expect("boot 1: screen 5 marker");
+        .expect("screen=5");
 
     // Wait for install completion (with serial trace on timeout).
     {
@@ -185,20 +212,17 @@ async fn gui_install_and_boot_from_nvme() {
             }
         }
         if !found {
-            eprintln!("--- gui-installer serial trace (last {} lines) ---",
-                      trace.len());
+            eprintln!("--- gui-installer trace (last {} lines) ---", trace.len());
             let skip = trace.len().saturating_sub(40);
             for l in &trace[skip..] {
                 eprintln!("  {}", l);
             }
             eprintln!("--- end ---");
-            panic!("boot 1: GUI installation did not complete within {}s",
-                   INSTALL_TIMEOUT_SECS);
+            panic!("install did not complete within {}s", INSTALL_TIMEOUT_SECS);
         }
     }
     eprintln!("    installation complete");
 
-    // Kill rather than pressing Reboot — avoids reboot-path side effects.
     tokio::time::sleep(Duration::from_millis(500)).await;
     proc.kill().await.expect("boot 1 kill");
     drop(stream);
@@ -215,77 +239,39 @@ async fn gui_install_and_boot_from_nvme() {
     wait_for_line(&mut stream2, "[EXT2] OK: mounted nvme0p1",
                   Duration::from_secs(BOOT_TIMEOUT_SECS))
         .await
-        .expect("boot 2: [EXT2] OK: mounted nvme0p1 not seen");
+        .expect("boot 2: ext2 mount");
     eprintln!("    [EXT2] OK: mounted nvme0p1");
 
     proc2.kill().await.expect("boot 2 kill");
     eprintln!("PASS: gui_install_and_boot_from_nvme");
 }
 
-/// Back-button regression test.
-///
-/// Advances the GUI installer from Welcome (screen=1) to Disk (screen=2)
-/// then sends Escape (which maps to handle_back()) and asserts the wizard
-/// returns to screen=1.  Catches regressions where the back handler is
-/// removed, the Escape binding is dropped, or the screen-1 marker stops
-/// being emitted.
-///
-/// No second boot — this test only exercises wizard navigation.
+/// Back-button regression: screen=1 → Enter → screen=2 → Escape → screen=1.
 #[tokio::test]
 async fn gui_installer_back_button() {
-    let iso = installer_iso();
+    let iso = graphical_iso();
     if !iso.exists() {
         eprintln!("SKIP: {} not found", iso.display());
-        eprintln!("      build with: make test-iso");
         return;
     }
 
-    let disk = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/gui_installer_back_test_disk.img");
-    make_fresh_disk(&disk).expect("create fresh disk");
-
+    // No NVMe needed — back-button test only walks screens.
     let (mut stream, mut proc) =
-        AegisHarness::boot_stream(aegis_q35_gui_installer(&disk), &iso)
-            .await
-            .expect("boot spawn failed");
+        boot_to_installer(aegis_q35_graphical_mouse(), &iso).await;
 
-    wait_for_line(&mut stream, "WARNING: This system",
-                  Duration::from_secs(BOOT_TIMEOUT_SECS))
-        .await
-        .expect("pre-login banner");
-    tokio::time::sleep(Duration::from_millis(700)).await;
-
-    proc.send_keys("root\n").await.expect("sendkey root");
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    proc.send_keys(&format!("{}\n", ROOT_PW)).await.expect("sendkey pw");
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-
-    proc.send_keys("gui-installer\n").await.expect("launch gui-installer");
-
-    wait_for_line(&mut stream, "[LUMEN] installer ready",
-                  Duration::from_secs(20))
-        .await
-        .expect("installer ready");
-    wait_for_line(&mut stream, "[INSTALLER] screen=1",
-                  Duration::from_secs(5))
-        .await
-        .expect("screen=1 on launch");
-
-    // Advance to screen 2.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    proc.send_keys("\n").await.expect("advance to disk screen");
+    proc.send_keys("\n").await.expect("Enter to advance");
     wait_for_line(&mut stream, "[INSTALLER] screen=2",
                   Duration::from_secs(5))
         .await
         .expect("screen=2 after Enter");
 
-    // Press Escape — should trigger handle_back() → screen=1.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    proc.send_keys("\x1b").await.expect("sendkey Escape");
+    proc.send_keys("\x1b").await.expect("Escape to go back");
     wait_for_line(&mut stream, "[INSTALLER] screen=1",
                   Duration::from_secs(5))
         .await
-        .expect("screen=1 after Escape (back button regression)");
+        .expect("screen=1 after Escape");
 
     proc.kill().await.expect("kill");
     eprintln!("PASS: gui_installer_back_button");

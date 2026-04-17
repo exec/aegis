@@ -170,6 +170,74 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
 }
 
 /*
+ * run_pipeline_bg — like run_pipeline but returns immediately without waiting.
+ * SIGCHLD is SIG_IGN in the shell, so children are auto-reaped by the kernel.
+ */
+void
+run_pipeline_bg(cmd_t *cmds, int n, char **envp)
+{
+    int pipes[MAX_PIPELINE - 1][2];
+    int i, j;
+
+    for (i = 0; i < n - 1; i++) {
+        if (pipe(pipes[i]) < 0) {
+            perror("pipe");
+            for (j = 0; j < i; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            return;
+        }
+    }
+
+    for (i = 0; i < n; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            for (j = i; j < n - 1; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            return;
+        }
+
+        if (pid == 0) {
+            if (i > 0) dup2(pipes[i - 1][0], STDIN_FILENO);
+            if (i < n - 1) dup2(pipes[i][1], STDOUT_FILENO);
+
+            if (cmds[i].stdin_file) {
+                int fd = open(cmds[i].stdin_file, O_RDONLY);
+                if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+            }
+            if (cmds[i].stdout_file) {
+                int flags = O_WRONLY | O_CREAT;
+                flags |= cmds[i].stdout_append ? O_APPEND : O_TRUNC;
+                int fd = open(cmds[i].stdout_file, flags, 0644);
+                if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+            }
+            if (cmds[i].stderr_to_stdout)
+                dup2(STDOUT_FILENO, STDERR_FILENO);
+
+            for (j = 0; j < n - 1; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            setpgid(0, 0);
+            exec_cmd(&cmds[i], envp);
+            _exit(127);
+        }
+
+        setpgid(pid, pid);
+    }
+
+    for (j = 0; j < n - 1; j++) {
+        close(pipes[j][0]);
+        close(pipes[j][1]);
+    }
+    /* Parent returns — SIGCHLD=SIG_IGN means children auto-reap */
+}
+
+/*
  * try_builtin — check if a single command is a builtin. Returns 1 if
  * handled, 0 if not. Updates *last_exit.
  */
