@@ -19,6 +19,7 @@
 
 use aegis_tests::{
     aegis_q35_graphical_mouse, aegis_q35_gui_installer,
+    aegis_q35_gui_installer_4k,
     aegis_q35_installed_ovmf, wait_for_line, AegisHarness, QemuProcess,
 };
 use vortex::config::QemuOpts;
@@ -239,14 +240,189 @@ async fn gui_install_and_boot_from_nvme() {
         .await
         .expect("boot 2 spawn failed");
 
-    wait_for_line(&mut stream2, "[EXT2] OK: mounted nvme0p1",
-                  Duration::from_secs(BOOT_TIMEOUT_SECS))
-        .await
-        .expect("boot 2: ext2 mount");
+    // Reproduces the bare-metal symptom: after a fresh install, the
+    // first NVMe boot reaches Bastion but keystrokes appear not to
+    // reach the input loop. Walk the full path: ext2 mount → Bastion
+    // greeter → submit root credentials → expect Lumen to start. If
+    // Lumen never starts, dump the last serial lines so we can see
+    // where the chain breaks.
+    let mut trace: Vec<String> = Vec::new();
+    let dump_trace = |trace: &Vec<String>, label: &str| {
+        eprintln!("--- post-install serial trace ({}; last {} lines) ---",
+                  label, trace.len().min(80));
+        let skip = trace.len().saturating_sub(80);
+        for l in &trace[skip..] { eprintln!("  {}", l); }
+        eprintln!("--- end ---");
+    };
+
+    // Drain serial until we see a marker, accumulating into `trace`.
+    async fn drain_until(
+        stream: &mut aegis_tests::ConsoleStream,
+        trace: &mut Vec<String>,
+        marker: &str,
+        timeout: Duration,
+    ) -> Result<(), ()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, stream.next_line()).await {
+                Ok(Some(line)) => {
+                    let hit = line.contains(marker);
+                    trace.push(line);
+                    if hit { return Ok(()); }
+                }
+                _ => break,
+            }
+        }
+        Err(())
+    }
+
+    if drain_until(&mut stream2, &mut trace,
+                   "[EXT2] OK: mounted nvme0p1",
+                   Duration::from_secs(BOOT_TIMEOUT_SECS))
+        .await.is_err()
+    {
+        dump_trace(&trace, "no [EXT2] OK");
+        proc2.kill().await.ok();
+        panic!("boot 2: ext2 mount never appeared");
+    }
     eprintln!("    [EXT2] OK: mounted nvme0p1");
+
+    if drain_until(&mut stream2, &mut trace,
+                   "[BASTION] greeter ready",
+                   Duration::from_secs(60))
+        .await.is_err()
+    {
+        dump_trace(&trace, "no [BASTION] greeter ready");
+        proc2.kill().await.ok();
+        panic!("boot 2: Bastion greeter never appeared");
+    }
+    eprintln!("    [BASTION] greeter ready");
+
+    // Type root credentials. send_keys maps to HMP sendkey per char.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    proc2.send_keys(&format!("root\t{}\n", ROOT_PW))
+        .await
+        .expect("send root credentials");
+
+    // If keystrokes reach the read loop, bastion will auth and spawn
+    // Lumen. If they don't, we'll time out here — the smoking gun for
+    // the bare-metal symptom.
+    if drain_until(&mut stream2, &mut trace,
+                   "[LUMEN] ready",
+                   Duration::from_secs(30))
+        .await.is_err()
+    {
+        dump_trace(&trace, "no [LUMEN] ready after sending credentials");
+        proc2.kill().await.ok();
+        panic!("boot 2: Lumen never started — keystrokes likely not reaching Bastion");
+    }
+    eprintln!("    [LUMEN] ready (keystrokes reached Bastion)");
 
     proc2.kill().await.expect("boot 2 kill");
     eprintln!("PASS: gui_install_and_boot_from_nvme");
+}
+
+/// Re-install on a disk that already contains an Aegis install.
+/// User reports rescan fails when the disk has an existing install.
+/// This test reproduces that scenario: install once, then run the
+/// installer again on the same disk without wiping it.
+#[tokio::test]
+async fn gui_installer_overwrite_existing() {
+    let iso = installer_test_iso();
+    if !iso.exists() {
+        eprintln!("SKIP: {} not found", iso.display());
+        return;
+    }
+
+    let disk = disk_path("gui_installer_overwrite_disk");
+    make_fresh_disk(&disk).expect("create fresh disk");
+
+    // Use 4K-native NVMe — modern consumer SSDs (Samsung, etc.) report
+    // 4K logical block size, and rescan-after-install regressions tend
+    // to surface there (sub-block alignment in the 512e wrapper, write
+    // ordering through the bounce buffer, etc.).
+    let preset = aegis_q35_gui_installer_4k;
+
+    async fn run_install_screens(
+        proc: &mut QemuProcess,
+        stream: &mut aegis_tests::ConsoleStream,
+        label: &str,
+    ) -> Result<(), String> {
+        // Walk screens 1→2→3→4→5
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        proc.send_keys("\n").await.map_err(|e| format!("{}: welcome→disk: {}", label, e))?;
+        wait_for_line(stream, "[INSTALLER] screen=2", Duration::from_secs(5))
+            .await.map_err(|_| format!("{}: screen=2", label))?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        proc.send_keys("\n").await.map_err(|e| format!("{}: disk→user: {}", label, e))?;
+        wait_for_line(stream, "[INSTALLER] screen=3", Duration::from_secs(5))
+            .await.map_err(|_| format!("{}: screen=3", label))?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        proc.send_keys(&format!("{}\t{}\t{}\t{}\t{}\t\n",
+                                ROOT_PW, ROOT_PW,
+                                USER_NAME, USER_PW, USER_PW))
+            .await.map_err(|e| format!("{}: user form: {}", label, e))?;
+        wait_for_line(stream, "[INSTALLER] screen=4", Duration::from_secs(10))
+            .await.map_err(|_| format!("{}: screen=4", label))?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        proc.send_keys("\n").await.map_err(|e| format!("{}: confirm→install: {}", label, e))?;
+        wait_for_line(stream, "[INSTALLER] screen=5", Duration::from_secs(5))
+            .await.map_err(|_| format!("{}: screen=5", label))?;
+        Ok(())
+    }
+
+    // ── Boot 1: first install on empty NVMe ────────────────────────
+    eprintln!("==> Boot 1: install on empty NVMe (must succeed)");
+    let (mut stream1, mut proc1) =
+        boot_to_installer(preset(&disk), &iso).await;
+    run_install_screens(&mut proc1, &mut stream1, "boot1")
+        .await.expect("boot1 screens");
+    wait_for_line(&mut stream1, "[INSTALLER] done",
+                  Duration::from_secs(INSTALL_TIMEOUT_SECS))
+        .await.expect("boot1 [INSTALLER] done");
+    eprintln!("    boot1 install complete");
+    proc1.kill().await.expect("boot1 kill");
+    drop(stream1);
+
+    // ── Boot 2: install AGAIN on same disk (the reported failure) ──
+    eprintln!("==> Boot 2: install on already-installed NVMe");
+    let (mut stream2, mut proc2) =
+        boot_to_installer(preset(&disk), &iso).await;
+    run_install_screens(&mut proc2, &mut stream2, "boot2")
+        .await.expect("boot2 screens");
+
+    // Capture every line from screen=5 until either [INSTALLER] done
+    // or [INSTALLER] error=. Whichever fires tells us whether the
+    // overwrite path is fixed.
+    let mut trace: Vec<String> = Vec::new();
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_secs(INSTALL_TIMEOUT_SECS);
+    let mut outcome: Option<String> = None;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout_at(deadline, stream2.next_line()).await {
+            Ok(Some(line)) => {
+                let done = line.contains("[INSTALLER] done");
+                let err = line.contains("[INSTALLER] error=");
+                trace.push(line.clone());
+                if done { outcome = Some("done".into()); break; }
+                if err { outcome = Some(line); break; }
+            }
+            _ => break,
+        }
+    }
+    proc2.kill().await.ok();
+
+    eprintln!("--- boot2 install trace (last {} lines) ---", trace.len().min(40));
+    let skip = trace.len().saturating_sub(40);
+    for l in &trace[skip..] { eprintln!("  {}", l); }
+    eprintln!("--- end ---");
+
+    match outcome {
+        Some(s) if s == "done" => eprintln!("PASS: re-install succeeded"),
+        Some(err) => panic!("re-install failed: {}", err),
+        None => panic!("re-install neither completed nor errored within {}s",
+                       INSTALL_TIMEOUT_SECS),
+    }
 }
 
 /// Back-button regression: screen=1 → Enter → screen=2 → Escape → screen=1.

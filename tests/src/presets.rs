@@ -159,6 +159,31 @@ pub fn aegis_q35_gui_installer(disk_path: &std::path::Path) -> QemuOpts {
     }
 }
 
+/// 4K-native variant of aegis_q35_gui_installer. NVMe reports
+/// `physical_block_size=4096` and `logical_block_size=4096`, mirroring
+/// modern consumer SSDs. Used to repro install bugs that only show up
+/// with native 4K block devices.
+pub fn aegis_q35_gui_installer_4k(disk_path: &std::path::Path) -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "vnc=127.0.0.1:19,to=99".into(),
+        devices: vec![
+            "virtio-vga".into(),
+            "nvme,drive=nvme0,serial=aegis0,physical_block_size=4096,logical_block_size=4096".into(),
+        ],
+        drives: vec![
+            format!("file={},if=none,id=nvme0,format=raw", disk_path.display()),
+        ],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+        ..Default::default()
+    }
+}
+
 /// ARM64 `virt` machine preset — no ISO, kernel ELF boot via `-kernel`.
 ///
 /// Used by the ARM64 boot oracle. This preset is intentionally
@@ -208,6 +233,14 @@ pub fn aegis_q35_installed_ovmf(disk_path: &std::path::Path,
         display: "none".into(),
         devices: vec![
             "nvme,drive=nvme0,serial=aegis0".into(),
+            // virtio-vga exposes a 32bpp GOP under OVMF. The default
+            // `-vga std` (cirrus/std) only offers 24bpp, which the
+            // kernel's MB2 FB tag parser rejects (bpp must == 32) →
+            // sys_fb_map returns ENODEV, Bastion can't paint, the
+            // post-install boot test stalls. Real hardware UEFI
+            // typically provides 32bpp GOP, so this only matters for
+            // the QEMU repro of installed-disk boots.
+            "virtio-vga".into(),
         ],
         drives: vec![
             format!("if=pflash,format=raw,readonly=on,file={}", ovmf_path.display()),
@@ -217,7 +250,6 @@ pub fn aegis_q35_installed_ovmf(disk_path: &std::path::Path,
             "-cpu".into(), "Broadwell".into(),
             "-no-reboot".into(),
             "-nodefaults".into(),
-            "-vga".into(), "std".into(),
         ],
         serial_capture: true,
         monitor_socket: true,
