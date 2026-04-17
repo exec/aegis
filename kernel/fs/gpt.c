@@ -92,13 +92,20 @@ static const uint8_t k_aegis_guid_prefix[8] = {
 };
 
 /*
- * Partition devices always present 512-byte logical sectors (512e emulation)
- * regardless of the parent device's native block size.  This keeps the ext2
- * cache and all other kernel consumers working unchanged; they assume 512B.
+ * 512e emulation: partition devices always present 512-byte logical sectors.
+ * This keeps ext2_cache and all other kernel consumers unchanged.
  *
  * lba/count in the callbacks are in 512B logical units.
- * p->lba_offset is in parent-native LBAs (set at registration time).
+ * p->lba_offset is in parent-native LBAs.
+ *
+ * For 4K-native drives, callers (ext2_cache) issue reads like lba=2, count=2
+ * (two 512B sectors = 1024 bytes) which do NOT align to a 4K boundary.  We
+ * use a static bounce buffer (one native sector = 4096 bytes max) to handle
+ * sub-block alignment.  At most one native sector is ever needed per call
+ * because ext2 block sizes (1024/2048/4096B) are always ≤ native block size
+ * (512B or 4096B), so a single native sector contains the full request.
  */
+static uint8_t s_part_bounce[4096];  /* sized for one 4K native sector */
 
 static int gpt_part_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf)
 {
@@ -106,17 +113,19 @@ static int gpt_part_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf)
     if (lba + count > dev->block_count)
         return -1;
     uint32_t native_bs = p->parent->block_size;
-    if (native_bs == 512) {
+    if (native_bs == 512)
         return p->parent->read(p->parent, lba + p->lba_offset, count, buf);
-    }
-    /* Translate: 512B logical lba → native LBA.
-     * ext2/other callers always issue aligned, multiple-of-native_bs reads so
-     * there is no partial-block overlap to handle. */
-    uint64_t factor = native_bs / 512u;
-    return p->parent->read(p->parent,
-                           p->lba_offset + lba / factor,
-                           count / factor,
-                           buf);
+
+    /* 512B → native translation with bounce for sub-block alignment */
+    uint64_t byte_start  = lba * 512ULL;
+    uint64_t byte_count  = (uint64_t)count * 512ULL;
+    uint64_t nat_lba     = byte_start / native_bs;
+    uint32_t sub_off     = (uint32_t)(byte_start % native_bs);
+    /* One native sector covers the entire request (ext2 block ≤ native_bs) */
+    if (p->parent->read(p->parent, p->lba_offset + nat_lba, 1, s_part_bounce) < 0)
+        return -1;
+    __builtin_memcpy(buf, s_part_bounce + sub_off, byte_count);
+    return 0;
 }
 
 static int gpt_part_write(blkdev_t *dev, uint64_t lba, uint32_t count,
@@ -126,14 +135,18 @@ static int gpt_part_write(blkdev_t *dev, uint64_t lba, uint32_t count,
     if (lba + count > dev->block_count)
         return -1;
     uint32_t native_bs = p->parent->block_size;
-    if (native_bs == 512) {
+    if (native_bs == 512)
         return p->parent->write(p->parent, lba + p->lba_offset, count, buf);
-    }
-    uint64_t factor = native_bs / 512u;
-    return p->parent->write(p->parent,
-                            p->lba_offset + lba / factor,
-                            count / factor,
-                            buf);
+
+    uint64_t byte_start = lba * 512ULL;
+    uint64_t byte_count = (uint64_t)count * 512ULL;
+    uint64_t nat_lba    = byte_start / native_bs;
+    uint32_t sub_off    = (uint32_t)(byte_start % native_bs);
+    /* Read-modify-write: load the native sector, patch our bytes, write back */
+    if (p->parent->read(p->parent, p->lba_offset + nat_lba, 1, s_part_bounce) < 0)
+        return -1;
+    __builtin_memcpy(s_part_bounce + sub_off, buf, byte_count);
+    return p->parent->write(p->parent, p->lba_offset + nat_lba, 1, s_part_bounce);
 }
 
 /* ── Header validation ────────────────────────────────────────────────────
