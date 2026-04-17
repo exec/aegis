@@ -83,7 +83,7 @@ jobs:
           # x86_64-linux-gnu-<tool>. Symlink them — the toolchains are
           # equivalent for our freestanding kernel build (-ffreestanding
           # -nostdlib), as documented in CLAUDE.md.
-          for tool in gcc ld ar as nm objcopy objdump strip; do
+          for tool in gcc ld ar ranlib as nm objcopy objdump strip; do
             ln -sf /usr/bin/x86_64-linux-gnu-$tool \
                    /usr/local/bin/x86_64-elf-$tool
           done
@@ -268,7 +268,9 @@ jobs:
           # Debian ships aarch64-linux-gnu-<tool>. Symlink them — the
           # toolchains are equivalent for our freestanding kernel
           # build (-ffreestanding -nostdlib), same pattern as x86.
-          for tool in gcc ld ar as nm objcopy objdump strip; do
+          # tools/build-arm64-userland.sh also calls ranlib, so it
+          # must be in the symlink set too.
+          for tool in gcc ld ar ranlib as nm objcopy objdump strip; do
             ln -sf /usr/bin/aarch64-linux-gnu-$tool \
                    /usr/local/bin/aarch64-elf-$tool
           done
