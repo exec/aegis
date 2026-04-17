@@ -20,7 +20,7 @@
  *
  * arg1 = user pointer to null-terminated path
  * arg2 = user pointer to null-terminated argv[] array (NULL-terminated)
- * arg3 = user pointer to envp[] (ignored; empty environment always used)
+ * arg3 = user pointer to envp[] (NULL-terminated; may be NULL for empty env)
  *
  * Replaces the calling process image in place:
  *   1. Copy path and argv from user.
@@ -30,13 +30,14 @@
  *   5. Load new ELF into the existing PML4.
  *   6. Allocate a fresh user stack (4 pages / 16 KB).
  *   7. Build x86-64 SysV ABI initial stack: argc, argv ptrs, NULL, envp
- *      NULL, auxv (AT_PHDR, AT_PHNUM, AT_PAGESZ, AT_ENTRY, AT_NULL).
+ *      ptrs, NULL, auxv (AT_PHDR, AT_PHNUM, AT_PAGESZ, AT_ENTRY, AT_NULL).
  *   8. Redirect SYSRET to new entry point.
  *
  * Stack layout on return:
  *   SP → argc
  *        argv[0] ... argv[argc-1]
  *        NULL (argv terminator)
+ *        envp[0] ... envp[envc-1]
  *        NULL (envp terminator)
  *        AT_PHDR  / phdr_va
  *        AT_PHNUM / phdr_count
@@ -53,8 +54,6 @@ uint64_t
 sys_execve(syscall_frame_t *frame,
            uint64_t path_uptr, uint64_t argv_uptr, uint64_t envp_uptr)
 {
-    (void)envp_uptr;  /* empty environment — envp not yet supported */
-
     aegis_process_t *proc = (aegis_process_t *)sched_current();
     /* Allocate argv working area from kva — too large for kernel stack. */
     execve_argbuf_t *abuf = kva_alloc_pages(EXECVE_ARGBUF_PAGES);
@@ -114,6 +113,38 @@ sys_execve(syscall_frame_t *frame,
         /* argc is now a block-local — capture it for the rest of the function */
         {
     int argc2 = argc;
+
+    /* 2b. Copy envp from user (<=32 entries, each <=255 bytes).
+     *     Matches sys_spawn (kernel/syscall/sys_exec.c) pattern. */
+    int envc = 0;
+    if (envp_uptr != 0) {
+        uint64_t ptr_addr = envp_uptr;
+        while (envc < 32) {
+            if (!user_ptr_valid(ptr_addr, 8))
+                { ret = (uint64_t)-(int64_t)14; goto done; }
+            uint64_t str_ptr;
+            copy_from_user(&str_ptr,
+                           (const void *)(uintptr_t)ptr_addr, 8);
+            if (!str_ptr) break;  /* NULL terminator */
+            {
+                uint64_t i;
+                for (i = 0; i < 255; i++) {
+                    if (!user_ptr_valid(str_ptr + i, 1))
+                        { ret = (uint64_t)-(int64_t)14; goto done; }
+                    char c;
+                    copy_from_user(&c,
+                        (const void *)(uintptr_t)(str_ptr + i), 1);
+                    abuf->env_bufs[envc][i] = c;
+                    if (c == '\0') break;
+                }
+            }
+            abuf->env_bufs[envc][255] = '\0';
+            abuf->env_ptrs[envc] = abuf->env_bufs[envc];
+            envc++;
+            ptr_addr += 8;
+        }
+    }
+    abuf->env_ptrs[envc] = (char *)0;
 
     /* 3. Look up binary: initrd first, then VFS (ext2 on nvme0p1).
      *    Initrd binaries are always trusted (no permission check).
@@ -301,7 +332,24 @@ sys_execve(syscall_frame_t *frame,
      */
     uint64_t sp_va = USER_STACK_TOP_EXEC;
 
-    /* 8a. Write argv strings onto the stack, recording their VAs */
+    /* 8a. Write env strings first, then argv strings (matches sys_spawn).
+     *     Env ends up at higher addresses, argv at lower addresses.  Both
+     *     are referenced by VA in the pointer table below. */
+    {
+        int i;
+        for (i = envc - 1; i >= 0; i--) {
+            uint64_t slen = 0;
+            while (abuf->env_ptrs[i][slen]) slen++;
+            slen++;  /* include null terminator */
+            if (sp_va - slen < USER_STACK_BASE_EXEC)
+                { sched_exit(); __builtin_unreachable(); }  /* E2BIG — past PNR */
+            sp_va -= slen;
+            if (vmm_write_user_bytes(proc->pml4_phys, sp_va,
+                                     abuf->env_ptrs[i], slen) != 0)
+                { sched_exit(); __builtin_unreachable(); }  /* EFAULT — past PNR */
+            abuf->env_str_ptrs[i] = sp_va;
+        }
+    }
     {
         int i;
         for (i = argc2 - 1; i >= 0; i--) {
@@ -337,6 +385,7 @@ sys_execve(syscall_frame_t *frame,
      *   1 (argc)
      * + argc (argv pointers)
      * + 1 (argv NULL)
+     * + envc (envp pointers)
      * + 1 (envp NULL)
      * + auxv pairs × 2 qwords each:
      *     6 base: PHDR, PHNUM, PAGESZ, ENTRY, RANDOM, NULL
@@ -344,7 +393,7 @@ sys_execve(syscall_frame_t *frame,
      */
     {
     uint64_t auxv_qwords = has_interp ? 16 : 12;
-    uint64_t table_qwords = (uint64_t)(argc2) + 3 + auxv_qwords;
+    uint64_t table_qwords = (uint64_t)(argc2) + (uint64_t)envc + 3 + auxv_qwords;
     uint64_t table_bytes  = table_qwords * 8ULL;
 
     /* Ensure RSP % 16 == 8 on entry to _start */
@@ -376,7 +425,15 @@ sys_execve(syscall_frame_t *frame,
             { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
-        /* envp NULL (empty environment) */
+        /* envp pointers (relocated to user VAs by 8a) */
+        for (i = 0; i < envc; i++) {
+            if (vmm_write_user_u64(proc->pml4_phys, wp,
+                                   abuf->env_str_ptrs[i]) != 0)
+                { sched_exit(); __builtin_unreachable(); }
+            wp += 8;
+        }
+
+        /* envp NULL terminator */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
             { sched_exit(); __builtin_unreachable(); }
         wp += 8;
