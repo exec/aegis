@@ -22,7 +22,11 @@ exec_cmd(cmd_t *cmd, char **envp)
     } else {
         execve(cmd->argv[0], cmd->argv, envp);
     }
-    fprintf(stderr, "%s: not found\n", cmd->argv[0]);
+    /* execve returned — print errno so the user knows whether it was
+     * ENOENT, EACCES, ENOEXEC, EAGAIN (process limit), etc.  Without
+     * this, every failure looks like "not found" and root-causes get
+     * conflated. */
+    fprintf(stderr, "%s: %s\n", cmd->argv[0], strerror(errno));
     _exit(127);
 }
 
