@@ -289,6 +289,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Cap-policy redesign (Phase 46c) | ✅ | Two-tier kernel policy; /etc/aegis/caps.d/; sys_auth_session(364); capd+exec_caps eliminated |
 | GUI installer + Lumen external window protocol (Phase 47) | ✅ | gui-installer is a real Lumen window via AF_UNIX protocol (memfd+SCM_RIGHTS); LUMEN_OP_CREATE_WINDOW/DAMAGE/DESTROY/CREATE_PANEL/INVOKE; mouse + Enter dispatch; CAP_KIND_FB no longer required |
 | Citadel dock split (Phase 47b) | ✅ | /bin/citadel-dock is its own process; talks to Lumen over the protocol; vigil graphical-mode service. First step of subsystem peeling |
+| 1.0.2 — Esc + arrow nav + chronos cap (Apr 17) | ✅ | PS/2 ESC scancode fix; gui-installer arrow nav; Lumen Ctrl+Alt+I + LUMEN_OP_INVOKE "gui-installer"; chronos NET_SOCKET cap; stbtt assertion no-op; bastion `bastion_autologin=USER` test hook; deflaked GUI installer test 0/15 → 15/15 |
 
 ### Known deviations
 
@@ -321,8 +322,9 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 25-46b | (All complete — see Build Status table) | ✅ Done |
 | 46c | **Cap-policy redesign** — two-tier kernel policy (service+admin caps); /etc/aegis/caps.d/; sys_auth_session(364); capd+exec_caps+sys_cap_grant_exec/runtime removed | ✅ Done |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph | ✅ Done (v1.0.1) |
-| 47b | **Subsystem peeling** — split Lumen subsystems into separate binaries; dock done. Terminal/taskbar/file-manager next. | Dock done; rest TBD |
-| 48 | **Super key + extended keyboard** — PS/2 E0; Super modifier; multimedia scancodes | Not started |
+| 47b | **Subsystem peeling** — split Lumen subsystems into separate binaries; dock done. Terminal next, then taskbar/file-manager. | Dock done; terminal queued |
+| 1.0.2 | **Esc fix + arrow nav + Ctrl+Alt+I + chronos cap + deflake** | ✅ Done (v1.0.2, Apr 17) |
+| 48 | **Super key + extended keyboard** — PS/2 E0; Super modifier; multimedia scancodes | **Active** |
 | 49 | **TCP polish** — send segmentation; per-connection TX buffer; flow control. Required for SSH. | Not started |
 | 50 | **TinySSH + sftp-server** — NaCl crypto, key-only auth; CAP_KIND_NET_LISTEN | Not started |
 | 51 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
@@ -471,6 +473,36 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 - **Baseline** (hardcoded, all processes): VFS_OPEN, VFS_READ, VFS_WRITE, IPC, PROC_READ(read), THREAD_CREATE.
 - **Retired syscalls**: `sys_cap_grant_exec` (361) and `sys_cap_grant_runtime` (363) removed. capd daemon eliminated. Vigil `exec_caps` mechanism eliminated.
 - No cap revocation. Restart process to reset caps.
+- **Every binary that calls `socket()` needs `NET_SOCKET` in its policy file.** Missing-policy = baseline-only = `socket()` returns EPERM. chronos shipped without one for two phases (silent failure: `chronos: socket failed` every boot) — fixed in 1.0.2 by adding `rootfs/etc/aegis/caps.d/chronos`. If you add a new daemon that needs network, write the cap file at the same time.
+
+### v1.0.2 invariants — DO NOT REGRESS
+
+- **PS/2 ESC scancode** (`kernel/arch/x86_64/kbd.c`): `s_sc_lower[0x01]` and `s_sc_upper[0x01]` MUST be `'\033'`, not `0`. The translation loop's `if (c)` filter drops NULs, so a zero entry silently swallows every Esc keypress system-wide. This bug was latent from Phase 9 until 1.0.2.
+- **stbtt assertion** (`user/lib/glyph/font.c`): `STBTT_assert(x)` is `#define`d to `((void)0)` before including `stb_truetype.h`. The upstream `dy >= 0` assert in `stbtt__fill_active_edges_new` fires intermittently on certain glyphs and `abort()`s the compositor. Worst case of skipping is one bad scanline; do not re-enable.
+- **Lumen invoke + Ctrl+Alt+I** (`user/bin/lumen/main.c`): `invoke_handler` dispatches `"terminal"`, `"widgets"`, `"gui-installer"`. `Ctrl+Alt+I` (escape-prefix `eb == 0x09`) calls `invoke_handler(comp, "gui-installer")`. The `spawn_external_client()` helper uses `sys_spawn` with `stdio_fd_arg=2` so client diag prints reach `/dev/console`.
+- **Arrow keys for proxy windows** (`user/bin/lumen/main.c` CSI handler): when focused window has `tag < 0` (proxy) and the CSI sequence is 3 bytes, translate `ESC [ A/B/C/D` to synthetic single-byte codes `0xF1`/`0xF2`/`0xF3`/`0xF4` and dispatch via `on_key`. PTY-backed windows (`tag >= 0`) get the raw sequence written to their PTY as before. Both paths must coexist.
+- **gui-installer arrow nav** (`user/bin/gui-installer/main.c`): `KEY_ARROW_LEFT (0xF4)` → `handle_back()`, `KEY_ARROW_RIGHT (0xF3)` → `handle_key('\r')`. Esc still works as back. Must keep both because Esc is what Lumen sends for bare ESC and arrows produce the synthetic codes.
+- **gui-installer lumen_connect retry** (`user/bin/gui-installer/main.c` main): retries on `-ECONNREFUSED` (-111) up to 50 times with 100ms sleep. Aegis AF_UNIX returns ECONNREFUSED until `accept()` runs, so first-connect can race compositor startup.
+- **stsh background jobs** (`user/bin/stsh/{parser,exec}.c`): `cmd &` is real now. `parse_pipeline_bg` strips trailing `&` and sets a flag; `run_pipeline_bg` forks but doesn't `waitpid`. SIGCHLD=SIG_IGN in stsh main means children auto-reap.
+- **Bastion autologin retry** (`user/bin/bastion/main.c`): `bastion_autologin=USER` on `/proc/cmdline` skips the greeter and authenticates with hardcoded "forevervigilant". Calls `do_auth()` up to 5 times with 200ms sleep — there's a libauth race in cold boot that we don't fully understand yet (TODO). Production interactive login is untouched. Production ISOs never set the cmdline arg.
+- **Test ISO** (`tools/grub-installer-test.cfg`, `make installer-test-iso`): `aegis-installer-test.iso` has same rootfs as `aegis.iso` but kernel cmdline contains `bastion_autologin=root`. Tests use this; production never ships it.
+- **Makefile rootfs deps**: `$(ROOTFS)` now depends on `find rootfs -type f` so editing `/etc` files actually triggers a rebuild. Before 1.0.2 you had to `rm -f build/rootfs.img` by hand.
+
+### Vortex test harness (local-only changes, not in vortex repo yet)
+
+These live in `~/Developer/vortex/src/core/qemu.rs` on the dev box:
+- `cmd.kill_on_drop(true)` on QEMU spawn — leaked test panics no longer leave stranded QEMU processes.
+- Stale monitor socket cleanup before bind — `let _ = std::fs::remove_file(&path);` immediately before passing `unix:{path},server,nowait`.
+- `serial_capture: true` now sets `stderr(Stdio::null())` instead of `Stdio::piped()` — piped+unread stderr fills (~64K) and blocks QEMU mid-boot.
+- `VORTEX_SERIAL_TEE=/path/to/file` env var: appends every raw serial line to a file, useful when `wait_for_line` consumes the line you wanted to debug.
+- `send_keys` map extended with: `&` `_` `:` `;` `=` `!` `@` `#` `$` `%` `^` `*` `(` `)` `\x1b` (and the machine-format `,accel=` bug fix is now moot since accel field was removed).
+- These should be upstreamed to vortex eventually.
+
+### CI workflow notes
+
+- `.github/workflows/build-iso.yml`: x86 `build-iso` job and ARM64 `build-arm64` job are independent (no `needs:`). The ISO builds and the GitHub release is created from build-iso even if build-arm64 fails.
+- Cross-toolchain symlink loops MUST include `ranlib` (added 1.0.2). build-arm64-userland.sh calls aarch64-elf-ranlib.
+- build-arm64 needs nightly + `aarch64-unknown-none` for kernel/cap. Don't forget to add the rust-src component.
 
 ### SMP (Phase 38)
 
