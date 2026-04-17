@@ -185,7 +185,8 @@ build-musl: $(MUSL_BUILT)
 SIMPLE_USER_PROGS = \
     ls cat echo pwd uname clear true false wc grep sort \
     mkdir touch rm cp mv whoami ln chmod chown readlink \
-    shutdown reboot login stsh httpd nettest polltest poll-test
+    shutdown reboot login stsh httpd nettest polltest poll-test \
+    sleep
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
 # so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the

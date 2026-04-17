@@ -26,6 +26,7 @@ user/bin/gui-installer/gui-installer.elf /bin/gui-installer
 user/bin/ls/ls.elf              /bin/ls
 user/bin/cat/cat.elf            /bin/cat
 user/bin/echo/echo.elf          /bin/echo
+user/bin/sleep/sleep.elf        /bin/sleep
 user/bin/pwd/pwd.elf            /bin/pwd
 user/bin/uname/uname.elf        /bin/uname
 user/bin/clear/clear.elf        /bin/clear

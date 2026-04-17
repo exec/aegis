@@ -14,7 +14,9 @@
 //      cargo test --manifest-path tests/Cargo.toml \
 //                 --test coreutils_test -- --nocapture
 
-use aegis_tests::{aegis_q35_installer, wait_for_line, AegisHarness};
+use aegis_tests::{
+    aegis_q35_installer, wait_for_line, AegisHarness, ConsoleStream, QemuProcess,
+};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -88,14 +90,61 @@ async fn coreutils_scaffold_boots_to_stsh_ready() {
         .unwrap_or_else(|e| panic!(
             "stsh ready marker '{STSH_READY_MARKER}' never appeared: {e:?}"));
 
-    // Per-utility assertions live below, added by Tasks 4–23.
-    // Helper signature suggested:
-    //
-    //   assert_cmd(&mut proc, &mut stream, "head -2 /etc/hostname",
-    //              &["aegis"]).await;
-    //
-    // It would send the command, then read until the next prompt and
-    // assert each `expected` line appears in the captured slice.
+    // ── Per-utility assertions ─────────────────────────────────────────
+    // sleep — exits 0 immediately when given 0 seconds.
+    assert_cmd(&mut proc, &mut stream,
+               "sleep 0; echo SLEEP_OK", &["SLEEP_OK"]).await;
 
     let _ = proc.kill().await;
+}
+
+/// Run `cmd` in stsh and assert each substring in `expected` appears
+/// in the output between the command and its sentinel.
+///
+/// Implementation: appends `; echo __DONE_<n>__` so we have a
+/// deterministic line to stop reading at, regardless of stsh's prompt
+/// (which has no trailing newline and is therefore unwait-able).  Each
+/// call uses a fresh sentinel so back-to-back calls don't false-match
+/// on a previous test's leftover lines.
+async fn assert_cmd(
+    proc: &mut QemuProcess,
+    stream: &mut ConsoleStream,
+    cmd: &str,
+    expected: &[&str],
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let sentinel = format!("__DONE_{n}__");
+
+    let line = format!("{cmd}; echo {sentinel}\n");
+    proc.send_keys(&line).await.expect("send_keys");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut captured: Vec<String> = Vec::new();
+    loop {
+        match tokio::time::timeout_at(deadline, stream.next_line()).await {
+            Ok(Some(l)) => {
+                if l.contains(&sentinel) {
+                    break;
+                }
+                captured.push(l);
+            }
+            Ok(None) => panic!("[{cmd}] stream closed before sentinel"),
+            Err(_)   => panic!(
+                "[{cmd}] timed out waiting for sentinel {sentinel}\n\
+                 captured ({} lines):\n  {}",
+                captured.len(), captured.join("\n  ")),
+        }
+    }
+
+    for want in expected {
+        let hit = captured.iter().any(|l| l.contains(want));
+        if !hit {
+            panic!(
+                "[{cmd}] expected substring {want:?} not found in output\n\
+                 captured ({} lines):\n  {}",
+                captured.len(), captured.join("\n  "));
+        }
+    }
 }
