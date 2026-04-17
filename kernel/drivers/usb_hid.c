@@ -55,6 +55,15 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
     uint8_t shift;
     uint8_t ctrl;
 
+    /* DIAGNOSTIC: every HID report received → console. Helps identify
+     * whether xHCI is delivering interrupt transfers from a USB
+     * keyboard on UEFI-installed boots where the keyboard appears
+     * dead in userspace. Remove once root-caused. */
+    printk("[KBD-DBG] usb_hid len=%u mod=0x%x k0=0x%x\n",
+           (uint32_t)len,
+           len >= 1 ? (uint32_t)data[0] : 0u,
+           len >= 3 ? (uint32_t)data[2] : 0u);
+
     if (len < 8) return;
 
     const usb_hid_report_t *report = (const usb_hid_report_t *)data;

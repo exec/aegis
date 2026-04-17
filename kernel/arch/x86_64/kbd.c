@@ -95,6 +95,11 @@ kbd_handler(void)
 {
     uint8_t sc = inb(KBD_DATA);
     random_add_interrupt_entropy();  /* keyboard timing is excellent entropy */
+    /* DIAGNOSTIC: every PS/2 scancode → console. Helps identify whether
+     * the controller is delivering IRQ1 at all on UEFI-installed boots
+     * where the keyboard appears dead in userspace. Remove once
+     * the keyboard regression is root-caused. */
+    printk("[KBD-DBG] ps2 sc=0x%x\n", (uint32_t)sc);
 
     /* Extended key prefix — set flag, handle next byte */
     static int s_e0_prefix;
