@@ -276,9 +276,16 @@ jobs:
           done
           aarch64-elf-gcc --version
 
-      - name: Install Rust stable via rustup
+      - name: Install Rust stable + nightly via rustup
         run: |
+          # kernel/cap is no_std and links via build.rs against
+          # aarch64-unknown-none on this job, which needs the nightly
+          # toolchain + rust-src + the bare-metal target. The previous
+          # version of this step only installed stable, so the ARM64
+          # kernel link silently failed every push.
           rustup default stable
+          rustup toolchain install nightly --component rust-src
+          rustup +nightly target add aarch64-unknown-none
           rustup show
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
