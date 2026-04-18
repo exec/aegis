@@ -56,8 +56,11 @@ static const char s_hosts[] =
 
 /* Default vigil service config — allows vigil to find its getty service even
  * on a disk that was built before vigil was added (or on no disk at all).
- * run: direct path so start_service execs login without a shell intermediary,
- * ensuring exec_caps (AUTH) are applied to login, not consumed by sh. */
+ * run: direct path so start_service execs login without a shell intermediary.
+ * Caps now come from /etc/aegis/caps.d/login (Phase 46c policy files), not
+ * from vigil's exec_caps mechanism (which was retired in 46c). The s_vigil_caps
+ * blob below is kept only because the legacy `caps` file path is still listed
+ * in the directory enumeration; nothing reads its contents anymore. */
 static const char s_vigil_run[]    = "/bin/login\n";
 static const char s_vigil_policy[] = "respawn\nmax_restarts=5\n";
 static const char s_vigil_caps[]   = "AUTH\nCAP_GRANT\nCAP_DELEGATE\nCAP_QUERY\n";

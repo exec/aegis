@@ -27,8 +27,11 @@ int auth_check(const char *username, const char *password,
 /* Set process identity (setuid + setgid). */
 void auth_set_identity(int uid, int gid);
 
-/* Pre-register CAP_DELEGATE + CAP_QUERY as exec_caps for the next execve.
- * The shell inherits these capabilities. */
+/* Legacy stub from the pre-46c exec_caps model. The Phase 46c cap-policy
+ * redesign moved capability declaration into /etc/aegis/caps.d/<binary>
+ * files read by the kernel at execve time, so this function no longer
+ * pre-registers anything. Kept as a no-op so callers in libcitadel /
+ * libauth that still reference it don't have to be touched in lockstep. */
 void auth_grant_shell_caps(void);
 
 /* Mark the current session as authenticated.  The kernel's policy table

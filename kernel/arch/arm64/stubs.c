@@ -139,7 +139,12 @@ void kbd_init(void) {
 void kbd_handler(void) {}
 char kbd_read(void) { return uart_rx_read(); }
 char kbd_read_interruptible(int *interrupted) {
-    /* TODO: check signal pending for interrupt support */
+    /* TODO(phase-A4): check signal pending for interrupt support.
+     * Becomes load-bearing once aarch64-musl userland lands and real
+     * processes can target each other with kill(2). Until then ARM64
+     * has only the boot path + idle loop, no signals to deliver, so
+     * this stub is correct in practice. Mirror the x86_64 implementation
+     * (kernel/arch/x86_64/kbd.c kbd_read_interruptible) when implementing. */
     (void)interrupted;
     return uart_rx_read();
 }
