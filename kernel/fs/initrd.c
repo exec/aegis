@@ -38,7 +38,7 @@ static const char s_motd[] =
     " |_____| |______ |  ____   |   |______\n"
     " |     | |______ |_____| __|__ ______|\n"
     "\n"
-    " Aegis 1.0.2 \"Ambient Argus\"\n"
+    " Aegis 1.0.3 \"Ambient Argus\"\n"
     "\n";
 static const char s_passwd[] = "root:x:0:0:root:/root:/bin/stsh\n";
 static const char s_shadow[] =
